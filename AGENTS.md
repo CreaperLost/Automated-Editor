@@ -92,8 +92,10 @@ show that a pipeline change works; describe what the frames show in the PR.
   with the frame snapshots you looked at described in words).
 - Don't commit secrets, `.env`, build output or media over a few MB. Test media is made by
   `scripts/make-fixtures.sh`.
-- Don't spend George's money: no live calls to OpenRouter, ElevenLabs, Zernio or Treg, no
-  uploads. Mock the HTTP server as the existing tests do.
+- Tests mock the HTTP server as the existing tests do. The cloud environment has
+  `OPENROUTER_API_KEY` (main), `TREG_API_KEY` and `ZERNIO_API_KEY`: small live calls are fine
+  when a task needs a real check; list them and their rough cost in the PR. Never upload or
+  publish through Zernio unless George asks for that upload. No ElevenLabs key.
 - Ask nothing you can decide: make the sensible choice, list it in the PR under "Choices I made".
   If a decision only George can make blocks you, write it as a question in the PR.
 

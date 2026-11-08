@@ -1,35 +1,46 @@
-# Code review: bugs, errors, and performance gaps
+# Bugs and performance gaps
 
-Review date: 2026-11-08.
+Reconciled 8 November 2026 against local HEAD `be7179c` on `claude/cloud-prep`.
+The working tree was clean, including untracked files, before this documentation-only pass.
+No application fixes were made. This is the canonical detailed issue report;
+[Roadmap](ROADMAP.md) owns feature work and scheduling, not a second bug list.
 
-This review examines the current working tree, including uncommitted and newly added source files. Existing edits are preserved. Findings are added individually as they are verified; this document is a review, not an implementation of fixes.
+**34 findings remain open: 6 P1, 25 P2, 3 P3.** GAP-001/014 are superseded;
+GAP-005/006 are closed after current focused checks. Four older follow-ups are retained as
+GAP-029..032 below (2 P2, 2 P3); their evidence labels distinguish traced limitations from
+investigations awaiting reproduction. The deeper review adds GAP-033 onward. Overlapping
+IDs created during concurrent documentation work were reconciled; each ID below is unique.
 
-Priorities: **P1** = serious correctness, data-loss, or security issue; **P2** = normal-priority bug or material performance issue; **P3** = lower-impact issue. Static confirmation means the relevant implementation and callers were traced; it does not imply the desktop application was exercised. Questions identify decisions to resolve before implementing a fix.
+P1 means serious correctness, data loss or security risk; P2 means a normal-priority bug,
+material performance issue or validation gap; P3 means lower impact. **Code-traced** means
+the current implementation was inspected, not that the desktop scenario ran. **Prior probe**
+means an executed result recorded by the earlier 8 Nov review; it was not rerun here.
+Scratch paths under `src-tauri/target/` in those records are local evidence, not portable tests.
+Performance work counts are not measured desktop latency. Test scope and fresh results are in
+[Verification](verification.md#documentation-reconciliation-8-november-2026).
 
-**Result: 15 open findings — 4 P1, 10 P2, 1 P3 — plus one superseded finding (GAP-001).** Each finding was written when identified, then supplemented with reproduction evidence where available. No fixes to application source were made.
+Fix the six P1s first: narration identity, script binding and concurrent generation (GAP-004/008/037), publish project
+ownership (GAP-011), upload/save synchronization (GAP-016), linked-cut restoration (GAP-017).
+Then address persistence/retry races and export input consistency. Browser regression coverage
+(GAP-024) should accompany lifecycle and keyboard fixes.
 
-Suggested fix order: address narration identity/input validation (GAP-004, GAP-008), publish project ownership (GAP-011), and upload/save synchronization (GAP-016) first; then publishing draft/release handling (GAP-002, GAP-015), save/history races (GAP-003, GAP-010, GAP-012), and the outbound-network boundary (GAP-013). Export freshness/polling and stage bookkeeping follow (GAP-007, GAP-009, GAP-014). Restore the two failing regression guards before merging (GAP-005, GAP-006).
+## Open findings
 
-## Findings
+| Area | Finding IDs |
+|---|---|
+| Voice and stage identity | [004](#gap-004), [008](#gap-008), [027](#gap-027) |
+| Publish and package persistence | [002](#gap-002), [011](#gap-011), [015](#gap-015), [016](#gap-016) |
+| Export history, input capture and cost | [007](#gap-007), [009](#gap-009), [012](#gap-012), [018](#gap-018), [021](#gap-021) |
+| Sequence and captions | [017](#gap-017), [022](#gap-022), [023](#gap-023) |
+| Async UI and mixer state | [003](#gap-003), [010](#gap-010), [020](#gap-020), [025](#gap-025) |
+| Research validation | [013](#gap-013), [026](#gap-026) |
+| Keyboard and test coverage | [019](#gap-019), [024](#gap-024), [028](#gap-028) |
+| Retained ownership and review follow-ups | [029](#gap-029), [030](#gap-030), [031](#gap-031), [032](#gap-032) |
+| Evidence refresh and import workflow | [033](#gap-033), [034](#gap-034) |
+| Durable metadata, chapter drafts and thumbnails | [035](#gap-035), [036](#gap-036), [038](#gap-038) |
+| Concurrent voice generation | [037](#gap-037) |
 
-### GAP-001 — P2: Choosing a publish thumbnail silently discards unsaved metadata
-
-**Continuation status (2026-11-08):** The publishing UI was refactored between review passes. `PublishDialog` now delegates to `PackageEditor`, whose thumbnail responses use `show(..., false)` and preserve draft fields; the old status-refresh reset is also removed. The original specific reset path below is therefore **superseded in the current source**, not an open finding against the refactored handlers. This was not an assistant code fix. The new autosave lifecycle and upload ordering problems are GAP-015 and GAP-016. Full dirty-draft regression coverage has not yet been established.
-
-**Location:** `front-end/src/components/export/PublishDialog.tsx`, `show`, the image/frame handlers, and the upload-status refresh handler.
-
-**Evidence / cause (static confirmation):** Title, description, disclosure, and tags live in local `draft`/`tags` state until Save or Upload. `show(v)` replaces all of that state with the package returned by the backend. Both thumbnail handlers call `show(await api.publishThumbnail...)` without first saving the draft. The backend thumbnail functions update only the thumbnail in the package already on disk. Refreshing an earlier upload also reloads the package through `show`.
-
-**Reproduction:** Open Publish, type a new title and description without clicking Save, then choose an image or use a frame as the thumbnail. The fields revert to their last saved values. The same loss occurs when refreshing an earlier upload's status. Fields remain editable during requests, so edits made while Save/Upload is in flight can also be overwritten by its response.
-
-**Impact:** Ordinary preparation of a video loses entered copy without a warning or an undo path.
-
-**Possible solution:** Separate persisted package/thumbnail/upload state from the editable metadata draft. Thumbnail and status responses should update their own fields only. Track a draft generation or dirty fields so a save response cannot replace changes made after that save started. Alternatively serialize an explicit draft save before thumbnail operations, while still preserving subsequent typing.
-
-**Regression checks:** Enter metadata, choose both types of thumbnail, and refresh an earlier upload; assert all unsaved fields survive. Hold a save response, type again, then resolve it and assert the later text remains.
-
-**Questions for the fix:** Should metadata autosave, or remain explicitly saved? If explicit, should closing a dirty dialog prompt to save?
-
+<a id="gap-002"></a>
 ### GAP-002 — P2: Release changes are silently treated as retries of the old upload
 
 **Location:** `src-tauri/src/publish/mod.rs`, `upload_key` and the early-return branch in `upload`; `front-end/src/components/export/PublishDialog.tsx`, release selector and `upload`.
@@ -38,7 +49,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Reproduction:** Upload a video as Draft, reopen Publish for the same export, select Scheduled and click Schedule with the same title/channel. The existing draft is returned and no scheduling request is sent. Private-to-scheduled and changing a scheduled date follow the same branch. Saving improved metadata and uploading again also leaves the remote copy unchanged.
 
-**Executed confirmation:** Called the production `publish::upload` twice through its injectable HTTP interface, with a local fixture file and an in-memory fake service: Draft followed by Scheduled. The second call returned `release=Draft`, `status=draft`; only one post-creation request was made. No remote request or real upload occurred.
+**Prior probe (8 Nov):** Called the production `publish::upload` twice through its injectable HTTP interface, with a local fixture file and an in-memory fake service: Draft followed by Scheduled. The second call returned `release=Draft`, `status=draft`; only one post-creation request was made. No remote request or real upload occurred.
 
 **Impact:** A user can believe a release action succeeded while the video remains a draft/private or retains its previous schedule and metadata. The dialog does not explain that these changes were ignored.
 
@@ -48,6 +59,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Should AeroEdits support publishing a saved draft and changing an existing release, or should those operations be directed to the external dashboard?
 
+<a id="gap-003"></a>
 ### GAP-003 — P2: Late faceless-status responses can restore the wrong project's state
 
 **Location:** `front-end/src/stores/facelessStore.ts`, `refresh`; `front-end/src/App.tsx`, `refreshFaceless` effect; `front-end/src/components/faceless/FacelessPanel.tsx`, refresh effect.
@@ -56,7 +68,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Reproduction:** Start loading faceless project A, switch to B or close the project before A's status completes, and let the old response finish last. The store again contains A's production even though B/no project is selected. Two overlapping refreshes can also regress the stages shown within one project.
 
-**Executed confirmation:** Transpiled the actual `facelessStore.ts` into a Node VM with real Zustand and a deferred IPC stub. Resolving B before A left `{path:"A", topic:"A"}`; clearing the store before resolving A also left `{path:"A", topic:"A"}`. No project or external service was touched.
+**Prior probe (8 Nov):** Transpiled the actual `facelessStore.ts` into a Node VM with real Zustand and a deferred IPC stub. Resolving B before A left `{path:"A", topic:"A"}`; clearing the store before resolving A also left `{path:"A", topic:"A"}`. No project or external service was touched.
 
 **Impact:** The Faceless tab can appear for an ordinary project, show another project's topic/stages, or enable actions using stale readiness information. Server-side stage validation may reject an inappropriate action, but it does not correct the displayed state.
 
@@ -66,6 +78,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** No product decision is needed for rejecting stale responses. Decide whether a refresh error should preserve the last known state with an error indicator instead of looking like an ordinary non-faceless project.
 
+<a id="gap-004"></a>
 ### GAP-004 — P1: Regenerating a voice take can keep the old audio and transcript on the timeline
 
 **Location:** `src-tauri/src/faceless/voice.rs`, `fingerprint` and `make`; `src-tauri/src/commands/faceless.rs`, `faceless_voice_impl` (`same_file` branch).
@@ -74,7 +87,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Reproduction:** Voice a script, then ask the agent to redo a scene whose pronunciation is wrong without changing its text. The provider returns a different take, but `same_file` is true. The new take is generated and assembled while playback/export still uses the old imported narration. New scene boundaries can now disagree with the reused transcript/audio.
 
-**Executed confirmation:** Linked a standalone scratch probe to the freshly built production Rust library. A fake speech provider returned two different local tones for unchanged words, with the second explicitly requested through `redo`. The actual `voice::make` returned the same narration identity although bytes changed and duration changed from 1,531,958 to 2,363,917 microseconds. Audio extracted by the actual media importer after the first take remained unchanged. No speech service was called. The subsequent `same_file` decision is confirmed by tracing its caller.
+**Prior probe (8 Nov):** Linked a standalone scratch probe to the freshly built production Rust library. A fake speech provider returned two different local tones for unchanged words, with the second explicitly requested through `redo`. The actual `voice::make` returned the same narration identity although bytes changed and duration changed from 1,531,958 to 2,363,917 microseconds. Audio extracted by the actual media importer after the first take remained unchanged. No speech service was called. The subsequent `same_file` decision is confirmed by tracing its caller.
 
 **Impact:** Paid regeneration fails to fix the audible mistake; alignment checks and previous user acceptance can apply to the wrong take. This directly affects the rendered output.
 
@@ -84,34 +97,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** When a new take changes duration, should later graphics be retimed automatically or marked stale for manual/agent repair?
 
-### GAP-005 — P3: The style-store regression test no longer matches the built-in catalog
-
-**Location:** `src-tauri/src/style/store.rs:488`, `styles_are_saved_listed_renamed_and_removed`; built-in Broadsheet definition in `src-tauri/src/style/mod.rs`.
-
-**Evidence (reproduced):** With temporary files redirected to a writable workspace directory, the Rust test fails with actual names `["Light", "Dark", "Broadsheet", "Acme Dark"]` versus expected `["Light", "Dark", "Acme Dark"]`. Broadsheet is an intentional new built-in, so this is a stale test expectation, not evidence that listing styles is broken.
-
-**Impact:** The library suite is red on the current working tree. Assertions after this failure (invalid/reserved names and removal behavior) do not execute in that test.
-
-**Possible solution:** Update the expected catalog deliberately, or derive the built-in portion from the canonical registry while independently asserting its expected contents in a catalog test. Include Broadsheet in reserved-name/immutability coverage.
-
-**Regression check:** Run `cargo test --lib styles_are_saved_listed_renamed_and_removed` with writable temporary storage and verify all assertions execute.
-
-**Questions for the fix:** No clarification needed if Broadsheet is intended to ship.
-
-### GAP-006 — P2: The advertised MCP tool schema exceeds its enforced context-size budget
-
-**Location:** `src-tauri/src/mcp/mod.rs:1494–1523`, `the_tool_list_stays_small`, and the tool definitions returned by `tool_list`.
-
-**Evidence (reproduced):** The serialized tool list is **47,697 bytes**, exceeding the strict `< 47,500` assertion. The test's message calls these characters, but the measurement is Rust string `.len()` (UTF-8 bytes). This test fails independently of filesystem/network permissions.
-
-**Impact:** A performance/cost regression guard is red. Clients that consume the full schema receive more context on connection. The overrun is small (197 bytes above the nominal boundary); no claim is made that it alone creates noticeable latency or a specific token cost.
-
-**Possible solution:** Inspect the existing `TOOL_SIZES` breakdown, remove redundant descriptions/schema fields, or place infrequently used operations behind the existing `more` mechanism. If the added context is an intentional tradeoff, document and approve a new budget rather than silently weakening the guard.
-
-**Regression check:** `cargo test --lib the_tool_list_stays_small`; record both serialized bytes and an actual client/token measurement if the budget is revised.
-
-**Questions for the fix:** Is the current 47,500-byte budget still required, or should the added capabilities justify an explicitly increased limit?
-
+<a id="gap-007"></a>
 ### GAP-007 — P2: Export-list polling repeatedly hashes the whole edit for every historical export while holding project locks
 
 **Location:** `src-tauri/src/commands/mod.rs`, `export_deliveries_impl`; `src-tauri/src/export/deliveries.rs`, `fingerprint` and `list`; `front-end/src/components/export/DeliveryList.tsx`, 500 ms polling effect.
@@ -120,7 +106,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Reproduction / scale:** Keep 100 exports of one large edit, then start another export with the list open. One unchanged polling interval can clone/serialize/hash that same edit roughly 100 times; two polls mean roughly 200 full-document passes per second. This is an operation count derived from the loops, not a measured desktop latency.
 
-**Executed confirmation:** A scratch probe called the production delivery writer/list implementation with 100 same-target completed exports. One `list` invocation called its current-fingerprint callback **100 times**. No real export was run for this check.
+**Prior probe (8 Nov):** A scratch probe called the production delivery writer/list implementation with 100 same-target completed exports. One `list` invocation called its current-fingerprint callback **100 times**. No real export was run for this check.
 
 **Impact:** Avoidable CPU/allocation load grows with both project size and export history. Holding the project and export locks during the work can delay edits, playback commands, cancellation, and status requests.
 
@@ -130,6 +116,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Should export freshness also account for transcript/caption/graphic files that change outside the edit revision? That affects cache keys and freshness semantics.
 
+<a id="gap-008"></a>
 ### GAP-008 — P1: Accepting an old narration can incorrectly certify it against a newly reviewed script
 
 **Location:** `src-tauri/src/commands/faceless.rs`, `faceless_voice_accept_impl` and `finish_voice`; `src-tauri/src/faceless/mod.rs`, `record_stage`; `front-end/src/components/faceless/VoiceView.tsx`, “It sounds right” handler.
@@ -138,7 +125,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Reproduction:** Generate narration A that has an issue requiring acceptance. Change the script to B and complete its review. The old voice file remains. Click “It sounds right” without regenerating B. The old audio is now recorded as satisfying B's current review and the voice stage can become Done. Similarly, change/review the script during a long generation and let the old generation finish afterward.
 
-**Executed confirmation:** A scratch project with synthetic stage A/B files and an old voice record was opened with the production `ProjectReader`. Before calling `faceless_voice_accept_impl`, the voice stage was **Stale** after the script/review changed. After that production acceptance command, it was **Done**, without regenerating narration. This isolates stage binding; it is not an end-to-end spoken-content test.
+**Prior probe (8 Nov):** A scratch project with synthetic stage A/B files and an old voice record was opened with the production `ProjectReader`. Before calling `faceless_voice_accept_impl`, the voice stage was **Stale** after the script/review changed. After that production acceptance command, it was **Done**, without regenerating narration. This isolates stage binding; it is not an end-to-end spoken-content test.
 
 **Impact:** The stage system can green-light visuals/export preparation while the spoken facts belong to an older script. Acceptance of pronunciation should not substitute for generating the current content.
 
@@ -148,6 +135,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Can users deliberately retain narration after purely visual/script annotation changes? If so, define a spoken-content fingerprint separately from review metadata; do not allow changed spoken words to reuse old acceptance.
 
+<a id="gap-009"></a>
 ### GAP-009 — P2: Export freshness ignores transcript changes that alter rendered captions
 
 **Location:** `src-tauri/src/export/deliveries.rs`, `fingerprint` and `list`; `src-tauri/src/commands/transcript.rs`, `modify_transcript` / `transcript_run_impl`; `src-tauri/src/export/mod.rs`, caption-cue loading.
@@ -164,6 +152,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Should “current” mean identical rendered content or any changed project input? The former avoids false positives but requires target-specific dependency tracking.
 
+<a id="gap-010"></a>
 ### GAP-010 — P2: Audio adjustments have no save queue and collide on the same edit revision
 
 **Location:** `front-end/src/lib/trackMix.ts`, `saveTrackMix`; `front-end/src/components/audio/AudioSection.tsx`, `setPolish`, `update`, and `setVolume`; `src-tauri/src/commands/mod.rs`, `project_audio_update_impl`.
@@ -180,6 +169,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Should a failed save leave the controls showing the unsaved value with a Retry action, or restore the last saved value with a clear notice?
 
+<a id="gap-011"></a>
 ### GAP-011 — P1: Publish commands are not bound to the project whose export the dialog shows
 
 **Location:** `src-tauri/src/commands/publish.rs`, `project_root` and package/thumbnail/upload commands; `front-end/src/lib/ipc.ts`, publish API methods; `front-end/src/components/export/DeliveryList.tsx`, `publishing` state; `front-end/src/components/export/PublishDialog.tsx`, initialization and upload sequence.
@@ -196,6 +186,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Should an already-started upload continue for A after the editor switches to B? Continuing can be supported safely by retaining A's captured context; new actions from A's stale dialog should still be rejected.
 
+<a id="gap-012"></a>
 ### GAP-012 — P2: Export-history writes race with Forget and subtitle/audio exports
 
 **Location:** `src-tauri/src/export/deliveries.rs`, `work`, `record`, `forget`, and `write`; `src-tauri/src/commands/mod.rs`, `export_forget_impl` and `export_file_impl`.
@@ -212,6 +203,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Should failure to save history mark a successful media export as “completed with warning,” or retain a pending history record for retry? The file's successful creation should remain accurately represented.
 
+<a id="gap-013"></a>
 ### GAP-013 — P2: Research URL validation does not bind the connection to the address it checked
 
 **Location:** `src-tauri/src/faceless/evidence.rs`, `check_public`, `WebPages::new`, and `WebPages::page`.
@@ -228,24 +220,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Are corporate HTTP proxies supported? A proxy may perform DNS resolution itself, so the intended local-network isolation policy must specify that case.
 
-### GAP-014 — P2: Successful packaging/publishing never completes the corresponding faceless stages
-
-**Deep-review status (2026-11-08):** The current working tree now contains `sync_package` and `record_upload`, calls from package/thumbnail saves, and upload/refresh integration. The original missing-wiring finding is **superseded**, not open against this newer implementation. This change was made outside this review. Its success/status semantics and full end-to-end behavior still need validation; the original evidence below describes the earlier snapshot.
-
-**Location:** `src-tauri/src/faceless/mod.rs`, `STAGES` and `file_hash`; `src-tauri/src/commands/publish.rs`; `src-tauri/src/publish/mod.rs`, package/upload persistence; `front-end/src/components/faceless/FacelessPanel.tsx`.
-
-**Evidence / cause (static confirmation):** The stage machine expects `faceless/package.json` and `faceless/publish.json` plus corresponding `record_stage` entries. The implemented publishing workflow stores metadata in `publish/package.json` and upload records in `publish/uploads.json`. Its save/upload/refresh commands never write the expected faceless files or call `record_stage` for either stage. A source search finds no production caller recording these two stages. The Faceless panel explicitly directs users to the Export dialog to perform Package and Publish.
-
-**Reproduction:** Complete a faceless production through Visuals, save its full package, and successfully upload it through the supported Publish dialog/tool. Refresh the Faceless stages. Package/Publish still remain Todo and the next-stage pointer does not represent the work just completed.
-
-**Impact:** The production checklist cannot reach completion through the offered workflow, and agents/users receive misleading guidance about what still needs doing. This is an integration gap in the new feature, not a claim that remote upload itself fails.
-
-**Possible solution:** Make stage state derive from the canonical publish package/upload records, or write a small faceless stage receipt containing the target, metadata fingerprint, exported-content identity, and upload outcome. Avoid duplicating mutable metadata into two independent sources of truth. Changes to the relevant package/render/release should invalidate only the affected stages.
-
-**Regression checks:** A valid package completes Package; an accepted upload outcome completes Publish according to the chosen semantics. Failed/uncertain uploads must not mark successful completion. Later metadata/content changes must invalidate the appropriate receipt.
-
-**Questions for the fix:** Does Publish count as done for a remote draft, a private upload, a scheduled post, or only a public video? Should the Package stage require a thumbnail, or is an explicitly chosen automatic thumbnail acceptable?
-
+<a id="gap-015"></a>
 ### GAP-015 — P2: Closing the new package editor cancels the last unsaved keystrokes
 
 **Location:** `front-end/src/components/export/PackageEditor.tsx`, `change` and unmount cleanup; `front-end/src/components/export/DeliveryList.tsx`, switching from Publish to Accounts.
@@ -254,7 +229,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Reproduction:** Edit a title or description and immediately close the dialog or click Accounts before 600 ms elapses. Reopen it: the last edit was never sent and the previous saved text returns.
 
-**Executed confirmation:** A hook harness mounted the actual `PackageEditor` with mocked IPC, typed a new title, and unmounted after 100 ms. After advancing beyond the debounce, the save call count remained **0**. This verifies the lost-save path without a desktop UI walkthrough.
+**Prior probe (8 Nov):** A hook harness mounted the actual `PackageEditor` with mocked IPC, typed a new title, and unmounted after 100 ms. After advancing beyond the debounce, the save call count remained **0**. This verifies the lost-save path without a desktop UI walkthrough.
 
 **Impact:** Fast navigation silently loses valid metadata despite the autosave promise. This is a new lifecycle issue in the shared editor; the older thumbnail-reset issue GAP-001 is tracked separately with a continuation status note.
 
@@ -264,6 +239,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Should closing wait for autosave, or should the save continue with a visible global status/retry indicator?
 
+<a id="gap-016"></a>
 ### GAP-016 — P1: Upload can publish old metadata because it does not await or validate autosave
 
 **Location:** `front-end/src/components/export/PublishDialog.tsx`, `upload`; `front-end/src/components/export/PackageEditor.tsx`, `change`.
@@ -272,7 +248,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Reproduction:** Begin with a valid saved package, edit its title/description, and immediately click Upload. Delay or reject `publishPackageSave`; advance the 700 ms timer. `publishUpload` still runs using the old metadata. Typing again during the wait can move the debounce beyond upload dispatch even without a slow backend.
 
-**Executed confirmation:** A hook harness exercised the actual `PublishDialog` and `PackageEditor` with deferred mocked IPC. At 600 ms there was one pending save and zero uploads; at 700 ms there was **one upload while that save was still pending**. No remote upload was made.
+**Prior probe (8 Nov):** A hook harness exercised the actual `PublishDialog` and `PackageEditor` with deferred mocked IPC. At 600 ms there was one pending save and zero uploads; at 700 ms there was **one upload while that save was still pending**. No remote upload was made.
 
 **Impact:** A private or scheduled remote post can receive an older title, description, tags, or disclosure value than the user just entered. Once the old-title submission exists, the retry behavior in GAP-002 further complicates correction.
 
@@ -282,13 +258,14 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Should fields be locked during submission preparation, or should edits made after clicking Upload become a draft for a later update? Either policy needs an explicit snapshot boundary.
 
+<a id="gap-017"></a>
 ### GAP-017 — P1: Restoring a cut can insert the wrong source audio into manually linked clips
 
 **Location:** `src-tauri/src/sequence/edit.rs`, `SequenceEdit::Link`, `cut_after`, and `restore_cuts` (around lines 784 and 887–1001).
 
 **Evidence / cause:** Link accepts clips from different assets and different source offsets. `restore_cuts` computes missing source ranges from the initiating clip, gathers linked partners that end at the same timeline position and speed, and creates every partner's restored piece with the same `in_us: a`. That timestamp belongs to the initiating asset, not necessarily to the partner. Validation accepts the incorrect piece if that other asset has media at the substituted time.
 
-**Executed reproduction:** A production-library probe created a video playing source 0–2 s then 3–5 s, and synchronized external audio playing source 10–12 s then 13–15 s. Both cuts meet at timeline 2 s. Linking their left clips and restoring the video's cut correctly restored video 2–3 s, but inserted **audio source 2–3 s instead of 12–13 s**. The operation returned success and produced a valid sequence. Probe: `src-tauri/target/gap-sequence-probe.rs`.
+**Prior probe (8 Nov):** A production-library probe created a video playing source 0–2 s then 3–5 s, and synchronized external audio playing source 10–12 s then 13–15 s. Both cuts meet at timeline 2 s. Linking their left clips and restoring the video's cut correctly restored video 2–3 s, but inserted **audio source 2–3 s instead of 12–13 s**. The operation returned success and produced a valid sequence. Probe: `src-tauri/target/gap-sequence-probe.rs`.
 
 **Impact:** Restoring an edit can introduce unrelated dialogue or sound and break synchronization without reporting an error. The same implementation can fail validation for a partner whose substituted range crosses a pause or lies outside its media, preventing an otherwise valid restoration.
 
@@ -298,6 +275,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Should restoration automatically include arbitrary manually linked clips, or only partners with a demonstrably matching cut? What should happen when a linked partner has no removed source media at that boundary?
 
+<a id="gap-018"></a>
 ### GAP-018 — P2: An export's captured edit does not capture its mutable caption and graphic inputs
 
 **Location:** `src-tauri/src/export/mod.rs`, `CapturedExport`, `prepare_job`, `run_export_logged`, and `SceneEvaluator::caption_at` (around lines 205, 2316, 2577, 2655, and 1803).
@@ -314,13 +292,16 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Does Export mean the project as it was when clicked or the latest content when rendering begins? The UI, job identity, input capture, and freshness checks should implement the same policy.
 
-### GAP-019 — P2: Modal dialogs do not isolate keyboard focus or suspend destructive timeline shortcuts
+<a id="gap-019"></a>
+### GAP-019 — P2: Editor shortcuts bypass modal and transcript interaction boundaries
 
 **Location:** `front-end/src/components/ui/index.tsx`, `DialogBackdrop`; `front-end/src/components/timeline/TimelineStudio.tsx`, global keydown listener around lines 1170–1188; `PublishDialog.tsx`, `AccountsDialog.tsx`, and other backdrop consumers.
 
 **Evidence / cause (static confirmation):** `DialogBackdrop` supplies a visual overlay and pointer dismissal only: no focus placement, focus containment, restoration, or inert background. Several callers supply `role="dialog"`/`aria-modal`, but Publish and Accounts do not; none of those attributes alone isolates keyboard input. The timeline's window-level listener excludes only inputs, textareas, selects, and editable text. It does not check whether a modal is open, whether an event originated in a dialog button, or whether another handler already prevented it.
 
-**Reproduction scenario:** Select a timeline clip, open Export or Publish, move focus to a dialog button, and press Delete or a configured split/ripple shortcut. The event passes the timeline's target filter and dispatches the underlying editing action. Tab can also move through background controls because the overlay is not a keyboard boundary. This was traced in source; a native WebView keyboard walkthrough remains to be performed.
+**Reproduction scenario:** Select a timeline clip, open Export or Publish, move focus to a dialog button, and press Delete or a configured split/ripple shortcut. The event passes the timeline's target filter and dispatches the underlying editing action. Tab can also move through background controls because the overlay is not a keyboard boundary. This remains code-traced; a native WebView keyboard walkthrough remains to be performed.
+
+**Additional affected path:** The transcript panel handles Delete/Backspace by calling `preventDefault()` and cutting selected words, but does not stop propagation. The timeline's global handler ignores `defaultPrevented`. When transcript word selection coexists with timeline clip selection, the same key can therefore dispatch both a word cut and a clip deletion. Their revision checks can reject one of the competing edits; they do not make double dispatch correct. Cover this with a mounted integration test that asserts one editing action per handled key.
 
 **Impact:** A user can alter the timeline while working in a modal, and keyboard/screen-reader users cannot reliably navigate the dialog as an isolated interaction. Space on a button can be intercepted as playback rather than activating the button. Dialogs without roles/names are additionally difficult to identify through assistive technology.
 
@@ -330,6 +311,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Which global shortcuts, if any, should remain active while dialogs are open? Should a long-running upload/export dialog be dismissible without cancelling the work? Define those separately from keyboard focus behavior.
 
+<a id="gap-020"></a>
 ### GAP-020 — P2: Late source suggestions can add an account to the wrong platform's watchlist
 
 **Location:** `front-end/src/components/faceless/SourcesPanel.tsx`, `suggest`, platform-change effect, and suggestion Add handler.
@@ -338,7 +320,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Reproduction:** Start Suggest accounts on X, switch to Instagram before the response completes, then wait. The X candidates appear under Instagram; clicking Add calls `facelessWatchAdd("instagram", xHandle, ...)`. A switch to YouTube has the same risk even though that tab has no discovery button.
 
-**Executed confirmation:** The actual component in a hook harness received a deferred candidate with `platform: "x"` after switching to Instagram. Clicking its Add control sent **`platform: "instagram"`** to mocked IPC. Probe: `src-tauri/target/gap-ui-probe.mjs`.
+**Prior probe (8 Nov):** The actual component in a hook harness received a deferred candidate with `platform: "x"` after switching to Instagram. Clicking its Add control sent **`platform: "instagram"`** to mocked IPC. Probe: `src-tauri/target/gap-ui-probe.mjs`.
 
 **Impact:** The saved research watchlist can contain a nonexistent account or an unrelated account on another service. Future research may waste paid requests or use the wrong creator as evidence.
 
@@ -348,6 +330,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Should discovery continue and cache results after the user leaves a tab, or should switching cancel it when the provider supports cancellation?
 
+<a id="gap-021"></a>
 ### GAP-021 — P2: Graphic playback rereads and reparses source metadata for every frame
 
 **Category:** Performance improvement opportunity; redundant work is confirmed in source, but its contribution to dropped frames has not been measured.
@@ -366,13 +349,14 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Which file-watcher or command events are authoritative for externally edited graphics and styles? Cache lifetime must preserve that live-editing behavior.
 
+<a id="gap-022"></a>
 ### GAP-022 — P2: Automatic captions include muted speech that the output does not play
 
 **Location:** `src-tauri/src/export/mod.rs`, `caption_candidates` and `caption_track_cues`; `src-tauri/src/sequence/clock.rs`, `stream_entries`; compare `src-tauri/src/media/audio.rs`, `lanes`.
 
 **Evidence / cause:** Automatic caption candidate selection visits all audio tracks, and the transcript clock includes their clips without checking track mute state. The audio mixer explicitly excludes muted tracks and zero-gain tracks. Caption selection therefore does not follow the audible timeline. Filtering candidate keys alone is insufficient when the same source has both muted and audible instances: the clock must also select the correct instances.
 
-**Executed reproduction:** A production-library probe used one muted microphone-role track with a valid one-word transcript. `media::audio::lanes` returned **zero audible lanes**, while `caption_track_cues` returned **one caption cue** for the muted speech. Probe: `src-tauri/target/gap-caption-probe.rs`; no audio device or external API was used.
+**Prior probe (8 Nov):** A production-library probe used one muted microphone-role track with a valid one-word transcript. `media::audio::lanes` returned **zero audible lanes**, while `caption_track_cues` returned **one caption cue** for the muted speech. Probe: `src-tauri/target/gap-caption-probe.rs`; no audio device or external API was used.
 
 **Impact:** Captions can show discarded dialogue or an unused voice take over silence or replacement narration. Muting a track to exclude its content does not exclude its transcript from automatic caption output.
 
@@ -382,13 +366,14 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Should an explicitly selected caption source remain active when muted? Should moment-level noise mutes or clip gain also suppress words, or only whole-track mute?
 
+<a id="gap-023"></a>
 ### GAP-023 — P2: Repeated source footage loses captions after its first timeline occurrence
 
 **Location:** `src-tauri/src/sequence/clock.rs`, `entries` and its `used` source-range set; `src-tauri/src/export/mod.rs`, `caption_track_cues`; `src-tauri/src/project/revision.rs`, `transcript_clock`.
 
 **Evidence / cause:** The shared source-to-timeline mapper intentionally gives the first placement of each source moment precedence and removes later placements using `unplaced(&used, ...)`. That policy can make sense for a single seek target, but the same mapper drives caption cue generation. Later audible repeats receive no mapping for the words already mapped once.
 
-**Executed reproduction:** A production-library probe placed a one-second speech clip at timeline 0 s and repeated the same source at 2 s. A word at source 0.1–0.4 s generated only one cue, starting at **0.1 s**; there was no corresponding cue at **2.1 s**. Both clips remained in the sequence. Probe: `src-tauri/target/gap-caption-probe.rs`.
+**Prior probe (8 Nov):** A production-library probe placed a one-second speech clip at timeline 0 s and repeated the same source at 2 s. A word at source 0.1–0.4 s generated only one cue, starting at **0.1 s**; there was no corresponding cue at **2.1 s**. Both clips remained in the sequence. Probe: `src-tauri/target/gap-caption-probe.rs`.
 
 **Impact:** Replays, repeated quotations, and repeated hooks can contain audible speech with missing burned-in or exported subtitles. This is a product limitation of the shared clock, not a timing correction that can be solved by retranscribing the source.
 
@@ -398,6 +383,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Should editing one repeated caption change every instance or only the selected occurrence? How should competing simultaneous speakers be presented?
 
+<a id="gap-024"></a>
 ### GAP-024 — P2: Frontend checks do not exercise real React lifecycle, focus, or browser interaction
 
 **Category:** Test-quality improvement; this is a coverage limitation, not a claim that the existing unit tests are invalid.
@@ -414,13 +400,14 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for implementation:** Which smoke flows need the actual desktop WebView, and which can run in a normal browser with IPC mocks? Keep native rendering/OS integration checks separate from browser-only behavior.
 
+<a id="gap-025"></a>
 ### GAP-025 — P2: A preview frame can become stale during image decoding and still be painted after a seek
 
 **Location:** `front-end/src/components/canvas/NativePreviewHost.tsx`, `useEngineFrames`, `offer`, and the asynchronous `draw` loop.
 
 **Evidence / cause:** `offer` compares the incoming frame's generation with `playbackGeneration` before decoding, then stores only a `Blob` in `latest`. `draw` awaits `decodeFrame` and subsequently checks cancellation/canvas availability, but no longer knows the frame's generation and does not recheck the acceptance predicate. A seek or view change can make the image obsolete during that await without restarting the preview-surface effect.
 
-**Executed reproduction:** A hook probe supplied a generation-1 frame, held `createImageBitmap` unresolved, advanced the project store to playback generation 2, and then resolved the old decode. The canvas's `drawImage` was called **once with the obsolete frame**. Probe: `src-tauri/target/gap-ui-probe.mjs`; no native preview or video decoder was used.
+**Prior probe (8 Nov):** A hook probe supplied a generation-1 frame, held `createImageBitmap` unresolved, advanced the project store to playback generation 2, and then resolved the old decode. The canvas's `drawImage` was called **once with the obsolete frame**. Probe: `src-tauri/target/gap-ui-probe.mjs`; no native preview or video decoder was used.
 
 **Impact:** Rapid scrubbing or switching playback targets can briefly show an old frame after the playhead has moved. If the next frame is delayed, the obsolete image remains visible longer. The incoming-frame filter does not cover this asynchronous boundary.
 
@@ -430,6 +417,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Should the old image be retained or cleared while waiting for the first frame of a new target? Whichever policy is chosen, a newly completed obsolete decode should not overwrite the intended state.
 
+<a id="gap-026"></a>
 ### GAP-026 — P2: Numeric evidence checks miss negative values and do not preserve units or magnitude
 
 **Category:** Confirmed validation gap, with an additional content-quality improvement for quantity semantics. Passing this check should not be presented as factual verification of a claim.
@@ -438,7 +426,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Evidence / cause:** `numbers` ignores digit matches preceded by `-` to avoid treating model names such as GPT-5 as quantities. That also ignores standalone negative quantities entirely. For positive values, verification compares only digit strings; it does not bind them to sign, unit, scale, subject, or period. Script validation reuses the same extraction. `number_context` is descriptive metadata rather than an enforced quantity comparison.
 
-**Executed reproduction:** Against the quote “The trial included 40 people and raised $6.34 million,” production `verify` accepted all three statements without a rejection: “The trial included 40 percent of people,” “The trial raised $6.34 billion,” and “The trial lost -999 dollars.” The first two change the meaning/magnitude of supported digits; the third introduces a completely new quantity that the extractor omits. Probe: `src-tauri/target/gap-validation-probe.rs`.
+**Prior probe (8 Nov):** Against the quote “The trial included 40 people and raised $6.34 million,” production `verify` accepted all three statements without a rejection: “The trial included 40 percent of people,” “The trial raised $6.34 billion,” and “The trial lost -999 dollars.” The first two change the meaning/magnitude of supported digits; the third introduces a completely new quantity that the extractor omits. Probe: `src-tauri/target/gap-validation-probe.rs`.
 
 **Impact:** Unsupported or materially misstated quantities can enter the fact dossier and narration despite the numeric gate. An editorial review may still catch them, but the deterministic check does not supply the protection its successful result might suggest.
 
@@ -448,13 +436,14 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Which numerical transformations may an author make without a new source or explicit derivation? Should derived values be represented as calculations with cited inputs rather than ordinary quoted facts?
 
+<a id="gap-027"></a>
 ### GAP-027 — P2: Stage completion ignores the recorded output hash and can certify a replaced or corrupt result
 
 **Location:** `src-tauri/src/faceless/mod.rs`, `StageRecord.output`, `record_stage`, and `stage_states`; `src-tauri/src/commands/faceless.rs`, review prerequisite in `faceless_voice_impl`.
 
 **Evidence / cause:** Completing a stage records both input and output hashes. Later `stage_states` computes the current output hash only to check that the file can be read; it never compares it with `record.output`. It compares the previous stage's file with `record.inputs` instead. Replacing a stage's own output therefore leaves that stage Done while making its successors stale. The voice prerequisite trusts the review stage's Done status without loading/validating that review again.
 
-**Executed reproduction:** A scratch production recorded research, script, and review outputs, then replaced `review.json` with text that was not valid JSON. `faceless::summary` still returned **Review: Done**. This isolates receipt validation rather than editorial schema validation; the synthetic original outputs were used only to exercise `record_stage`/`stage_states`. Probe: `src-tauri/target/gap-validation-probe.rs`.
+**Prior probe (8 Nov):** A scratch production recorded research, script, and review outputs, then replaced `review.json` with text that was not valid JSON. `faceless::summary` still returned **Review: Done**. This isolates receipt validation rather than editorial schema validation; the synthetic original outputs were used only to exercise `record_stage`/`stage_states`. Probe: `src-tauri/target/gap-validation-probe.rs`.
 
 **Impact:** External/manual edits, partial writes, or file corruption can leave a stage falsely certified. In particular, a review file with newly added blockers or invalid content may still satisfy the gate for paid voice generation. GAP-008 addresses accepting stale narration; this issue is the missing verification of the stage's own recorded result.
 
@@ -464,6 +453,7 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for the fix:** Which direct file edits should be automatically revalidated, and which require an explicit review/acceptance step? Should corruption be a distinct error state rather than ordinary Stale?
 
+<a id="gap-028"></a>
 ### GAP-028 — P3: Shared tab and segmented controls expose selection semantics without matching keyboard navigation
 
 **Category:** UI/accessibility improvement, confirmed by inspection of the shared controls; no assistive-technology walkthrough was performed.
@@ -480,42 +470,305 @@ Suggested fix order: address narration identity/input validation (GAP-004, GAP-0
 
 **Questions for implementation:** Should arrowing through tabs immediately activate their panels, or should Enter/Space activate after focus moves? Expensive panel loading may favor manual activation.
 
+## Retained follow-ups from the roadmap and completed audit
+
+These were previously scattered review targets or limitations. They remain actionable without
+claiming a new desktop reproduction. Feature requests such as resumable jobs and spend reports
+remain in [Roadmap](ROADMAP.md#unscheduled-capabilities).
+
+<a id="gap-029"></a>
+### GAP-029 — P2: Checkpoint save lacks a locked project-identity recheck
+
+**Status / affected paths:** Code-traced race window, not executed. AGT-1 follow-up in
+`src-tauri/src/mcp/tools.rs` (`call`), `mcp/actions.rs` (`checkpoint`, save branch),
+`commands/proposals.rs` (the guarded path to reuse).
+
+**Evidence / reproduction:** `call` checks the supplied project before dispatch. Checkpoint
+save later acquires `command_lock` and `opened_project` and calls `save_checkpoint` without
+checking that handle again. Switch projects between the first check and lock acquisition to
+test whether A's request writes a checkpoint in B. Many direct actions use `opened(ctx)` and
+handle-checking commands; the old blanket claim that all direct actions are unguarded is too broad.
+
+**Impact:** A checkpoint can belong to the wrong project and misrepresent the recovery point.
+Other direct actions still need a bounded call-site audit, not an assumed defect classification.
+
+**Potential solution:** Validate the supplied handle under the same lock as the checkpoint
+write, using the proposal/command ownership pattern. Retain captured context for long jobs.
+
+**Validation:** Barrier-controlled A→B switch before checkpoint lock acquisition must refuse
+the stale call and leave B's files unchanged. Check current-project save and automatic checkpoints.
+
+**Question / dependency:** No product decision is needed to refuse stale writes. A deterministic
+barrier or injected dispatcher is needed to exercise the race; do not rely on sleep timing.
+
+<a id="gap-030"></a>
+### GAP-030 — P3: Sampled graphic checks cannot establish phone readability or continuous clearance
+
+**Status / affected paths:** Confirmed coverage limit, not a newly reproduced overlap.
+`src-tauri/src/mcp/graphic_checks.rs` (`check_moments`, `bands_with_words`),
+`mcp/frames.rs`, `front-end/src/components/agent/AgentPanel.tsx`.
+
+**Evidence / reproduction:** Checks spread 3–6 samples over each graphic. A conflict between
+samples can be missed; platform-band detection is not a minimum readable type-size test.
+The Agent panel does not embed the generated sample clip. Earlier real-frame observations are
+in [Verification](verification.md#verified-behavior-and-remaining-limits).
+
+**Impact:** A clean check cannot certify continuous face/caption clearance or 9:16 phone-size
+legibility. STY-2's real over-face sample remains necessary.
+
+**Potential solution:** Sample around known entry/action boundaries, add a defined type-size
+heuristic, and surface the existing sample artifact where useful. Keep human motion/listening
+approval; do not add the rejected agent motion-review pipeline.
+
+**Validation:** A fixture with a brief overlap between uniform samples should be detected or
+explicitly reported as unexamined; compare portrait frames at a declared phone display size.
+
+**Questions / dependencies:** George must judge the over-face sample and agree what display
+size is acceptable. Native frame/runtime access is needed for the visual checks. No minimum
+font size or continuous-clearance guarantee has been agreed.
+
+<a id="gap-031"></a>
+### GAP-031 — P2: Reworded restarts remain a review-coverage gap
+
+**Status / affected paths:** Historical labelled case plus current code inspection; not rerun
+on real audio. `src-tauri/src/ai/candidates.rs`, `transcript/edit.rs`, `ai/review_probe.rs`,
+`docs/plans/review-eval/en-b.json`.
+
+**Evidence / reproduction:** EN-B already contains the optional retake “what you need to do
+is” → “you need to go” (words 456–461). The old roadmap instruction to add a label first was
+stale. Candidate restart rules rely on shared opening words; the previous evaluation reported
+this rewording unflagged. The referenced English transcript is outside the repo.
+
+**Impact:** Fast review can omit a retake that thorough review sees; optional labels are not
+must-cut failures, and neither mode is established as universally better.
+
+**Potential solution:** Extract a portable labelled fixture, evaluate a narrow paraphrase/slip
+candidate rule, and retain manual review for ambiguous cases. Protect deliberate repetition
+and meaningful connective words rather than broadening automatic cuts blindly.
+
+**Validation:** Run rules/flags on that fixture and unseen rewordings, then compare wrong-cut
+and missed-span counts with the existing labels. Repeat matched fast/thorough runs before
+changing defaults ([procedure](verification.md#fast-against-thorough)).
+
+**Questions / dependencies:** Supply or reconstruct the missing transcript/audio with stable
+word timing. Decide whether this optional rewording should merely be flagged; no new blanket
+auto-cut policy is authorized by the old observation.
+
+<a id="gap-032"></a>
+### GAP-032 — P3: Unplaced graphic-folder retention needs a safe ownership check
+
+**Status / affected paths:** Retained investigation, not a newly measured leak.
+`src-tauri/src/project/history.rs`, `project/revision.rs`, `graphics/mod.rs`, `graphics/versions.rs`.
+
+**Evidence / reproduction:** The earlier roadmap reported graphic folders remaining after undo.
+History restores versioned files, and unused versions may still be intentional. On a scratch
+project, add/render a graphic, undo placement, prune history, then enumerate files and references
+from the current edit, undo/redo, versions and checkpoints. That lifecycle was not rerun here.
+
+**Impact:** Potential project-storage growth; neither a byte leak rate nor a broken undo path
+has been established. The separate 20–40 s render observation is a dated baseline, not evidence
+that deleting source folders is safe (see [GAP-021](#gap-021)).
+
+**Potential solution:** Add reachability/retention accounting and, only if measured need exists,
+an explicit recoverable cleanup of demonstrably unreferenced files. Keep old renders playable.
+
+**Validation:** Quantify retained bytes after repeated add/undo cycles, prove every retained
+history/checkpoint/version still restores, and preserve manually supplied or unclassified files.
+
+**Questions / dependencies:** Define whether unused versions are user assets and when cleanup
+may remove them. A source file being absent from today's timeline is insufficient ownership proof.
+
+## Closed or superseded IDs
+
+<a id="gap-001"></a>
+### GAP-001 — Superseded: thumbnail responses reset unsaved package fields
+
+Current `PackageEditor.tsx` calls `show(..., false)` for thumbnail responses and
+`PublishDialog.tsx` no longer resets its child draft on status refresh. The original handler
+is gone. Autosave loss and submission ordering remain [GAP-015](#gap-015) and
+[GAP-016](#gap-016); comprehensive mounted-React dirty-draft coverage remains GAP-024.
+
+<a id="gap-005"></a>
+### GAP-005 — Closed: stale built-in style assertion
+
+`src-tauri/src/style/store.rs`, `styles_are_saved_listed_renamed_and_removed`, now expects
+Light, Dark, Broadsheet and the saved user style. Current focused test: **1 passed** with
+TEMP/TMP redirected inside the workspace. The initial default-temp attempt failed on sandbox
+file access, before reaching this assertion; that was not evidence of a catalog regression.
+
+<a id="gap-006"></a>
+### GAP-006 — Closed: tool schema exceeded the former budget
+
+`src-tauri/src/mcp/mod.rs`, `the_tool_list_stays_small`, now enforces **<51,000 UTF-8 bytes**.
+Its comment records the deliberate increases for `actionWord` and app-wide `publish`
+(50,741 bytes at that change). The current guard passes. The historical 47,697 vs 47,500
+failure applies to the earlier budget. This pass did not measure client tokens or latency.
+
+<a id="gap-014"></a>
+### GAP-014 — Superseded: absent package/publish stage wiring
+
+`faceless::sync_package` is called by package/thumbnail saves; `record_upload` is called by
+upload and refresh in `commands/publish.rs`. The current package-stage test passes. Publish
+receipt creation requires a YouTube ID; a remote draft alone does not satisfy that branch.
+Full release/status semantics still need the PUB-2/FCL-9 acceptance run. Stage receipt integrity
+remains [GAP-027](#gap-027); the removed missing-wiring report is not proof of end-to-end success.
+
+## Additional findings from the deeper review
+
+<a id="gap-033"></a>
+### GAP-033 — P2: Refreshing a corrected source keeps facts whose evidence is no longer present
+
+**Location:** `src-tauri/src/faceless/evidence.rs`, `fetch`, `save`, and `add_facts`; `front-end/src/components/faceless/ResearchView.tsx`, checked-facts presentation.
+
+**Evidence / cause:** Facts are verified when added. A later `fetch(..., again: true)` overwrites the source's saved text and metadata but retains all existing facts. `save` recalculates origins, corroboration, and grade without revalidating each fact against its source. No source-content fingerprint or immutable source-version reference is stored with the fact.
+
+**Executed reproduction:** A fake page supplied a quote, and `add_facts` accepted it. The same URL was refreshed with a correction that removed the quote. The dossier still contained **one accepted fact**, while calling the production verifier against the now-saved page returned **`quote not found in the page`**. Probe: `src-tauri/target/gap-validation-probe.rs`; no network request occurred.
+
+**Impact:** Research can continue to present stale claims as checked facts after the source changes or is corrected. Scripts can cite the retained fact, and the earlier evidence bytes have been overwritten, weakening reproducibility of what was actually verified.
+
+**Possible solution:** Version fetched page content and bind each accepted fact to the exact content digest and retrieval time. On refresh, revalidate affected facts and mark changed/unsupported ones stale or needing review; invalidate dependent script/review stages as appropriate. Keep the prior evidence snapshot if historical reporting remains allowed rather than silently treating it as current evidence.
+
+**Regression checks:** Refresh with unchanged text, a removed quote, altered quantities, an explicit correction, and a fetch failure. Verify affected facts, dossier grade, and downstream stages reflect the chosen validity policy. Ensure the original evidence remains inspectable when a fact is retained for historical context.
+
+**Questions for the fix:** Should a fact supported by an older source snapshot remain usable with an explicit as-of date, or must all production facts match the latest successful fetch? How should an unavailable source differ from a corrected one?
+
+<a id="gap-034"></a>
+### GAP-034 — P2: An unrelated edit during media import discards the completed extraction and requires starting over
+
+**Category:** Performance/workflow improvement opportunity. Stale-revision rejection protects consistency, but it makes otherwise independent import work unnecessarily fragile.
+
+**Location:** `src-tauri/src/commands/mod.rs`, `project_media_import_impl`; `src-tauri/src/project/reader.rs`, `add_assets`; `front-end/src/components/media/MediaPanel.tsx`, `importFrom`.
+
+**Evidence / cause:** The frontend captures a revision before the file picker. The backend checks project identity, then probes/extracts the entire batch without checking that revision. At final commit, `add_assets` rejects any revision change and deletes the newly extracted files. Therefore a canvas change, timeline edit, or agent edit during a long import can invalidate all completed work even though importing adds assets rather than replacing the existing timeline.
+
+**Executed check:** A production-command probe supplied an already stale revision with a one-second WAV. It completed the extraction path and returned `Stale edit revision`. The extracted-file directory was empty afterward: cleanup is implemented correctly, so **an orphan-file leak was investigated and ruled out**. The unnecessary work/retry remains. Probe: `src-tauri/target/gap-import-probe.rs`; its original leak assertion failed and was corrected to check the observed cleanup behavior. The corrected probe was recompiled and rerun successfully.
+
+**Impact:** Large files or multi-file batches can consume minutes of decoding and disk I/O, then leave the media bin unchanged and require the same import again. The picker delay widens the window even before extraction starts.
+
+**Possible solution:** Reject an already stale request before expensive work. For a revision that changes during extraction, safely append the prepared assets to the latest document under the command lock after rechecking project identity, asset limits, and uniqueness; preserve the new asset IDs. If automatic rebasing is unsuitable, retain a bounded prepared-import result and offer a cheap commit retry instead of repeating extraction.
+
+**Regression checks:** Change an unrelated layout setting during a held import and require either a safe append to the latest document or a retry that reuses extracted files. Also test project closure/switch, import failure, capacity limits, and cleanup of abandoned prepared results.
+
+**Questions for implementation:** Should importing media be allowed to commit after unrelated edits? How long should prepared results survive if a user postpones the retry?
+
+<a id="gap-035"></a>
+### GAP-035 — P2: Unreadable publish metadata is silently treated as empty and overwritten by the next save
+
+**Location:** `src-tauri/src/files.rs`, `load_json`; `src-tauri/src/publish/mod.rs`, `packages`, `save_package`, and similarly the upload-history reader.
+
+**Evidence / cause:** The generic JSON loader returns `None` for absence, read failure, and invalid JSON alike. `packages` converts all three cases into an empty map. `save_package` then inserts one target and atomically replaces the whole file, without warning, backup, or recovery. Atomic replacement avoids a partially written new file; it does not protect the recoverable old data from this read-error path.
+
+**Executed reproduction:** A scratch `publish/package.json` held recognizable main-video and short drafts followed by a truncated JSON field. `packages` reported zero targets. Saving metadata for the main video succeeded and replaced the file; the earlier short's draft text was gone. Probe: `src-tauri/target/gap-persistence-probe.rs`.
+
+**Impact:** A transient read problem or damaged/externally edited metadata file can become permanent loss of all other targets' metadata on the next autosave. The UI may initially present an empty package rather than explaining that existing data could not be loaded. Applying the same default-to-empty policy to upload records also erases useful reconciliation history when those records are subsequently rewritten.
+
+**Possible solution:** Use `Result<Option<T>, Error>` for user-authored and transaction-history stores: only NotFound means an empty store. Block replacement after parse/read errors, retain the original bytes, and offer a recoverable copy/backup plus a clear error. Audit callers of `load_json` to distinguish disposable caches from durable user content.
+
+**Regression checks:** Missing file initializes normally; malformed or unreadable existing data yields a visible error and unchanged bytes; recovery preserves unaffected targets. Cover package, upload-history, and other user-content stores individually rather than changing cache fallback behavior indiscriminately.
+
+**Questions for the fix:** Should the app keep one last-known-good version or a small rotating backup? Which settings are safe to reset automatically, and which require explicit recovery?
+
+<a id="gap-036"></a>
+### GAP-036 — P2: An unrelated project revision discards an unfinished chapter title
+
+**Location:** `front-end/src/components/chapters/ChaptersPanel.tsx`, `titles` state, revision effect, and `commitTitle`.
+
+**Evidence / cause:** The panel clears every local title draft whenever `openedProject.revision` changes. Chapter titles save on blur, so a user can still be typing when a background import, agent edit, or other command advances the project revision. Even if the chapter itself is unchanged, the effect replaces the input with its persisted title. The draft is not in edit history and Undo cannot recover it. The effect also uses revision alone rather than project identity, so switching between projects with equal revisions need not reset drafts.
+
+**Executed check:** Mounted the actual component with the existing hook harness, typed `Unfinished new title`, then supplied the same project and chapters with revision 2 instead of 1. After the effect, the input read `Original`. Probe: `src-tauri/target/gap-chapter-probe.mjs`. This is a deterministic state/effect reproduction, not a real DOM typing or focus test.
+
+**Impact:** Unrelated background work can erase text while it is being entered. Blanket revision resets also prevent the UI from distinguishing a harmless refresh from a conflicting edit to the same chapter.
+
+**Possible solution:** Keep dirty drafts keyed by project and chapter identity. Preserve them across unrelated revisions, reset on project change, and remove drafts only after an acknowledged save or explicit cancellation. If the stored title changes while dirty, surface or resolve that specific conflict instead of silently resetting every input.
+
+**Regression checks:** Retain a dirty title through a timeline/layout revision, a background command completion, and a same-project refresh. Test external changes to the same title, save failure, chapter deletion, and project switches with equal revisions. Include a mounted React/browser case for blur plus a concurrent refresh.
+
+**Questions for the fix:** Should a conflicting external chapter rename preserve the user's draft with a warning or require choosing a version? Should title edits autosave after an idle interval or continue saving on blur?
+
+<a id="gap-037"></a>
+### GAP-037 — P1: Overlapping voice jobs share scratch files and can attach another job's audio to a script
+
+**Location:** `src-tauri/src/faceless/voice.rs`, `make`; `src-tauri/src/commands/faceless.rs`, `faceless_voice_impl`; desktop `faceless_voice` and MCP voice dispatch.
+
+**Evidence / cause:** Voice generation has no per-production job guard before provider requests or file writes. Each invocation reads its own manifest but writes shared `rawN.mp3`, `voN.wav`, and `manifest.json` paths. Narration identity derives from the invocation's text/settings, while assembly reads whichever bytes currently occupy those shared paths. The desktop command runs in `spawn_blocking`; an independent MCP call can enter the same backend concurrently. The transcription guard is acquired later, after generation and timeline placement, so it cannot protect these files. A local button's busy state does not serialize independent callers.
+
+**Executed reproduction:** Used the production `voice::make` with fake speech and explicit channels, without paid requests or sleep timing. Job A generated a one-second take and paused at the existing “Setting the pace” progress callback. Job B generated a two-second take for different text and completed in the same production directory. Resuming A produced a two-second scene under A's distinct narration filename. A therefore consumed B's raw audio while retaining A's text-derived identity. Probe: `src-tauri/target/gap-voice-concurrency-probe.rs`. This proves generation-layer corruption; the full desktop/MCP overlap was traced, not run against a provider.
+
+**Impact:** A returned narration can contain another script's speech, with misleading identity and checks. Overlaps can also duplicate billable scene requests, overwrite manifest updates, contend on paced files, or remove intermediates another job is using. This is separate from GAP-004's single-job redo identity and GAP-008's stale review binding.
+
+**Possible solution:** Acquire a per-production generation guard before deciding which scenes to request, and reject or queue concurrent starts with visible job ownership. Give each run unique working paths and immutable/content-addressed completed takes; commit its manifest only after validating captured script/review/settings versions. Preserve reusable successful takes after failure. If parallel jobs are a product requirement, isolate their artifacts and explicitly choose which result becomes active.
+
+**Regression checks:** Keep the deterministic A/B interleaving above and require either a rejected/queued second job or correct isolated audio for both. Also overlap same-text redo, different voice settings, provider failure, and project switching. Assert no duplicate request for a guarded start, no deletion of another run's files, and no stage receipt for mismatched inputs.
+
+**Questions for the fix:** Should a second request join the existing job, queue, or fail with its status? Are independent alternative takes intended, and who may choose the active one? The current single-production output should not silently intermix them.
+
+<a id="gap-038"></a>
+### GAP-038 — P2: Thumbnail replacement deletes the existing image before the replacement commits
+
+**Location:** `src-tauri/src/publish/mod.rs`, `set_thumbnail`, especially removal of both extension variants before `write_atomic` and package save.
+
+**Evidence / cause:** After validating the incoming image, the function deletes both the old JPG and PNG paths, writes the new image, and finally updates package metadata. A failure writing the new file occurs after deletion of the previous one. If the extension changes and metadata persistence fails, the saved package can still point to the deleted old filename. Atomicity of an individual new-file write does not make this multi-file sequence transactional.
+
+**Executed reproduction:** In a scratch publish directory, created a package referencing an existing JPG path and blocked the new PNG destination with a directory. Called `set_thumbnail` with a valid generated 640×360 PNG. The call returned an error; the old JPG path was gone and package metadata still referenced it. The prior JPG contents were placeholder bytes because this test concerns preservation of the existing file, not image decoding. Probe: `src-tauri/target/gap-thumbnail-probe.rs`. The injected destination failure is deterministic; disk-full and permission-failure variants were not run.
+
+**Impact:** A failed replacement can remove the user's working thumbnail rather than leaving it intact for retry. If its original external source is no longer available, recovery requires a backup or recreation. Subsequent publishing sees missing thumbnail data.
+
+**Possible solution:** Write and validate a new image under a unique filename first, atomically commit metadata referencing it, and only then retire the previously referenced file. On metadata failure, retain the old image and package and clean up only the uncommitted new artifact. Handle outstanding readers and concurrent replacements under the same project ownership/serialization rules.
+
+**Regression checks:** Inject failures creating the new file, replacing it, and committing metadata; after each failure require the old referenced bytes and package to remain usable. Cover JPG→PNG, PNG→JPG, same-extension changes, successful cleanup, and two overlapping replacements.
+
+**Questions for the fix:** Should the previous thumbnail remain as a recoverable version after success, or be removed once the new reference is durable? Transactional preservation on failure does not depend on that retention choice.
+
 ## Review coverage and validation
 
-### Scope
+### Deeper source review, 8 November 2026
 
-This was a broad, targeted risk review of the current working tree, not an exhaustive proof that every line and platform is defect-free. The existing `docs/audit.md` was read to avoid presenting its already-fixed thumbnail/layout bugs as new findings.
+The continuation examined sequence restoration, caption mapping, export capture, graphic-frame
+work, preview decoding, evidence refresh/quantity checks, stage receipts, media imports, publish
+persistence, keyboard routing, chapter draft state, and concurrent narration generation. Findings
+were recorded individually as they were established; application code was not changed. Existing
+documentation consolidation and its closed/superseded findings were preserved. Newly appended
+IDs that overlapped the consolidation's retained follow-ups were reassigned to GAP-033 onward;
+the final report has 38 unique IDs, 34 open entries, and four closed/superseded entries.
 
-The traced paths included:
+Executed evidence for this review is recorded in each finding. Local Rust probes call the compiled
+application library; frontend probes bundle the actual components with mocked IPC and the existing
+hook harness. They are focused reproductions, not new committed regression tests or substitutes
+for native WebView, audio-listening, or rendered-output verification.
 
-- Frontend project/workspace state, debounced saves, track mixing, faceless views, publishing dialogs, export-list polling, caption updates, thumbnail and waveform rendering.
-- Backend project ownership, file persistence, selected history/checkpoint and sequence-edit paths, transcript/caption persistence, narration generation/import, stage tracking, export history/fingerprints, publish retries, and research fetching.
-- Build/test integration and selected graphics/media cache and playback code. These received a narrower inspection than the paths with findings; passing tests are not a substitute for visual/audio verification.
+| Check | Result and limit |
+|---|---|
+| Linked-cut restoration and caption mapping probes | Reproduced wrong linked source offset, captions on muted speech, and missing captions on repeated source intervals. |
+| Evidence and stage probes | Reproduced unsupported quantities passing numeric checks, replaced review output retaining Done, and refreshed sources retaining invalidated facts. |
+| Preview and source-panel probes | Reproduced a stale decoded frame painting after a generation change and an X suggestion saved as Instagram; rerun successfully at the end of this review. |
+| Import rejection/cleanup probe | Recompiled and rerun: stale revision rejected; extracted files cleaned up. No orphan leak claimed. |
+| Publish persistence and thumbnail probes | Reproduced overwrite of damaged metadata and loss of the prior thumbnail on replacement failure. |
+| Chapter draft probe | Actual component state/effect path discarded the unfinished title on an unrelated revision; rerun successfully. |
+| Concurrent voice probe | Channel-controlled interleaving reproduced A's narration using B's two-second take; fake speech only, no provider calls. |
+| Focused Rust faceless tests | `cargo test --lib faceless::tests --offline -- --test-threads=2`: 6 passed, 0 failed, 1 live test ignored, 835 filtered out; TEMP/TMP redirected into `target/gap-review-tmp`. |
+| Report integrity | Unique finding IDs and anchors, matching priority totals, and no unresolved internal GAP links. |
 
-### Checks performed
+Scratch probes live under ignored `src-tauri/target/` and may disappear on a clean build.
+Each proposed fix should bring the relevant minimal regression into the maintained test suite.
+No live upload, paid generation, new broad suite run, or desktop performance benchmark was
+performed in this continuation. Performance estimates remain code-derived opportunities unless
+an entry explicitly says otherwise.
 
-| Check | Result |
-| --- | --- |
-| Frontend `npm run build` | Passed TypeScript and Vite build. Vite reported a 648.54 kB minified workspace chunk and ineffective dynamic imports for ChaptersPanel, StylePanel, and MediaPanel because of static imports elsewhere. These warnings were observed, but no user-visible startup regression was measured, so they are not separately classified as confirmed performance bugs. |
-| Frontend `npm run test:cleanup` | 52 passed, 0 failed. |
-| Backend `cargo check --lib --features tauri-app --offline` | Passed. Warnings included the public `plan_zooms` signature exposing private `InterestPoint` and sandbox incremental-cache hard-link fallback. |
-| Backend `cargo build --lib --offline` | Passed; used the resulting current production library for standalone probes. |
-| Backend `cargo test --lib --offline -- --test-threads=4` with writable TEMP/TMP | 839 total: **773 passed, 12 failed, 54 ignored**. Two deterministic regressions are GAP-005 and GAP-006. The other 10 failures involve local HTTP/named-pipe access and remain inconclusive in this restricted environment. |
-| Faceless store with real Zustand and deferred IPC responses | Reproduced GAP-003 for out-of-order responses and clear-while-loading. |
-| Production Rust library, fake speech/audio fixtures | Reproduced unchanged narration identity despite changed audio for GAP-004; verified the already imported audio stayed unchanged. |
-| Production stage/acceptance commands with synthetic A/B stage files | Reproduced Stale → Done acceptance of old narration for GAP-008. |
-| Production export-history list with 100 same-target records | Reproduced 100 current-fingerprint callback invocations for one list request (GAP-007). |
-| Production publishing function with fake HTTP | Reproduced Draft being returned for a subsequent Scheduled request without a new/update post request (GAP-002). |
-| Continuation: actual package/publish components with hook harness, fake timers, and deferred IPC | Reproduced zero saves after early unmount (GAP-015), and upload dispatch while autosave remained pending (GAP-016). Probe: `src-tauri/target/gap-package-probe.mjs`. |
+### Documentation consolidation coverage
 
-The first Rust suite run used the sandbox's default temporary directory and produced 164 failures, including `Access is denied` on file persistence. Redirecting TEMP/TMP to `src-tauri/target/gap-review-tmp` removed that confounder. The later 12-failure result above supersedes the initial count; the permission failures were not recorded as application defects.
+All documents and support files under `docs/` were read or parsed, including the labelled
+evaluation data and runners. Root instructions, README, shipped editing methods/skill text,
+asset licence notes, test/build scripts and CI workflows were inspected. Source review traced
+the listed findings through callers and tests, with narrower coverage of unrelated modules;
+this is not an exhaustive audit of every line or platform.
 
-The remaining environment-limited failures were two `ai::client` HTTP tests, the Parakeet checksum-download HTTP test, the ElevenLabs upload-cancellation HTTP test, one `mcp::ipc` pipe-access test, and five `mcp` bridge/CLI/proposal tests. Local HTTP requests failed before the expected exchanges; pipe connections reported unavailable app/agent access. These results require a normal local environment to establish whether any additional code bug exists.
+Current focused checks and the completed AUD-001..008 audit summary live in
+[Verification](verification.md#documentation-reconciliation-8-november-2026). Earlier 8 Nov
+probes preserved above remain historical evidence. The earlier review suite reported
+773 passed / 12 failed / 54 ignored after redirecting TEMP/TMP: two then-stale guards and ten
+environment-limited HTTP/pipe failures. That snapshot does not describe today's full suite.
 
-### Limits and retained evidence
-
-No live publishing, paid speech generation, external-account modification, or DNS-rebinding attempt was performed. No desktop UI walkthrough, long-recording playback benchmark, full export visual/audio comparison, macOS/Linux build, CUDA/DirectML/WebGPU transcription run, or ignored GPU/runtime test was performed. Consequently race findings without executed evidence remain code-traced scenarios, and performance claims are limited to demonstrated work counts rather than measured interactive latency.
-
-Scratch probes and logs were kept under the ignored `src-tauri/target/` tree (`gap-review-probe.rs`, `gap-review-tests.log`, `gap-review-check.log`, and `gap-review-build.log`). Their dependencies and local fixture inputs isolate the reported behaviors; they are not committed regression tests. The intended review deliverable is this file, `docs/gap.md`; pre-existing working-tree edits were preserved.
-
-The build and full-suite results above belong to the initial review snapshot. Publishing UI changes observed during the continuation pass superseded GAP-001 and introduced the code-traced findings GAP-015 and GAP-016. Those newer changes have not received a fresh full-suite run.
+No live API call, paid generation, upload, DNS-rebinding attempt, native UI walkthrough,
+listening check, full rendered comparison, new performance benchmark, full Rust suite,
+ignored GPU/runtime probe, or Linux/macOS run was performed in this consolidation.
+Do not infer a finding is resolved from a passing unrelated test or missing reproduction.

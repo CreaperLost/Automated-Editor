@@ -10,7 +10,8 @@ exporting an MP4.
 AeroEdits has no built-in chat. AI comes from your own agent (Claude Code, Codex, the Claude
 app…) over MCP or the `aeroedits do` command line. The app runs the editing passes; the agent
 runs them in order, asks you with real numbers, and you approve. Agent proposals wait in the
-Agent panel, and every change is one undo step.
+Agent panel, and timeline edits are undoable. Publish packages and production-stage records
+are stored separately from edit undo.
 
 The agent can keep a word-anchored project plan, trial a style in context and make
 editable graphics. It reviews stills and boards; you judge motion, listen and approve export.
@@ -19,161 +20,17 @@ Start with [docs/](docs/README.md) for product direction, architecture, the road
 
 ## Features
 
-- **Multi-track timeline:** screen and webcam video, microphone and system audio waveforms,
-  and a smart zoom track. Edits are non-destructive.
-- **History:** undo and redo survive closing the app (kept in the project's `history/`, up to
-  2 GB, no step limit). An agent's whole run undoes as one step from the Agent panel, and
-  **History** in the top bar saves named checkpoints (the edit, the graphics' files and the
-  caption marks) to go back to; one is saved before every agent run.
-- **Presets and styles:** a **Preset** is what the app and the agent do for a kind of video
-  (Tutorial, Shorts, Clips, or your own): cleanup levels, captions, zooms, layouts, export
-  settings, the agent's method and your rules (Preset menu in the top bar). A **Style** is how
-  it looks (Light, Dark, or your own): colours, title and body fonts (installed, or a
-  .ttf/.otf/.woff/.woff2 file), a logo, the graphics look, the caption look and the frame
-  (Inspector, Style page). A project stores only what it changed from its preset, shown as
-  "changed here" chips you can reset. Agents use `library` and `preset`.
-- **Captions:** in the style's font, one emphasis word per caption in its accent colour, shown
-  pop, karaoke or static; they give way to full-frame graphics. Off by default in the video,
-  on in shorts.
-- **Smart zoom from mouse telemetry:** reads `telemetry/events.jsonl` and
-  `telemetry/geometry.jsonl` and suggests zooms and pans from clicks, dwell points and click
-  clusters. Suggestions can be accepted, dismissed, edited or added by hand.
-- **Jump cuts:** finds pauses in one sound or two chosen sources, then ripple-cuts the
-  selected pauses from the timeline. Two-source mode preserves either voice (for example,
-  microphone and voice-mode system audio). **Remove silence** finds very quiet audio,
-  optionally protecting saved word timings. Balanced uses -42 dB, 250 ms pauses, and
-  40 ms margins. Gentle, Tight, and Aggressive presets and the Advanced controls allow
-  shorter gaps and margins down to zero. Automatic sensitivity is optional and shows
-  the measured cutoff for each source; higher sensitivity can cut soft untranscribed speech.
-  **Gaps without words** uses the primary source's saved transcript to suggest gaps
-  containing breaths, saliva noises, or clicks, regardless of loudness. In two-source mode,
-  the microphone is the default primary source; PC speech, music, video audio, and other
-  sounds veto cuts. The PC transcript is optional and adds word protection when present.
-  PC-only quiet footage never introduces cuts. Manual word/filler/retake editing keeps its
-  existing behavior. Gap detection uses the chosen microphone margin, while PC sound
-  protection keeps at least 80 ms regardless of the preset, including beyond trimmed
-  or moved PC clip boundaries on the timeline. Optional word-edge refinement
-  uses 5 ms audio windows to trim up to 200 ms of measured quiet at either word boundary,
-  without changing saved transcript or caption timings. Leading/trailing audio stays
-  protected. Sounds the transcriber tagged between words (`[keyboard clacking]`, `[laughs]`)
-  are cut with the gap unless **Keep tagged sounds** is on. Suggestions
-  start unchecked: transcription can miss words and tutorial clicks can be intentional.
-  Noises inside recognized words are kept. **Transcript** editing removes selected words,
-  fillers, and retakes. The retake rules also catch a small word said twice ("we we", "it's a
-  it's a") and a word broken off ("j- just"); words doubled for weight ("very very", "pretty
-  pretty") stay. Each pass has its own settings and review and can run independently,
-  in any order. All cuts share timeline mapping and undo; timeline or transcript changes
-  invalidate stale suggestions, including analyses still running.
-- **Keyboard activity:** recordings from AeroShoot with keyboard recording on carry
-  `telemetry/keys.jsonl` ([format](docs/architecture.md#keyboard-telemetry)): typing stretches with a key
-  count (never the text) and shortcuts pressed. Typing counts as screen activity, so the
-  picked layouts keep the screen in view while you type with a
-  resting mouse. Long typing gets a zoom on the text caret (or the click into the field), and
-  the zoom follows the caret. Shortcuts show as a badge ("Ctrl + S") in a corner of the screen,
-  switched by **Show shortcut badges** in the canvas settings (`shortcutBadges` for agents),
-  and `telemetry_get` lists both. Recordings without the file behave as before.
-- **Style:** 16:9, 9:16, 4:3 and 1:1 canvases, wallpapers, padding, corner radius, shadows,
-  and the camera's border, shadow and mirror. Every camera clip is centred on the face (found
-  once per recording on this computer, YuNet) unless framed by hand or switched off.
-- **Layouts** ([design](docs/architecture.md#picture-layouts-zooms-telemetry)): camera bubble (a 3x3 grid of spots or anywhere,
-  Small/Medium/Large or any size, rect/circle/squircle), side by side (camera left or right,
-  top or bottom in 9:16, any share, an even split or a card over the screen, the screen fitted
-  or filled), camera only (with a punch-in) and screen only. Each timeline (the video, every
-  short) has a base layout and sections that change it, anchored in the recording's time so
-  cuts never move them; the base shows everywhere else. Changes cut between full-frame shots
-  and on cuts, and move otherwise (or as each section says). Favourites are kept for every
-  project. **Pick from the recording** fills sections in, no AI: the camera while the mouse
-  rests as you talk, and in shorts the opening line and the screen while you click a lot;
-  sections you set yourself stay. The timeline's Layouts lane shows them; agents use `layouts`.
-- **Bubble out of the way:** when a click, drag, scroll, resting pointer or the typing caret
-  lands where the webcam bubble sits (after layout, window crop and zoom), the bubble fades
-  out for that stretch and back in afterwards; it never jumps to another corner. Activity near
-  it keeps it hidden, and minimum hidden and shown times stop it flickering. On by default:
-  **Hide while you work under it** in the Camera settings (`webcamAutoHide` for agents). Only
-  while a bubble layout sits over a fitted screen.
-- **Crop to the active window:** recordings from AeroShoot with window recording on carry
-  `telemetry/windows.jsonl` ([format](docs/architecture.md#window-telemetry)). When the window in front is
-  clearly smaller than the recorded display, the screen shows just that window with room
-  around it and glides to the next one when you switch; quick switches, menus, popups and
-  tiny windows never move it. Zooms work inside the crop and keep their targets, in shorts
-  too. **Crop to the active window** in the canvas settings switches it for the video, and the
-  Clip page switches it for one clip (`windowCrop`, `windowCropPaddingPct`, `windowCropOff`).
-- **Sound effects:** a quiet lane of soft clicks on recorded mouse clicks and a light whoosh
-  when a zoom goes in or out or the layout switches, with its own mute and volume on the
-  Audio page and lowered under speech. Never busy: at most one click per 180 ms, a double
-  click clicks once, no whoosh on small zooms or back-to-back moves, nothing inside a graphic
-  or for a click a cut removed. The sounds are synthesized by the app, so there are no sound
-  files to license (`soundEffects` in the audio settings for agents).
-- **Mouth-click cleanup:** Audio → Reduce mouth clicks repairs short impulses on tracks
-  marked Speech using FFmpeg's `adeclick`. Strength is adjustable; switch it off to hear
-  the original. Playback and export share timing-preserving repaired audio, with undo/redo
-  and unchanged original recordings and transcripts. The first preparation can take a few
-  minutes for long recordings; temporary copies are cached for seeks and repeated clips.
-  Requires FFmpeg with `adeclick`, including on macOS. Strong settings can soften consonants;
-  this is general click repair, not a classifier for every mouth noise.
-- **Loudness and cuts:** new projects normalize to YouTube's -14 LUFS. A leveller turns down
-  only the 100 ms stretches whose peaks would reach the limiter, so quiet recordings reach the
-  target (two real edits went from -18.4 and -19.4 LUFS to -14.3 and -14.7, peaks at -1 dBFS).
-  A cut between two clips with sound to spare crossfades over 16 ms at equal power instead of
-  dipping to silence; elsewhere it fades out and in.
-- **Export:** H.264 video with AAC stereo audio, **Medium / High / Ultra** (1080p60, 1080p60
-  at max quality, 4K60) or Advanced settings, with a streamed log. Also subtitles (SRT, VTT),
-  the transcript (text, Markdown) and the sound alone (WAV). Graphics render at the export's
-  frame rate (twice as sharp for 1440p and 4K) in the background as you edit, so an export of
-  unchanged graphics starts at once.
-- **Clips:** the Clips tab cuts stretches of the video into vertical shorts, split (camera
-  above the screen) by default, with their own sections on their own timeline, as above.
-  Agents use `short_create` (a clip from two word ids), `layouts` with `short`, `export`
-  `short` and the Clips preset, where they pick the moments themselves.
-- **Shorts from a take** (the Shorts tab, the Shorts preset for agents): a new camera take,
-  cleaned like any recording, with the long video's footage, outside clips and
-  graphics under it (the Shorts tab's "Take and what plays under it", or the agent's
-  `short_footage`). Each graphic shows one of three ways, chosen as it is added so it renders
-  once: **Full** (the whole frame), **Split** (your face above, the graphic below, footage or
-  not) or **Over face** (your face fills the frame and the graphic is drawn over it, the
-  templates as a panel at the bottom). Footage plays at its own **speed** (0.25x to 4x) to fit
-  its words; trim by choosing a shorter stretch, jump-cut with several pieces; where it ends,
-  the camera comes back. Its sound is only the video's background, never its microphone.
-- **Check before export:** the export dialog lists what a viewer would notice, read from the
-  edit itself (nothing is decoded): missing files, black frames, no sound, blips left between
-  two cuts, words cut partway (beyond what word-edge refinement trims), many cuts close
-  together, zooms that flash by, captions over the
-  webcam bubble, chapters that were cut or that YouTube would drop (fewer than 3, or one under
-  10 s), loudness not normalized to YouTube's -14 LUFS, and agent proposals still waiting.
-  Each finding jumps to its moment; safe ones have a Fix (cut the blip, close the gap, delete
-  a zoom that flashes, move the captions clear, remove the chapter, normalize), each its own
-  undo step; **Remove all blips** cuts every blip in one.
-  Agents run the same check with the `check` action.
-- **Storyboard:** one small picture of the whole edit, a tile per scene: a finished frame
-  (layout, webcam, zoom and graphics as exported) over its time, what it shows, the zoom, a
-  graphic or chapter and a line of what is said. Scenes split where the camera or a short's
-  scene, a zoom, a graphic, a chapter or a long silence starts; short stretches merge, and the
-  sheet stays under 48 tiles and 2048 px. The export dialog shows it, and clicking a tile jumps
-  there. Agents get the same sheet, with a JSON line per tile, from the `storyboard` action
-  (`short` for a short's 9:16 one), instead of grabbing many frames.
-- **Motion graphics:** the Media panel's Graphics page adds full-screen graphics from
-  templates made for tutorials (section title, step card, keyboard shortcut, key point, recap
-  checklist, end card) at the playhead, on a Graphics track, in a clean light app style
-  (rounded cards, hairlines, soft shadows). A graphic plays over everything (screen, camera,
-  captions) and cuts in and out (it eases only as an overlay over the full-screen camera), and
-  cuts never go through one:
-  silence, filler and other passes skip the time it covers, a cut wholly inside it is refused,
-  and cuts before it move it along. Its text and colours are edited in the Inspector. Each
-  graphic is a [HyperFrames](https://github.com/heygen-com/hyperframes) composition kept as
-  source in `graphics/<id>/` (`index.html` and `graphic.json`) and rendered by the app in the
-  background for the canvas it plays on, so the same graphic fits a 16:9 video and a 9:16
-  short; renders are cached in `assets/graphics/` and export waits for them. The renderer
-  (HyperFrames 0.8.228 with its own Node 22 and chrome-headless-shell, each pinned and checked
-  by hash; npm packages installed with `npm ci` from the shipped lock file) is a 200 MB
-  download on first use into the app's data folder; nothing on `PATH` is used or changed.
-  Agents use the `graphics`, `graphic_add` (at a time or a transcript word), `graphic_set`,
-  `graphic_write_file`, `graphic_render` and `graphics_install` actions.
-- **One look for every graphic:** the style's graphics look (App, Calm or Bold, and five
-  sliders: size, roundness, speed, energy, density) with its colours and fonts dresses every
-  graphic in the video; a preview draws a few of the video's own graphics with a change first.
-  Templates take every size, corner, gap and timing from the look's `--look-*` tokens;
-  `graphic_check` flags a graphic's own colours, fonts, radii and timings, and **Bring in
-  line** rewrites them to the look. Agents use `library` `kind: style`.
+- Multi-track non-destructive editing, clip speed, linked cuts, persistent undo/redo and checkpoints.
+- English/Greek transcription, noise/silence/filler/retake cleanup, audio mix and loudness.
+- Telemetry-driven zooms, window crops, layouts, captions and editable HyperFrames graphics.
+- Separate workflows for shorts from a fresh take and clips from the edited long video.
+- Faceless researched explainers with generated narration, Broadsheet graphics and an image library.
+- Video/subtitle/transcript/audio export, delivery history, YouTube packages and Zernio uploads.
+
+The [Product](docs/product.md#what-is-built) document owns current capabilities and constraints;
+[Architecture](docs/architecture.md) owns implementation and recorder contracts. Faceless/publish
+paths still need real-production acceptance, and [gap.md](docs/gap.md) records known correctness
+and performance limitations. Built features are not a claim that every path is verified.
 
 ## Platform status
 
@@ -218,6 +75,22 @@ src-tauri/                 Tauri v2 backend (Rust)
 
 ## Development
 
+### Headless Ubuntu / cloud sessions
+
+Start with [AGENTS.md](AGENTS.md) and [HANDOFF](docs/HANDOFF.md). On a fresh Ubuntu VM:
+
+```bash
+bash scripts/cloud-setup.sh
+bash scripts/check-env.sh
+bash scripts/test-all.sh
+```
+
+The fixture smoke test renders through the library without a running GUI. Keep an output with
+`AEROEDITS_SMOKE_OUT=/tmp/smoke.mp4`, then inspect it with
+`bash scripts/snapshot-frames.sh /tmp/smoke.mp4 6`. Missing FFmpeg/adapter skips unless the
+require flags in `.env.example` are set. No API key is required for tests. A standalone project
+render CLI remains planned; `aeroedits do` connects to the running editor.
+
 ### Prerequisites
 
 - Node.js 22 (the version in `.nvmrc`), and npm
@@ -235,7 +108,7 @@ src-tauri/                 Tauri v2 backend (Rust)
 
 ```bash
 cd front-end
-npm install
+npm ci
 
 cd ../src-tauri
 cargo tauri dev --features tauri-app
@@ -343,25 +216,15 @@ developer environment, and a short `CARGO_TARGET_DIR` such as `C:\aeb`: under
 `src-tauri\target` llama.cpp's nested shader-generator build passes Windows' path limit. The
 build script sets all of that up. Users need nothing, since Vulkan comes with GPU drivers. Choose it or OpenRouter / OpenAI under **Filler and retake review**.
 
-Transcripts are saved per audio track in `<project>.aero/transcripts/<track id>.json`, with
-word times in source time, so they stay valid across cuts and undo.
+Transcripts are saved in the editor project at `transcripts/<asset>.<stream>.json`, with
+word times in source time. The shared clock maps them through edits; repeated/muted speech
+caption limitations remain GAP-022/023.
 
-**Word alignment:** transcribers time words loosely. Parakeet uses an 80 ms grid and stretches
-words over the pauses beside them; ElevenLabs sometimes runs a word over seconds of pause or
-noise. After transcribing (either provider), AeroEdits re-times every word against the audio
-with [wav2vec2-base-960h](https://huggingface.co/facebook/wav2vec2-base-960h) (Apache-2.0,
-English, 20 ms frames, about 378 MB, downloaded from transcription settings). It runs on
-Parakeet's ONNX Runtime, so it needs a `parakeet` build. Each stretch of speech is
-force-aligned letter by letter, then each word's edges are snapped to where its sound starts
-and stops. Guardrails keep it safe: a word moves at most 120 ms past where the transcriber put
-it, words and stretches the model is unsure of keep their old times, and text, word ids and cuts
-already made never change. **Align words** in the transcript panel (`align` for agents) aligns
-transcripts made before. It is switched by **Align words to the audio** in transcription
-settings.
-Parakeet groups raw tokens into words without extending their speech span through
-separately timed punctuation or whitespace, and keeps consecutive repeated words.
-Its native token timestamp grid remains 80 ms; quiet-edge refinement helps existing
-transcripts, but does not identify every mouth noise inside a spoken word.
+**Word timing:** forced alignment was removed on 22 Oct. There is no `align` tool or
+wav2vec2 model download in the current source. Parakeet groups token spans without extending
+them through punctuation/whitespace. Cleanup uses quiet-gap tightening and optional word-edge
+refinement to protect spoken words; this is not forced alignment and does not retime every
+saved word after transcription. See [Architecture](docs/architecture.md#transcription).
 
 ### Tests
 
@@ -376,4 +239,6 @@ npx tsc --noEmit
 Media tests skip when FFmpeg is missing unless `AEROEDITS_REQUIRE_FFMPEG=1` is set, as CI
 does. Tests whose names contain `gpu` need a GPU adapter and are ignored off macOS; run
 them with `cargo test --lib gpu -- --include-ignored`. The native preview tests need macOS. On macOS, set `AEROEDITS_SKIP_SWIFT=1` to build against stubbed
-Swift bridges.
+Swift bridges. Frontend behavior checks: `npm run test:cleanup`; production build: `npm run build`.
+Doc links: `python scripts/check_doc_links.py --all` (file targets only; inspect changed anchors).
+Recorded results and checks not yet performed are in [Verification](docs/verification.md).

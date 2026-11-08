@@ -1,40 +1,41 @@
 # Roadmap
 
-Updated 2 November 2026; cloud tasks added 8 November. This is the single backlog. Keep work
-IDs stable; remove shipped items and put lasting behavior in [Product](product.md) or
-[Architecture](architecture.md). Validation and measured results live in
-[Verification](verification.md). State and open questions: [HANDOFF](HANDOFF.md).
+Reconciled 8 November 2026 against `be7179c`. This is the feature and scheduling backlog.
+[gap.md](gap.md) owns detailed bugs/performance gaps, evidence, fix questions and validation.
+[Product](product.md) owns settled scope; [Architecture](architecture.md) owns built behavior;
+[Verification](verification.md) owns measured results and acceptance runs still missing.
+Keep existing IDs. A task listed in two tables below is one task, not two implementations.
 
 <a id="cloud-sessions-start-here"></a>
 ## Cloud sessions: start here
 
-Each task fits one cloud session and one PR and has acceptance criteria a session can check
-headlessly (`bash scripts/test-all.sh` must stay green in every one). **The order is a guess made
-on 8 Nov pending George's answer** ([HANDOFF, question 1](HANDOFF.md#questions-for-george)):
-bugs in the newest work first, then tooling that makes later sessions safer, then features in
-the existing priority (faceless now; long-form → shorts → gaming).
+Suggested order: the five P1s, persistence/export correctness, then cloud tooling and features.
+George's priority and branch-policy questions remain in [HANDOFF](HANDOFF.md#questions-for-george).
+For implementation PRs, run the touched checks and `scripts/test-all.sh` where supported;
+mock paid services.
 
-| ID | Task | Done when (headless) |
+| ID | Task / canonical detail | Acceptance or dependency |
 |---|---|---|
-| <a id="cl-1"></a>CL-1 | Fix GAP-011 ([gap.md](gap.md)): publish commands take and check the project handle of the export the dialog shows | A unit test switching projects between showing and uploading gets a refusal; front-end passes the handle; test-all green |
-| <a id="cl-2"></a>CL-2 | Fix GAP-016 and GAP-015: Upload awaits and validates the package autosave; closing the editor flushes the last keystrokes | Tests (Rust side + a front-end store test) show the uploaded title equals the last typed one |
-| <a id="cl-3"></a>CL-3 | Fix GAP-004 and GAP-008: regenerating a voice replaces the old narration clip and transcript; accepting a voice is bound to the script revision it was made from | Unit tests in `faceless/voice.rs` for both; one undo step each |
-| <a id="cl-4"></a>CL-4 | Fix GAP-017: restoring a cut never inserts the wrong source audio into manually linked clips | Regression test with unlinked/relinked clips in `sequence/edit.rs` |
-| <a id="cl-5"></a>CL-5 | Recheck GAP-005/006 (reported failing, passed 8 Nov) and close or fix; then the P2s GAP-002, 003, 010, 012 one PR each | gap.md entries marked fixed with the test that proves it |
-| <a id="cl-6"></a>CL-6 | Clippy to zero warnings on `--lib` (mechanical fixes only, no behaviour change), then gate it in test-all and CI | `cargo clippy --lib -- -D warnings` passes; all tests unchanged |
-| <a id="cl-7"></a>CL-7 | More smoke tests in `src/smoke.rs`: captions burned in (a transcript fixture, frame pixel check), a 9:16 export, loudness of the export (`ebur128` ≈ −14 LUFS), a mouth-noise mute | Each test runs in under 20 s on lavapipe; summary lines printed |
-| <a id="cl-8"></a>CL-8 | A headless render CLI: `aeroedits render <project> --out x.mp4` (and `--frames N`) through the library, no running app needed, so sessions can render real projects | Smoke test also drives the CLI; flagged for review as new surface |
-| <a id="cl-9"></a>CL-9 | Graphics gate on Linux: make `graphics_gate_real` run in CI with the runtime cached (needs nodejs.org, registry.npmjs.org, storage.googleapis.com in the cloud allowlist or a CI cache) | The gate passes for all bundled templates in a Linux job; frames uploaded as artifacts |
-| <a id="cl-10"></a>CL-10 | Front-end preview build with mocked IPC ([proposal](HANDOFF.md#proposal-preview-builds-of-the-front-end)) and Playwright screenshots as a CI artifact | Screenshots of start screen, editor, Export dialog at phone/desktop widths in the PR artifacts |
-| <a id="cl-11"></a>CL-11 | FCL-7 sound bed for faceless presets (see [FCL](#fcl)) | Export of a fixture narration with the bed measures −14 LUFS ±1 and the bed ≥15 dB under speech |
-| <a id="cl-12"></a>CL-12 | FCL-9 publish for faceless with a mocked Zernio server: time words checked at release, sources rechecked, made list updated | Mocked interrupted upload makes no duplicate; journal tests |
-| <a id="cl-13"></a>CL-13 | FCL-3 Script panel in the UI (scenes, cited facts, length vs range, review findings) | tsc + a store test; screenshot via CL-10 when available |
-| <a id="cl-14"></a>CL-14 | PUB-1 thumbnail generation from a brief (OpenRouter image model) behind a mocked server | Size checks and the 160 px preview tested against a mocked image reply |
-| <a id="cl-15"></a>CL-15 | Front-end tests that render React (GAP-024): add a small jsdom/testing-library setup for two panels, through the dependency review in [Verification](verification.md#dependency-review) | Two component tests run in `npm run test:cleanup` or a new script wired into test-all |
+| <a id="cl-1"></a>CL-1 | Publish project binding: [GAP-011](gap.md#gap-011) | Reject A→B stale package/thumbnail/upload actions; no writes to B; coordinate with CL-2. |
+| <a id="cl-2"></a>CL-2 | Package close/autosave/upload: [GAP-015](gap.md#gap-015), [GAP-016](gap.md#gap-016) | Latest draft persists to its owner; Upload awaits successful validation/save; mounted parent/child tests via CL-15. |
+| <a id="cl-3"></a>CL-3 | Narration identity/input binding: [GAP-004](gap.md#gap-004), [GAP-008](gap.md#gap-008) | Changed fake take imports new audio/transcript and clears acceptance; stale script cannot certify old narration. |
+| <a id="cl-4"></a>CL-4 | Linked-cut restoration: [GAP-017](gap.md#gap-017) | Restore independently offset audio/video source clocks from either track without substituting source time. |
+| <a id="cl-5"></a>CL-5 | Remaining correctness follow-ups | GAP-005/006 checks are complete; do not repeat their old fixes. Split remaining GAP-002/003/010/012 into focused changes; all other open findings stay in gap.md. |
+| <a id="cl-6"></a>CL-6 | Remove lib clippy warnings, then gate | Mechanical changes only; `cargo clippy --lib -- -D warnings` and relevant tests pass. Historical ~60 is not a fresh warning count. |
+| <a id="cl-7"></a>CL-7 | Broaden `src-tauri/src/smoke.rs` | Caption pixels, portrait export, output −14 LUFS ±1, mouth-noise mute; fixture-only, under 20 s each on lavapipe. Existing smoke covers silence/cut/export. |
+| <a id="cl-8"></a>CL-8 | Standalone headless render CLI | `aeroedits render <project> --out x.mp4` (+ `--frames N`) without a running app; smoke exercises CLI. Current `do` uses the running app. |
+| <a id="cl-9"></a>CL-9 | Linux real graphics gate in CI | Cache runtime; every bundled template passes `graphics_gate_real`, frames as artifacts. Needs runtime hosts/cache access. |
+| <a id="cl-10"></a>CL-10 | Mocked-IPC frontend preview/screenshots | [Design](HANDOFF.md#proposal-preview-builds-of-the-front-end); start/editor/Export at phone and desktop widths as CI artifacts. Hosting is a separate George decision. |
+| <a id="cl-11"></a>CL-11 | Execute FCL-7 | Same sound-bed task below; measured output loudness/ducking, no separate backlog copy. |
+| <a id="cl-12"></a>CL-12 | Execute FCL-9 | Same release/source-validation task below, mocked service first. |
+| <a id="cl-13"></a>CL-13 | Execute FCL-3's Script panel | Same UI task below; typecheck and mounted tests, screenshot when CL-10 exists. |
+| <a id="cl-14"></a>CL-14 | Execute PUB-1 thumbnail generation | Same task below; mocked image reply, size/preview checks. |
+| <a id="cl-15"></a>CL-15 | Real React regression coverage: [GAP-024](gap.md#gap-024) | Small mounted suite in CI with mocked IPC; start with package lifecycle and project switching, then keyboard isolation. Dependency review applies. |
 
-Not for cloud sessions (need George, a GPU, the GUI or real recordings): STY-2 step 4, EVAL-1
-runs on real recordings, listening checks, NVENC/CUDA/Parakeet/local LLM work, the Windows
-installer check, the first live Zernio upload, DEP-3 (Tailwind 4 needs side-by-side visual review).
+Other open findings are not deprioritized by their absence from a CL row. Use gap.md's issue
+index for export consistency, captions, outbound requests, stage integrity and UI races.
+GPU/native UI, listening, real recordings, paid-service acceptance and the first private upload
+require their actual environment; cloud unit success does not satisfy those checks.
 
 ## Next: STY-2 shorts style
 
@@ -59,176 +60,47 @@ are available through the tools; dedicated editor lists for all these fields are
 ## Next: FCL faceless videos
 
 <a id="fcl"></a>
-Asked for on 7 Nov 2026. Bring George's Explainer Video Automation (`Desktop/Explainer-Video-Automation`,
-Python, ~15k lines, built for an unattended VPS) into AeroEdits as a **Faceless** tab with two
-modes: **Long** (5–8 min, 16:9) and **Short** (30–58 s, 9:16). AeroEdits replaces that
-repository. Decisions are at the end.
+The Rust faceless foundation, research/script validators, narration import, visual checks,
+package integration and Broadsheet assets are already in this commit. They are not uncommitted
+plans. See [Architecture](architecture.md#faceless-productions-and-publishing) for the current
+data flow and [Verification](verification.md#faceless-and-publish-acceptance) for untried paths.
+The Python explainer repository is a historical design input, not a runtime dependency.
 
-**What that repository does.** Discover → ideas → triage and score → research dossier →
-script → three reviews → metadata → voice → storyboard → scenes → render → thumbnail →
-publish. Each video has one folder with one file per stage; a stage is skipped while its
-inputs are unchanged. What carries over, by code inspection of that repository on 7 Nov:
-
-- **Discovery** (`sources.py`): Google News angles, outlet RSS, Hacker News, Reddit, GitHub
-  stars and Trending, Hugging Face papers, security feeds, lab sitemaps, OpenRouter and GitHub
-  releases. One failing funnel never blocks the others; a funnel report says why each failed.
-- **Ideas** (`ideas.py`, no model): groups reports of one event, scores outlets, attention,
-  hooks and recency; viral repositories and papers ranked apart by what they gained.
-- **Evidence** (`research.py`): the model proposes facts with exact quotes, then code alone
-  checks that each quote appears word for word in the fetched page and every figure appears in
-  the quote. Sources are grouped into independent origins; grades `ready`, `thin`, `empty`.
-  This gate is the most valuable part and ports as code, unchanged in meaning.
-- **Words** (`style/script/*.md`, `script.py`, `factcheck.py`, `metadata.py`): format rules,
-  attention / cold-reader / fairness reviews by a different vendor, numbers must come from cited
-  quotes, five title shapes, time words ("Just", "today") checked at release time, the source
-  list built by code from cited fact ids.
-- **Voice** (`voice.py`): ElevenLabs per scene, sped to 1.2x with `atempo`, word timings from
-  the unsped audio, misheard names and numbers re-voiced once.
-- **Pictures** (`style/frame.md`, `style/parts.js`, `storyboard.py`, `scenes.py`): the locked
-  Broadsheet style and twelve part kinds (source, claim, comparison, chart, timeline, flow,
-  artifact, gates, tiles, anchor, objects, flip3d), each entering and acting on spoken cue
-  words, in one continuous HyperFrames stage with a camera moving between stations. Pacing
-  (a change every 5–8 s, gaps over 12 s), reading time and variety are noted, not blocking.
-  External assets: sourced logos, flags and maps with licences (`data/broadsheet-entities`),
-  an asset catalogue, generated images.
-- **Sound** (`sound.py`): generated openings and a looped beat about 18 dB under the voice.
-- **Package** (`thumbnail.py`, `style/thumbnails`): six thumbnail templates chosen by title
-  keywords, filled from a one-subject brief with reference images, size checked; Shorts use
-  the opening frame. One thumbnail per video, no A/B.
-- **Publish** (`publishing.py`, `zernio.py`): Zernio upload, private, draft or scheduled, a
-  journal so a retry never posts twice, AI disclosure always on, the real visibility read from
-  the YouTube entry, a reminder to check ads in Studio. `films/done.json`: never the same story
-  twice, tests included.
-- **Not carried over:** the hourly tick, fallback ladder, finished reserves, Discord heartbeat,
-  dead-man's switch and budget ledger exist because nobody watches the VPS. In AeroEdits every
-  step starts from George or his agent (decision 6).
-
-**How it maps onto AeroEdits.** A faceless production is an empty project (they exist today)
-whose picture is graphics and whose sound is generated narration. Narration lands as an Audio
-asset with a transcript, so word anchors, never-chopped graphics, captions in shorts, chapters,
-`check`, storyboard, versions, undo and GPU export all work unchanged. Who does each step:
-
-| Step | Who | Where in AeroEdits |
+| ID | Remaining work only | Acceptance / dependencies |
 |---|---|---|
-| Discover, rank ideas, funnel report | App, no model | new `faceless/discover`, app-level store of stories and signals |
-| Triage, pick | Agent (decision 1) | reads the ranked list through MCP; the Ideas panel for George |
-| Fetch sources, verify quotes, origins, grade | App, no model | `faceless/evidence`; private addresses refused, PDFs with page numbers |
-| Search, extract facts | Agent | submits facts; the app keeps only those the code verifies |
-| Script and the three reviews | Agent | Faceless Long / Short presets; method from `style/script/*.md`; app validators |
-| Title, description, tags | Agent writes, app checks | title rules, time words, sources built from fact ids |
-| Voice and word timings | App, user's key | ElevenLabs or OpenRouter TTS per scene; Scribe timings already built |
-| Beats | Agent | the existing plan table and `graphic_add`, cue words resolved by the app |
-| Parts and look | App | Broadsheet as a style; parts as library templates passing the gate |
-| Sound | App | generated cues and bed in the sound library; ducking exists |
-| Render, loudness | App | existing export, −14 LUFS normalisation exists |
-| Thumbnail | App, user's key; agent writes brief | templates and references kept with the style |
-| Publish | App, user's key | Zernio client with journal; private by default |
+| FCL-1 | Improve event grouping and calibrate fit/attention only from labelled examples or our own outcomes | Preserve manual join/separate/triage and visible score parts; low-shared-word event splits remain a tuning limitation, not a failed new test. Needs labelled groups/outcome data. |
+| FCL-3 | Script panel: scenes, cited facts, duration estimate, review findings and accepted revision | `front-end/src/components/faceless/` plus existing `faceless/script.rs` IPC; mounted rendering test and screenshot. Agent writes/reviews, no in-app script-writing model. CL-13. |
+| FCL-4 | Real-script voice acceptance after CL-3 and stage-integrity fixes | No new TTS implementation needed. Follow the voice run in Verification; George listens and approves. GAP-004/008/027 remain blockers. |
+| FCL-5 | Finish the dedicated Broadsheet parts and a built-in image-library browser | Style and four templates (`headline`, `quote`, `verdict`, `bars`) exist; do not rebuild them. Inventory reuse vs dedicated timeline/flow/artifact/gates/tiles/anchor/objects/flip3d parts. Gate each at 16:9, 9:16 and actual split boxes; phone-size contact sheet. Imported-image filter already exists; it is not a browser for the built-in catalogue. STY-2 reference approval and runtime compatibility constrain visual work. |
+| FCL-6 | Agent-run real-film visual acceptance; generated-image and screenshot intake workflow | `faceless/visuals.rs` and action-word cues already exist. General image import exists; missing work is faceless generation/intake integration, provenance and beat placement. Verify gap fill, word/action cues, reading time and visual variety on a complete production. Requires accepted voice and source assets. |
+| FCL-7 | Faceless openings/bed in library, enabled by these presets and ducked | `preset/mod.rs`, `sound_library.rs`, `media/audio.rs`; fixture export −14 LUFS ±1 with bed ≥15 dB under speech. Check licences and listen before keeping defaults; no paid generation in implementation tests. CL-11. |
+| FCL-9 | Release-time wording/source recheck, made-list/status acceptance | `commands/publish.rs`, `faceless/script.rs`, `faceless/evidence.rs`: reject stale “today/just” at scheduled release and recheck sources; mocked retry/status paths, then an approved private upload. Made-list and stage hooks exist; test outcomes instead of adding duplicate wiring. Depends PUB-2 and GAP-002/011/016/027. CL-12. |
+| FCL-10 | Complete Preset Run integration for app-owned steps, then EVAL-1 for long and short | Faceless MCP operations/methods already exist behind `more`; extend `mcp/first_steps.rs` only where steps are still manual. Stop at agent/user decisions and explicit paid-step consent. Both formats reach approved private upload with correction/time/cost evidence. Requires preceding FCL/PUB acceptance. |
 
-**The Faceless tab.** A top-level tab beside Edit / Cleanup / Shorts / Clips that also works
-with no project open, with a Long | Short switch and a stage rail showing each production's
-stage, stale stages and spend. Panels, docked like the other workspaces:
+FCL-0 is built foundation; FCL-2's remaining validator/network defects are GAP-013/026;
+FCL-8's remaining thumbnail generation is PUB-1. These IDs stay reserved; their completed
+implementation narratives and duplicate tasks were removed.
 
-1. **Ideas:** ranked stories, long and short fit, sources per story, funnel health, a badge
-   for stories already made, "Make long" / "Make short" / "Short from this long".
-2. **Research:** the dossier: facts with their quotes and pages, verified or refused and why,
-   origins, grade, gaps.
-3. **Script:** scenes with cited fact ids, estimated length against the format's range, review
-   findings and the accepted revision.
-4. **Voice:** a take per scene, play and regenerate one scene, misheard names and numbers.
-5. **Visuals:** the existing timeline, preview and graphics panels, plus a beats list with
-   pacing, reading time and variety notes.
-6. **Package:** title, description, tags, chapters, the thumbnail with a 160 px preview.
-7. **Publish:** account, private / scheduled / draft, status with real visibility, Studio
-   link for the ads check.
+<a id="pub-1"></a>
+### PUB-1 — Generated thumbnails
 
-### Work, in order
+The shared package editor, chapter insertion, image/frame thumbnails and 160 px preview exist.
+Remaining: generate from a brief with the user's OpenRouter image key, style-owned templates
+and references. Relevant paths: `src-tauri/src/publish/`, `style/`, `commands/publish.rs`,
+`front-end/src/components/export/PackageEditor.tsx`. Test mocked replies: at least 1280×720,
+under 2 MB, preview readable at 160 px; request 1536×864. Decide the home/schema for style
+thumbnail references before adding another settings store. Coordinate lifecycle fixes CL-1/2.
+CL-14 is this task. Per-target metadata already covers videos, shorts and clips.
 
-Sizes as in Deferred work. Each item is built and tested alone; the agent can drive each one
-through MCP as soon as it exists.
+<a id="pub-2"></a>
+### PUB-2 — Validate the existing upload workflow
 
-| ID | Work and acceptance | Size |
-|---|---|---|
-| FCL-0 | **Built 7 Nov, not committed.** `src-tauri/src/faceless/`: a production is a project in `Documents/AeroEdits/Faceless` with `faceless/production.json` (format, topic, per stage the hash of what it read and wrote; outside undo). Seven stages, one file each in `faceless/`; a stage whose input changed is stale, and so is everything after it (`record_stage`). App-wide made list in `<config>/AeroEdits/faceless/made.json`; a new topic matching it warns. Start screen card → Faceless page (Long / Short, topic, productions with their stage rail); a production opens on its own Faceless tab (Production panel beside the editor's panels), shorts at 9:16. MCP `faceless` behind `more` (status, list, create, made). Checked in the dev app: a short made from the page opened at 9:16 on the Faceless tab, and `more faceless` listed it. | M |
-| FCL-1 | **Built 7 Nov, not committed.** `faceless/discover.rs`, `ideas.rs`, `profile.rs`, `stories.rs`: Hacker News, OpenRouter models, GitHub releases, 53 feeds, Hugging Face, viral repositories, papers and lab sitemaps, plus X and Reddit through Treg (see Treg below), a week of stories in `<config>/AeroEdits/faceless/stories.json`, grouping and scores as in `ideas.py`, the channel profile built in (`aero-ai-news.json`, a user copy `faceless/profile.json` replaces it). Ideas list on the Faceless page with "Search the web", set aside, "Make long/short"; MCP `faceless` discover / ideas / setAside / create from an idea. Live on 7 Nov: 8 of 8 sources answered, 712 stories in 25 s. **Reworked 8 Nov after reading real results:** grouping weighs rare words and shared numbers ("$11 billion" = "$11B"), stems plurals, compares headline to headline and needs the group's lead or half the group (single-link chaining had joined OpenAI's round with Anthropic's IPO); scores have visible parts (coverage with X and Reddit once each, attention and its growth, fit from the profile's hooks with a negative "mainstream" hook for business, courts and schools, freshness, primary, low value), separate long and short rankings, and an editor's read (`triage`: importance, long and short fit, angle) worth 40%; pin, separate and join fix groups by hand; each search keeps the top 30 of both rankings so the list shows movement (▲, ▼, new). The Faceless page's list is now the ranking review for the chosen format (top 10, score bars, rate, split, join), and `faceless` `ideas` gives the agent the same table; the methods tell the agent to review and triage the top 10 before proposing. Measured on the real 7 Nov stories: wrong merges and chaining gone, the OpenAI round one story with 19-24 outlets, the Claude Code key leak first in long. *Still open:* some events still split when their headlines share little (the agent or user joins them); fit and attention are rough guesses until our own videos' numbers come in. | M |
-| FCL-2 | **Built 7 Nov, not committed.** `faceless/evidence.rs`: the app fetches every page itself (public addresses only, each redirect checked, 3 MB, paywall and cookie-wall detection, an honest user agent), keeps its text in the production, and keeps a fact only when its quote is on that page and every number of the statement is in the quote; origins, corroboration and grades as in `research.py`; research is done only at `ready`. MCP `faceless_research` (fetch, source, add, remove, brief, read); a Research view in the Production panel. Checked live: a real quote kept, a planted "9 out of 10" refused. PDFs, Google News links and script-built pages are read through Treg when a key is set (see Treg below); `search` finds pages through Treg. *Still open:* sites that refuse automated readers stay unreadable and the agent finds the words elsewhere (The Hacker News reads fine since the user agent became honest). The Astra rebuild was not run. | M |
-| FCL-3 | **Built 7 Nov, not committed.** Presets Faceless long and Faceless short (a production is put on one when made; the short one is 9:16 with captions), their method = the steps plus the explainer's `shared.md`, `long.md`/`short.md` and `review.md`. `faceless/script.rs`: a script is kept only when every scene cites real facts or is analysis, no number is missing from its cited quotes (title too), no sentence repeats and the length fits (long 875-1400 words, short 87-169 at 1.2x); style is noted, not refused. Reviews are saved with their findings; an open blocker keeps Review not done until the script no longer says it. MCP `faceless_script` (read, check, write, review, resolve). *Still open:* no Script panel in the UI yet (the Production panel shows the stage); an agent has not yet written a full script on a new story. | M |
-| FCL-4 | **Built 8 Nov, not committed.** Voice through OpenRouter on the user's key with the explainer's locked voice (Will, `elevenlabs/eleven-v4-turbo`, $0.00004 a character: about 4 cents a short, 30 a long), one MP3 per scene kept with its fingerprint so only changed scenes (or `scenes` asked for) are paid again; `atempo` 1.2 to WAV, scenes joined with a 0.25 s lead and 0.45 s gaps (`faceless/voice.rs`); the narration is imported as a Mic sound and placed at 0 on the timeline in place of an earlier one (one undo step), then transcribed with the saved transcription settings (not Whisper: the app's own transcript is what graphics and captions use); model names and numbers the transcription heard differently are listed per scene (the explainer's QA), and a length outside the format names the pace to rewrite at. The stage is done when nothing is listed or the user accepts it. Voice in the profile (`voice`), MCP `faceless` `voice` / `acceptVoice`, Voice section in the Faceless panel. *Still open:* not run on a real script yet (one live speech call checked the model and voice). | M |
-| FCL-5 | **8 Nov: the Broadsheet style and four parts built, not committed.** A built-in style `Broadsheet` (paper #F0E9DA, ink, vermilion #C8321F; Newsreader and IBM Plex Mono shipped in the app as OFL fonts, a new `data` font for labels and numbers; square corners, no shadows, no bounce; the frame.md rules, motion, kinds and sound policy), worn by both Faceless presets and taking the `broadsheet` image look. New templates `headline`, `quote` (marker sweep and margin note), `verdict` (stamp on the cue) and `bars`, each with a source tag; all four pass the real gate at 16:9, 9:16 and the split part. The other parts (timeline, flow, artifact, gates, tiles, anchor, objects, flip3d) map to existing templates or a graphic of the agent's own for now. Broadsheet style and parts: frame.md tokens as a style (16:9 and portrait variant, fonts as files), the twelve parts as library templates with entry and action cues, each passing the gate at both shapes. Licensed logos, flags and maps as library assets with source and licence. GFX-5 holds: one look per video, chosen like any style. First align HyperFrames: we pin 0.8.228, the explainer's parts were built on 0.9.17. *Done when* every part passes the gate and a contact sheet reads at phone size. **Image library built 7 Nov, not committed:** the explainer's 201 catalogued pictures (Broadsheet illustrations, the sourced flags, maps, wordmarks, portraits and pages, the 3D textures and turnarounds) plus a 68-picture gap set made in Flova (markets, courts, elections, an executive, humanoids, deepfakes, chips, space, social, products), and on 8 Nov the same 60 everyday subjects in four looks for the app's styles (light, dark, editorial, neon): 509 in all, one folder per look (`broadsheet`, `light`, `dark`, `editorial`, `neon`, and `sourced` shown with every look), in `src-tauri/assets/images` as WebP/SVG (25 MB at quality 80, built in by `build.rs`; the repo is the only copy, `scripts/add_images.py` adds a set, `assets/image-looks` keeps each look's rules and approved tile); a style takes the look naming it, else the nearest by colour, and `list` shows the project's look unless `look` is given, one merged `catalog.json` with what each depicts, where it goes and its licence (`LICENSES.md`); `library` `kind: image` list (groups, or `query` by what a beat shows), show (a board of a picture or group), use (copied into a graphic as `images/<file>`, one undo step); `check` flags a graphic carrying one that needs credit or a check, or one of another look than its style's. *Still open:* no Images panel in the app; the parts and the style itself. | L |
-| FCL-6 | **Built 8 Nov, not committed.** `graphic_add` `actionWord` sets a part's `cue` from the narration's words, so it enters on one word and acts on another. `faceless/visuals.rs`: `faceless` `op: visuals` reads the graphics on the timeline and blocks on anything with nothing on screen; notes more than 12 s without a change (starts and cues), more words than 3 a second allows, the same template twice in a row, a start between words, fewer than 6 kinds in a long video; `fill: true` first stretches each graphic to meet the next (one undo step). Writes `beats.json`, records the stage when nothing blocks. Visuals section in the Faceless panel (check, close the gaps, the list with the words under each). Method steps 6-8 say how to plan, show (`plan: true`), place and check. *Still open:* generated images (user's key) and imported screenshots; not run by an agent on a real film. | L |
-| FCL-7 | Sound: the explainer's generated openings and beat as library sounds, on by default in the Faceless presets, ducked under narration. *Done when* an export measures −14 LUFS with the bed under the voice. | S |
-| FCL-8 | **Built 8 Nov, not committed, as part of PUB-1 made general:** the faceless package is the video's publish package, the same as any video's. `faceless/package.json` mirrors it and the stage is done when it has a title, description, tags and a thumbnail (after the visuals); an upload with a YouTube id records Publish. The method's step 7 says what the agent writes. *Still open:* thumbnail generation from a brief. | S |
-| FCL-9 | Publish for faceless: PUB-2 from the Publish panel, with the faceless extras: time words checked at release time, sources rechecked before upload, made list updated. *Done when* a new faceless video uploads privately. Needs PUB-2. | S |
-| FCL-10 | Automation: one `faceless` MCP tool behind `more` with operations (like `library`), skill text, and Preset Run for the free and paid app steps (discover, fetch, voice, render) that stops at each agent or George decision. EVAL-1 for one long and one short with corrections, time and cost. *Done when* both formats go from idea to private upload with only George's picks and approvals. | M |
-
-**Publishing for every video (decided 7 Nov).** Title, description, thumbnail and upload are
-not faceless-only: they live in the Export dialog for every video (tutorial, short, clip,
-faceless), next to the finished exports, so any export can be packaged and uploaded there.
-The faceless Package and Publish panels show the same fields.
-
-| ID | Work and acceptance | Size |
-|---|---|---|
-| <a id="pub-1"></a>PUB-1 | Package in the Export dialog: title, description, tags and thumbnail per video and per short or clip, saved in the project. Chapters fill the description. Thumbnail: pick a frame, import an image, or generate one from a brief with the user's OpenRouter key using the style's templates and references; size check (1536×864 asked, 1280×720 or larger, under 2 MB), 160 px preview. Optional title and description drafts by the agent. *Done when* a tutorial export has all three saved and shown beside its delivery. **Built 7 Nov, not committed, except thumbnail generation:** `src-tauri/src/publish/`: a package per video in the project's `publish/package.json` (outside undo); an Upload button on each finished video in the Export dialog opens Publish: title (count to 100), description, tags, the AI label (on by default for faceless), "Add the chapters" (YouTube's format, only when YouTube would read them), a thumbnail from an image or a frame of the export, checked (1280×720 or larger, shrunk under 2 MB) with a 160 px preview. MCP `publish` set / thumbnail. **8 Nov: made general:** the package is a section of the Export page ("Title, description and thumbnail", saved as you type, with what it still needs), the same editor in Publish, a thumbnail from the edit's frame at the playhead (no export needed; MCP `thumbnail` with `atUs`), `publish` out of `more` into the main list, and the export steps of every preset ask the agent to write the package. *Still open:* generating a thumbnail from a brief (the explainer's templates and reference images need a home in the style first), and the dialog was not opened on a real export (unit tests only). | M |
-| <a id="pub-2"></a>PUB-2 | Upload through Zernio. **Connecting:** Settings → Accounts → Zernio: a "Get a key" link, paste the key (stored like the other keys), then the connected YouTube channels are listed with a default; "Connect a channel" opens Zernio's dashboard in the browser and the list refreshes on return. **Uploading:** an Upload button on each finished export in the Export dialog: private, scheduled (time picker, past times refused) or draft; AI disclosure as a per-upload switch, on for faceless; category; the journal so a retry never posts twice; status with the YouTube entry's real visibility; a Studio link to check ads. Never public without George's click. MCP gets the same action. *Done when* a tutorial export uploads privately from the dialog, and a mocked interrupted upload makes no duplicate. **Built 7 Nov, not committed:** `publish/zernio.rs` and `publish/mod.rs`: File → Accounts (open Zernio, paste the key into the keychain, pick the channel; the only one is picked by itself); Publish uploads private, scheduled (at least 5 minutes ahead) or draft, `madeForKids` false, the journal written before posting with a stable idempotency key, a lost reply looked up instead of posted again (tested), status and Studio link per upload, a faceless upload goes on the made list. MCP `publish` upload (only on the user's go) and uploads. `open_url` opens only Zernio and YouTube pages. Zernio connected on 8 Nov (key in the keychain, channel Aero picked). *Still open:* the first live private upload, to be done by George from the Export dialog (the agent's attempt was stopped by its permission check). | M |
-
-**Treg (8 Nov, not committed).** `faceless/treg.rs` calls `https://treg.to/call/<endpoint>` with
-`X-Treg-Token` and a $0.05 ceiling per call (`X-Treg-Route-Max-Cost`); the key is in the
-keychain (File → Accounts, or `TREG_API_KEY`). Used for: X (`treg.x.search.posts`, five
-profile searches in X syntax with `min_faves:`) and Reddit (`crawl4ai.reddit.subreddit.posts`,
-eight subreddits, top of the day) in the story search; `faceless_research` `search`
-(`treg.web.search`); and reading what the app can't, through `treg.web.extract`: PDFs, Google
-News links (followed to the publisher) and script-built pages. Sites that refuse automated
-readers are not routed through Treg. Measured 8 Nov: a story search with X and Reddit cost
-$0.0099 (19 posts kept from X, 120 from Reddit); a PDF, a Google News link and a web search
-cost $0.0001 each. Responses are each provider's own shape, read tolerantly; a provider change
-can need a field added.
-
-**Research watchlist, filters and demand (8 Nov, not committed).** George's decisions: no
-connected Google or YouTube accounts in Treg; searches only on his click or his agent's call (no
-daily cap); X and Reddit (not Bluesky or Threads); TikTok and Instagram for shorts; no AI
-visibility. Built: a watchlist in the profile (54 verified X accounts in labs, leaders,
-research, news, security and creators groups, each with a likes floor; 14 verified YouTube
-channels; TikTok and Instagram creators added from "Find creators"), searched in batched
-`from:a OR from:b` X queries only `since:` the last search; filters before the agent (a lab's
-post passes and is primary, leaders must be on subject, hashtags don't count, news and creators
-must beat their own usual likes, unknown authors need 5k followers, each subreddit's top 5);
-a shortlist of at most 15 per lane with why the rest were left out (`ideas` shows only it,
-`all: true` everything); a $0.10 guard per search. "Check demand" for the top 10: YouTube videos
-already on each story and their views per hour, the watched channels' videos against their
-usual views (refreshed weekly), Google volume and trend for the subject, TikTok and reels for
-shorts; demand adds to the score and saturation takes a little off. Watchlist editing, "Suggest
-accounts" (who several tracked accounts follow) and "Find creators" in a Sources panel and
-`faceless_sources`; each account's kept posts and top-10 hits; keyword suggestions with volume
-and trend in Publish (`publish` `keywords`). Measured live on 8 Nov: a search $0.015 (X 9
-queries, 7 of 24 posts kept; Reddit 32 of 40), demand for 10 stories $0.040 including the
-channels' first refresh, X suggestions $0.0036.
-
-Later, only when a real run needs it: a competitor watch beyond the demand check;
-our own video stats feeding the ranking; native YouTube upload (Google keeps uploads from
-unverified API projects private until audited, to confirm).
-
-### Decisions
-
-Decided by George on 7 Nov:
-
-1. Writing, review and storyboard run in the user's agent over MCP; the app calls only paid
-   media models (voice, images) with the user's keys.
-2. Separate graphics on the timeline, not one continuous stage. A "stage" graphic kind can come
-   later.
-3. Upload through Zernio with an easy connection in Settings, and package plus upload in the
-   Export dialog for every video (PUB-1, PUB-2).
-4. Port the Python to Rust.
-5. Funnels and topic scope belong to a channel profile; the Aero AI-news profile is built in.
-
-6. AeroEdits replaces the explainer; the VPS pipeline is not kept. Nothing runs on its own:
-   every step starts from George's click or his agent's call (Codex, Claude Code). No timer,
-   no unattended mode, no fallback ladder or reserves, and no need to keep the explainer's
-   file shapes.
-7. FCL-0 to FCL-4 and PUB-1/2 start now; FCL-5 comes after STY-2's portrait work, which it
-   reuses.
-
-This widens [Product](product.md#purpose-and-success) beyond screen-recorded tutorials and
-promotes "title/description drafts" and "cover frames" from the unscheduled ideas below. Update
-Product once the decisions are made.
+Zernio account/channel selection, private/scheduled/draft requests, journal and lost-reply
+lookup exist in `publish/{mod,zernio}.rs` and `commands/publish.rs`. Remaining: a real private
+upload approved and performed by George, with saved package, correct disclosure/channel,
+real visibility, Studio link, retry and status behavior. Do not infer success from a returned
+post alone. [GAP-002](gap.md#gap-002) owns release/metadata-change policy; GAP-011/016 own safe
+submission. FCL-9 owns faceless release-time/source checks. No live upload was performed here.
 
 ## Checks waiting on George
 
@@ -245,22 +117,23 @@ These do not block unrelated work.
 - Supply a longer real Greek recording: EL-B is only 13 seconds, so EL-A's synthetic case
   still carries most of the Greek evaluation.
 
-## Unresolved engineering and review issues
+## Engineering follow-ups
 
-Carry these into a relevant change rather than keeping a second gaps catalogue. Older reports
-are evidence to reproduce, not newly verified defects.
+The former issue table is merged into [gap.md](gap.md): direct-action ownership → GAP-029,
+sampled graphic/phone checks → GAP-030, reworded restarts → GAP-031, orphan folders → GAP-032.
+Over-face design belongs to STY-2; matched fast/thorough evaluation belongs to
+[Verification](verification.md#fast-against-thorough). These links replace duplicate reports.
 
-| Issue | Next check or constraint |
+<a id="unscheduled-capabilities"></a>
+### Unscheduled capabilities
+
+Promote only when a real job needs them. These are missing features, not newly confirmed bugs.
+
+| Capability / affected paths | Acceptance and dependency |
 |---|---|
-| Direct actions check the project handle before acquiring the command lock | Recheck project switching under concurrent calls; proposals already validate under the lock. AGT-1 follow-up. |
-| Stopping long analysis is supported; resuming is not | Add only for a job that proves expensive to restart. |
-| No in-app time/provider-spend report | EVAL-1 measures agent spend; do not report that as the total cost of a video. |
-| One run each favours fast review over thorough on four recordings ([Verification](verification.md#fast-against-thorough)) | Repeat before changing the long-form default or the method's advice; one model, 33 labelled spans. |
-| `check` reads a graphic's frames at 3 to 6 moments and the Agent panel does not embed the sample clip | A brief overlap between moments can pass. Sample suspect graphics with `frame_render`. Whether a 9:16 graphic reads at phone size is still judged by eye: the check finds words under the platform's bars, not words too small. |
-| Over-face layouts can hide captions or mouth or enter platform bands | Resolve in the STY-2 sample; a transparent composition root is not proof the face is visible. |
-| A restart reworded with no shared opening words has no flag ("what you need to do is" → "you need to go"), so only a thorough review reads it | Add a labelled case first; guard deliberate repetition and meaningful connective words. A word repeat the reviewer is shown can still be kept wrongly. |
-| Some settings lack “changed here” chips (layouts and short settings) | Address with the relevant panel work. |
-| Graphic rerenders can take 20–40 s; orphaned unplaced graphic folders can remain after undo | Keep old renders playing; establish a real need before adding draft rendering or cleanup. |
+| Resume stopped long analysis (`mcp/tools.rs`, job-owning command) | First identify a job expensive to restart; persist inputs/progress safely and prove resume equals a fresh run. Cancellation already exists. |
+| Per-video time/provider-spend report (`faceless/`, job/provider boundaries, UI) | Capture app/provider/agent categories separately with missing values explicit; EVAL-1's agent cost alone is insufficient. Decide accounting scope before UI. |
+| Remaining “changed here” chips (`components/layouts/`, short settings, `preset/`) | Show actual preset differences and reset only the intended owner; enumerate absent fields and test reset after project/short switching. |
 
 ## Deferred work
 
@@ -293,5 +166,5 @@ frame) and removal of the 10 ms system-audio gap at boundaries (O04). The editor
 
 Promote unscheduled ideas only when a real edit needs them: alternate review timelines,
 narration fixes, relinking/media bins, cross-project copying, arbitrary reference-range export,
-cover frames, title/description drafts, reduced motion, versioned delivery safe zones and
+reduced motion, versioned delivery safe zones and
 music-beat boards. Do not resurrect dropped scope listed in [Product](product.md#out-of-scope).
