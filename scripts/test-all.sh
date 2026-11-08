@@ -72,7 +72,7 @@ fi
 # Reported only.
 if (cd src-tauri && cargo clippy --version >/dev/null 2>&1) && ((!quick)); then
   printf '\n==> clippy (not gating)\n'
-  warnings=$(cd src-tauri && cargo clippy --lib --message-format short 2>&1 | grep -c ': warning:' || true)
+  warnings=$(cd src-tauri && cargo clippy --lib --color never --message-format short 2>&1 | grep -c ': warning:' || true)
   results+=("INFO  clippy: $warnings warnings (not gating)")
 fi
 
