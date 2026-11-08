@@ -61,7 +61,7 @@ const tierOf = (p: ExportPreferences) =>
 
 /** The video's YouTube package on the export page: what it is published with, for any video,
  * written here or by the agent (`publish`), and used by Upload on each finished export. */
-const PackageSection: React.FC = () => {
+const PackageSection: React.FC<{ projectHandle: string }> = ({ projectHandle }) => {
   const [view, setView] = useState<PublishPackageView | null>(null);
   const [open, setOpen] = useState(false);
   const gaps = packageGaps(view);
@@ -82,7 +82,7 @@ const PackageSection: React.FC = () => {
       </button>
       {/* Mounted while closed too, so the summary reads the saved package. */}
       <div className={cn("px-3 pb-3", !open && "hidden")}>
-        <PackageEditor target="video" onChange={setView} refreshKey={open} />
+        <PackageEditor key={projectHandle} projectHandle={projectHandle} target="video" onChange={setView} refreshKey={open} />
       </div>
     </div>
   );
@@ -421,7 +421,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
             </div>
           </div>
 
-          <PackageSection />
+          {projectHandle && <PackageSection projectHandle={projectHandle} />}
 
           <div className="px-6 pb-6">
             <CheckPanel

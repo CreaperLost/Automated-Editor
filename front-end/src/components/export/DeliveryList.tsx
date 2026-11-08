@@ -22,6 +22,11 @@ export const DeliveryList: React.FC<{ projectHandle: string; revision: number; r
   const [error, setError] = useState<string>();
   const [publishing, setPublishing] = useState<{ target: string; label: string; file: string } | null>(null);
   const [accountsOpen, setAccountsOpen] = useState(false);
+  // Publish belongs to the project whose export it is: another project closes it (GAP-011).
+  useEffect(() => {
+    setPublishing(null);
+    setAccountsOpen(false);
+  }, [projectHandle]);
 
   const load = useCallback(() => {
     void api
@@ -136,6 +141,8 @@ export const DeliveryList: React.FC<{ projectHandle: string; revision: number; r
       <Suspense fallback={null}>
         {publishing && !accountsOpen && (
           <PublishDialog
+            key={projectHandle}
+            projectHandle={projectHandle}
             {...publishing}
             onClose={() => setPublishing(null)}
             onOpenAccounts={() => setAccountsOpen(true)}

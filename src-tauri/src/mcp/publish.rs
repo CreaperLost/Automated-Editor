@@ -101,24 +101,35 @@ fn describe(view: &pc::PackageView) -> String {
 fn publish(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: PublishArgs = params(args)?;
     let target = args.target.unwrap_or_else(|| "video".into());
+    // One call acts on one project: the one open when it starts.
+    let handle = &match args.op {
+        PublishOp::Keywords => String::new(),
+        _ => pc::open_handle(ctx.state)?,
+    };
     match args.op {
-        PublishOp::Read => text(describe(&pc::publish_package_impl(ctx.state, target)?)),
+        PublishOp::Read => text(describe(&pc::publish_package_impl(
+            ctx.state, handle, target,
+        )?)),
         PublishOp::Set => {
             let package = args.package.ok_or("Give `package`")?;
-            let view = pc::publish_package_save_impl(ctx.state, target, package)?;
+            let view = pc::publish_package_save_impl(ctx.state, handle, target, package)?;
             text(format!("Saved. {}", describe(&view)))
         }
         PublishOp::Thumbnail => {
             let view = match (args.image, args.file) {
-                (Some(image), _) => pc::publish_thumbnail_file_impl(ctx.state, target, image)?,
+                (Some(image), _) => {
+                    pc::publish_thumbnail_file_impl(ctx.state, handle, target, image)?
+                }
                 (None, Some(file)) => pc::publish_thumbnail_frame_impl(
                     ctx.state,
+                    handle,
                     target,
                     file,
                     args.at_us.ok_or("Give `atUs`, the frame's time")?,
                 )?,
                 (None, None) => pc::publish_thumbnail_edit_impl(
                     ctx.state,
+                    handle,
                     target,
                     args.at_us.ok_or(
                         "Give `atUs` (a frame of the edit), `file` and `atUs`, or `image`",
@@ -132,9 +143,10 @@ fn publish(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             let release = args
                 .release
                 .ok_or("Give `release`: the one the user named")?;
-            let upload = pc::publish_upload_impl(ctx.state, target, file, release, &|step| {
-                ctx.progress(0.5, step)
-            })?;
+            let upload =
+                pc::publish_upload_impl(ctx.state, handle, target, file, release, &|step| {
+                    ctx.progress(0.5, step)
+                })?;
             text(format!(
                 "Uploaded: {}{}{}. AI label and the ads setting can be checked in YouTube Studio.",
                 upload.status,
@@ -174,11 +186,13 @@ fn publish(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             ))
         }
         PublishOp::Uploads => {
-            let view = pc::publish_package_impl(ctx.state, target.clone())?;
+            let view = pc::publish_package_impl(ctx.state, handle, target.clone())?;
             for u in view.uploads.iter().filter(|u| u.post_id.is_some()) {
-                let _ = pc::publish_refresh_impl(ctx.state, u.id.clone());
+                let _ = pc::publish_refresh_impl(ctx.state, handle, u.id.clone());
             }
-            text(describe(&pc::publish_package_impl(ctx.state, target)?))
+            text(describe(&pc::publish_package_impl(
+                ctx.state, handle, target,
+            )?))
         }
     }
 }
