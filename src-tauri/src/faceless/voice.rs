@@ -242,6 +242,33 @@ fn fingerprint(settings: &VoiceSettings, spoken: &str) -> String {
     hash(&format!("{}|{}|{spoken}", settings.model, settings.voice))
 }
 
+/// The productions being voiced now (their voice folders).
+static VOICING: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// Holds a production's voice folder while a job writes to it; a second job is refused
+/// (GAP-037) rather than mixing its takes with the first's.
+struct Job(PathBuf);
+
+impl Job {
+    fn start(dir: &Path) -> Result<Self, String> {
+        let mut voicing = VOICING.lock().unwrap_or_else(|e| e.into_inner());
+        if voicing.iter().any(|d| d == dir) {
+            return Err(
+                "This video's narration is already being made: wait for it to finish".into(),
+            );
+        }
+        voicing.push(dir.to_path_buf());
+        Ok(Self(dir.to_path_buf()))
+    }
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        let mut voicing = VOICING.lock().unwrap_or_else(|e| e.into_inner());
+        voicing.retain(|d| d != &self.0);
+    }
+}
+
 /// Voices the scenes not voiced yet (or changed, or listed in `redo`, 0-based), plays each at
 /// the channel's pace and joins them into one narration file. What was paid for is kept as
 /// soon as it arrives, so a failure part way loses nothing.
@@ -267,6 +294,8 @@ pub fn make(
         ));
     }
     let dir = folder(root);
+    // One voice job per production: the takes, the manifest and the paced files are shared.
+    let _job = Job::start(&dir)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let manifest_path = dir.join(MANIFEST);
     let mut manifest: BTreeMap<String, String> =
@@ -683,6 +712,61 @@ mod tests {
         );
         let kept = make(root, &script, &settings, &tone, &[], &|_, _| {}).unwrap();
         assert_eq!((kept.generated, kept.narration), (0, again.narration));
+    }
+
+    /// GAP-037: while one job voices a production, another for the same production is refused
+    /// before it pays for anything; once the first ends, voicing works again.
+    #[test]
+    fn one_voice_job_at_a_time_per_production() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        struct Slow {
+            tone: Tone,
+            started: std::sync::mpsc::Sender<()>,
+            go: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+        }
+        impl Speak for Slow {
+            fn speak(&self, model: &str, voice: &str, text: &str) -> Result<Vec<u8>, String> {
+                let _ = self.started.send(());
+                let _ = self.go.lock().unwrap().recv();
+                self.tone.speak(model, voice, text)
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let script = |text: &str| Script {
+            scenes: vec![Scene {
+                narration: text.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let settings = VoiceSettings::default();
+        let (started_tx, started) = std::sync::mpsc::channel();
+        let (go, go_rx) = std::sync::mpsc::channel();
+        let slow = Slow {
+            tone: Tone(Default::default()),
+            started: started_tx,
+            go: std::sync::Mutex::new(go_rx),
+        };
+        let other = Tone(Default::default());
+        std::thread::scope(|scope| {
+            let first =
+                scope.spawn(|| make(root, &script("Job A."), &settings, &slow, &[], &|_, _| {}));
+            started.recv().unwrap();
+            let second = make(root, &script("Job B."), &settings, &other, &[], &|_, _| {});
+            assert!(second.unwrap_err().contains("already being made"));
+            assert_eq!(
+                other.0.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "B paid for nothing"
+            );
+            go.send(()).unwrap();
+            first.join().unwrap().unwrap();
+        });
+        let after = make(root, &script("Job B."), &settings, &other, &[], &|_, _| {}).unwrap();
+        assert_eq!(after.generated, 1);
     }
 
     /// A tone for every scene, to test the rest without paying. Each call is pitched a little
