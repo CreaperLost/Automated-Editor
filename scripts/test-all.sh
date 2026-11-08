@@ -21,14 +21,25 @@ if [[ -n "${CI:-}" ]]; then export AEROEDITS_REQUIRE_FFMPEG=1; fi
 
 results=()
 failed=0
+log="$(mktemp)"
 step() {  # step <name> <command...>
   local name="$1"; shift
   printf '\n\033[1m==> %s\033[0m\n' "$name"
   local start=$SECONDS
-  if "$@"; then
+  if "$@" 2>&1 | tee "$log"; [[ ${PIPESTATUS[0]} -eq 0 ]]; then
     results+=("PASS  $name ($((SECONDS - start))s)")
+    local smoke
+    smoke="$(grep -hE '^(smoke:|SKIPPED)' "$log" || true)"
+    [[ -n "$smoke" && -n "${GITHUB_ACTIONS:-}" ]] && echo "::notice title=smoke test::$smoke"
   else
     results+=("FAIL  $name ($((SECONDS - start))s)"); failed=1
+    # On GitHub Actions, the failure's last lines as an annotation: annotations are readable
+    # without signing in, unlike job logs (handy from a phone or an unauthenticated session).
+    if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+      local tail_text
+      tail_text="$(grep -vE '^\s*$' "$log" | sed 's/\x1b\[[0-9;]*m//g' | tail -n 25 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')"
+      echo "::error title=test-all: $name failed::$tail_text"
+    fi
   fi
 }
 skip() { results+=("SKIP  $1: $2"); printf '\n==> %s: skipped (%s)\n' "$1" "$2"; }
@@ -67,4 +78,9 @@ fi
 
 printf '\n\033[1mSummary\033[0m\n'
 printf '  %s\n' "${results[@]}"
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  summary="$(printf '%s%%0A' "${results[@]}")"
+  echo "::notice title=test-all summary::$summary"
+fi
+rm -f "$log"
 exit $failed
