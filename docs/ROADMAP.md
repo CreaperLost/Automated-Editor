@@ -1,8 +1,40 @@
 # Roadmap
 
-Updated 2 November 2026. This is the single backlog. Keep work IDs stable; remove shipped
-items and put lasting behavior in [Product](product.md) or [Architecture](architecture.md).
-Validation and measured results live in [Verification](verification.md).
+Updated 2 November 2026; cloud tasks added 8 November. This is the single backlog. Keep work
+IDs stable; remove shipped items and put lasting behavior in [Product](product.md) or
+[Architecture](architecture.md). Validation and measured results live in
+[Verification](verification.md). State and open questions: [HANDOFF](HANDOFF.md).
+
+<a id="cloud-sessions-start-here"></a>
+## Cloud sessions: start here
+
+Each task fits one cloud session and one PR and has acceptance criteria a session can check
+headlessly (`bash scripts/test-all.sh` must stay green in every one). **The order is a guess made
+on 8 Nov pending George's answer** ([HANDOFF, question 1](HANDOFF.md#questions-for-george)):
+bugs in the newest work first, then tooling that makes later sessions safer, then features in
+the existing priority (faceless now; long-form → shorts → gaming).
+
+| ID | Task | Done when (headless) |
+|---|---|---|
+| <a id="cl-1"></a>CL-1 | Fix GAP-011 ([gap.md](gap.md)): publish commands take and check the project handle of the export the dialog shows | A unit test switching projects between showing and uploading gets a refusal; front-end passes the handle; test-all green |
+| <a id="cl-2"></a>CL-2 | Fix GAP-016 and GAP-015: Upload awaits and validates the package autosave; closing the editor flushes the last keystrokes | Tests (Rust side + a front-end store test) show the uploaded title equals the last typed one |
+| <a id="cl-3"></a>CL-3 | Fix GAP-004 and GAP-008: regenerating a voice replaces the old narration clip and transcript; accepting a voice is bound to the script revision it was made from | Unit tests in `faceless/voice.rs` for both; one undo step each |
+| <a id="cl-4"></a>CL-4 | Fix GAP-017: restoring a cut never inserts the wrong source audio into manually linked clips | Regression test with unlinked/relinked clips in `sequence/edit.rs` |
+| <a id="cl-5"></a>CL-5 | Recheck GAP-005/006 (reported failing, passed 8 Nov) and close or fix; then the P2s GAP-002, 003, 010, 012 one PR each | gap.md entries marked fixed with the test that proves it |
+| <a id="cl-6"></a>CL-6 | Clippy to zero warnings on `--lib` (mechanical fixes only, no behaviour change), then gate it in test-all and CI | `cargo clippy --lib -- -D warnings` passes; all tests unchanged |
+| <a id="cl-7"></a>CL-7 | More smoke tests in `src/smoke.rs`: captions burned in (a transcript fixture, frame pixel check), a 9:16 export, loudness of the export (`ebur128` ≈ −14 LUFS), a mouth-noise mute | Each test runs in under 20 s on lavapipe; summary lines printed |
+| <a id="cl-8"></a>CL-8 | A headless render CLI: `aeroedits render <project> --out x.mp4` (and `--frames N`) through the library, no running app needed, so sessions can render real projects | Smoke test also drives the CLI; flagged for review as new surface |
+| <a id="cl-9"></a>CL-9 | Graphics gate on Linux: make `graphics_gate_real` run in CI with the runtime cached (needs nodejs.org, registry.npmjs.org, storage.googleapis.com in the cloud allowlist or a CI cache) | The gate passes for all bundled templates in a Linux job; frames uploaded as artifacts |
+| <a id="cl-10"></a>CL-10 | Front-end preview build with mocked IPC ([proposal](HANDOFF.md#proposal-preview-builds-of-the-front-end)) and Playwright screenshots as a CI artifact | Screenshots of start screen, editor, Export dialog at phone/desktop widths in the PR artifacts |
+| <a id="cl-11"></a>CL-11 | FCL-7 sound bed for faceless presets (see [FCL](#fcl)) | Export of a fixture narration with the bed measures −14 LUFS ±1 and the bed ≥15 dB under speech |
+| <a id="cl-12"></a>CL-12 | FCL-9 publish for faceless with a mocked Zernio server: time words checked at release, sources rechecked, made list updated | Mocked interrupted upload makes no duplicate; journal tests |
+| <a id="cl-13"></a>CL-13 | FCL-3 Script panel in the UI (scenes, cited facts, length vs range, review findings) | tsc + a store test; screenshot via CL-10 when available |
+| <a id="cl-14"></a>CL-14 | PUB-1 thumbnail generation from a brief (OpenRouter image model) behind a mocked server | Size checks and the 160 px preview tested against a mocked image reply |
+| <a id="cl-15"></a>CL-15 | Front-end tests that render React (GAP-024): add a small jsdom/testing-library setup for two panels, through the dependency review in [Verification](verification.md#dependency-review) | Two component tests run in `npm run test:cleanup` or a new script wired into test-all |
+
+Not for cloud sessions (need George, a GPU, the GUI or real recordings): STY-2 step 4, EVAL-1
+runs on real recordings, listening checks, NVENC/CUDA/Parakeet/local LLM work, the Windows
+installer check, the first live Zernio upload, DEP-3 (Tailwind 4 needs side-by-side visual review).
 
 ## Next: STY-2 shorts style
 
