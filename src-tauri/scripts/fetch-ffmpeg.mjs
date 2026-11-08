@@ -19,6 +19,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { downloadReleaseAsset } from "./github-release.mjs";
 
 // BtbN/FFmpeg-Builds moved to this name; the old one only redirects.
 const REPO = "FFmpeg-Builds/FFmpeg-Builds";
@@ -57,67 +58,6 @@ function hostTriple() {
   const line = info.split(/\r?\n/).find((l) => l.startsWith("host:"));
   if (!line) throw new Error("Could not read the host target from `rustc -vV`.");
   return line.slice("host:".length).trim();
-}
-
-// The release-download link can answer 504 for hours (8 Nov: every asset of this repo, while
-// the API's asset endpoint served the same file), so each attempt tries the link, then the
-// API. 5xx and dropped connections are retried with a growing wait; any other 4xx is final.
-// GITHUB_TOKEN, when set, lifts the API's limit of 60 unauthenticated calls an hour.
-function apiHeaders(accept) {
-  const headers = { Accept: accept, "User-Agent": "aeroedits-fetch-ffmpeg" };
-  if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-  return headers;
-}
-
-async function apiAssetUrl(asset) {
-  const url = `https://api.github.com/repos/${REPO}/releases/tags/${TAG}`;
-  const response = await fetch(url, { headers: apiHeaders("application/vnd.github+json") });
-  if (!response.ok) return { status: response.status, url };
-  const release = await response.json();
-  const found = release.assets?.find((a) => a.name === asset);
-  if (!found) return { status: 404, url: `${url} (no asset ${asset})` };
-  return { url: found.url };
-}
-
-async function tryFetch(url, headers) {
-  try {
-    const response = await fetch(url, { headers });
-    if (response.ok) return { data: Buffer.from(await response.arrayBuffer()) };
-    return { status: response.status, failure: `Download failed (${response.status}): ${url}` };
-  } catch (error) {
-    return { failure: `Download failed (${error.cause?.code ?? error.message}): ${url}` };
-  }
-}
-
-const retryable = (status) => status === undefined || status >= 500 || status === 429;
-
-async function download(asset, attempts = 5) {
-  let apiUrl;
-  for (let attempt = 1; ; attempt++) {
-    const direct = await tryFetch(`${RELEASE}/${asset}`);
-    if (direct.data) return direct.data;
-    console.log(`${direct.failure}; trying the GitHub API`);
-    let result = direct;
-    if (!apiUrl) {
-      const lookup = await apiAssetUrl(asset);
-      if (lookup.status) {
-        result = {
-          status: lookup.status,
-          failure: `Asset lookup failed (${lookup.status}): ${lookup.url}`,
-        };
-      } else apiUrl = lookup.url;
-    }
-    if (apiUrl) {
-      result = await tryFetch(apiUrl, apiHeaders("application/octet-stream"));
-      if (result.data) return result.data;
-    }
-    if (attempt >= attempts || !(retryable(direct.status) && retryable(result.status))) {
-      throw new Error(result.failure);
-    }
-    const wait = 5 * attempt;
-    console.log(`${result.failure}; retrying in ${wait} s (attempt ${attempt + 1} of ${attempts})`);
-    await new Promise((resolve) => setTimeout(resolve, wait * 1000));
-  }
 }
 
 function findFile(dir, name) {
@@ -165,7 +105,7 @@ async function main() {
   console.log(`Downloading ${asset}`);
   const expected = SHA256[`${platform.build}-${license}`];
   if (!expected) throw new Error(`No pinned checksum for ${asset}.`);
-  const archive = await download(asset);
+  const archive = await downloadReleaseAsset(REPO, TAG, asset);
   const actual = createHash("sha256").update(archive).digest("hex");
   if (actual !== expected) {
     throw new Error(`Checksum mismatch for ${asset}: expected ${expected}, got ${actual}.`);
