@@ -402,8 +402,9 @@ fn faceless_visuals_get(
 #[tauri::command]
 fn faceless_voice_accept(
     state: tauri::State<'_, AppState>,
+    narration: String,
 ) -> Result<commands::faceless::VoiceResult, String> {
-    commands::faceless::faceless_voice_accept_impl(&state)
+    commands::faceless::faceless_voice_accept_impl(&state, Some(&narration))
 }
 
 /// The Zernio connection and its YouTube channels (reads them from Zernio).

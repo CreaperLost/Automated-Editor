@@ -246,10 +246,40 @@ fn input_hash(root: &Path, production: &Production, index: usize) -> Option<Stri
 /// Records that stage `id` just wrote its file: what it read and what it wrote. Later stages
 /// call this after writing their file.
 pub fn record_stage(root: &Path, id: &str) -> Result<(), String> {
+    record(root, id, None).map(|_| ())
+}
+
+/// What stage `id` reads now, when every stage before it is done: capture it when the stage's
+/// work begins and hand it to [`record_stage_for`] when the work ends.
+pub fn ready_inputs(root: &Path, id: &str) -> Option<String> {
+    let index = STAGES.iter().position(|s| s.id == id)?;
+    let production = load(root)?;
+    let states = stage_states(root, &production);
+    if states[..index].iter().any(|s| s.state != StageState::Done) {
+        return None;
+    }
+    input_hash(root, &production, index)
+}
+
+/// [`record_stage`], only while what the stage reads is still `inputs` and every stage before
+/// it is done. Otherwise the stage is marked not done and this returns false: its work was made
+/// from inputs that have changed since.
+pub fn record_stage_for(root: &Path, id: &str, inputs: &str) -> Result<bool, String> {
+    if record(root, id, Some(inputs))? {
+        return Ok(true);
+    }
+    clear_stage(root, id)?;
+    Ok(false)
+}
+
+fn record(root: &Path, id: &str, expected: Option<&str>) -> Result<bool, String> {
     let index = STAGES
         .iter()
         .position(|s| s.id == id)
         .ok_or_else(|| format!("No faceless stage {id}"))?;
+    if expected.is_some_and(|e| ready_inputs(root, id).as_deref() != Some(e)) {
+        return Ok(false);
+    }
     let mut production = load(root).ok_or("This project is not a faceless video")?;
     let output = file_hash(root, index)
         .ok_or_else(|| format!("{} has not been written", STAGES[index].file))?;
@@ -263,7 +293,8 @@ pub fn record_stage(root: &Path, id: &str) -> Result<(), String> {
             at: chrono::Utc::now().to_rfc3339(),
         },
     );
-    save(root, &production)
+    save(root, &production)?;
+    Ok(true)
 }
 
 /// Marks stage `id` not done (its file stays): a review with an open blocker, say.

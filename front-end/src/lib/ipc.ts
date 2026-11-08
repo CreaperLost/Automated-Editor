@@ -564,7 +564,8 @@ export const api = {
   facelessVisuals: (fill = false) => invokeTauri<FacelessVisualsResult>("faceless_visuals", { fill }),
   facelessVisualsGet: () => invokeTauri<FacelessVisuals | null>("faceless_visuals_get"),
   /** The user listened: what the transcription heard differently is right. */
-  facelessVoiceAccept: () => invokeTauri<FacelessVoiceResult>("faceless_voice_accept"),
+  facelessVoiceAccept: (narration: string) =>
+    invokeTauri<FacelessVoiceResult>("faceless_voice_accept", { narration }),
   /** The open project's production, or null for an ordinary project. */
   facelessStatus: () => invokeTauri<FacelessProduction | null>("faceless_status"),
   pickExportDestination: (projectHandle?: string) =>

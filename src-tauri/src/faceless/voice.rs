@@ -207,6 +207,10 @@ pub struct Voice {
     /// Measured length against the format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length_problem: Option<String>,
+    /// What the voice stage read when this narration was started (the reviewed script's
+    /// fingerprint). Acceptance and the stage hold only while it is still current.
+    #[serde(default)]
+    pub inputs: String,
     pub at: String,
 }
 
@@ -356,9 +360,22 @@ pub fn make(
         cursor += length + PADDING_US;
     }
     progress(0.92, "Joining the scenes");
+    // Named by the takes' own audio, not the words asked for: a take voiced again from the
+    // same words is a new narration, with its own asset, transcript and listen.
+    let mut takes = Sha256::new();
+    for i in 0..spoken.len() {
+        let bytes = std::fs::read(raw(i)).map_err(|e| format!("Reading scene {i}: {e}"))?;
+        takes.update(Sha256::digest(&bytes));
+    }
+    takes.update(format!("|{}|{LEAD_US}|{PADDING_US}", settings.speed).as_bytes());
     let name = format!(
         "narration-{}.wav",
-        hash(&format!("{}|{}", prints.join(","), settings.speed))
+        takes
+            .finalize()
+            .iter()
+            .take(10)
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
     );
     let joined = dir.join(&name);
     let assembled = crate::media::ffmpeg::assemble_audio_wav(&parts, cursor, &joined);
@@ -638,7 +655,38 @@ mod tests {
         assert!(long.contains("2.68 words a second"), "{long}");
     }
 
-    /// A tone for every scene, to test the rest without paying.
+    /// GAP-004: a scene voiced again from the same words but coming back as different audio
+    /// is a new narration, though nothing in the script changed.
+    #[test]
+    fn a_take_voiced_again_is_a_new_narration() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let script = Script {
+            scenes: vec![Scene {
+                narration: "The same words both times.".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let tone = Tone(Default::default());
+        let settings = VoiceSettings::default();
+        let first = make(root, &script, &settings, &tone, &[], &|_, _| {}).unwrap();
+        let again = make(root, &script, &settings, &tone, &[0], &|_, _| {}).unwrap();
+        assert_eq!(again.generated, 1);
+        assert_ne!(again.narration, first.narration, "new audio, new narration");
+        assert!(
+            root.join("faceless").join(&first.narration).is_file(),
+            "kept for undo"
+        );
+        let kept = make(root, &script, &settings, &tone, &[], &|_, _| {}).unwrap();
+        assert_eq!((kept.generated, kept.narration), (0, again.narration));
+    }
+
+    /// A tone for every scene, to test the rest without paying. Each call is pitched a little
+    /// higher than the last: a provider's new take of the same words is other audio.
     struct Tone(std::sync::atomic::AtomicUsize);
 
     impl Speak for Tone {
@@ -646,10 +694,11 @@ mod tests {
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
             let file = dir.path().join("t.mp3");
+            let pitch = 440 + 20 * self.0.load(std::sync::atomic::Ordering::SeqCst);
             let seconds = (text.split_whitespace().count() as f64 / 2.4).max(0.5);
             let status = std::process::Command::new(crate::media::ffmpeg::ffmpeg_path()?)
                 .args(["-v", "error", "-f", "lavfi", "-i"])
-                .arg(format!("sine=frequency=440:duration={seconds}"))
+                .arg(format!("sine=frequency={pitch}:duration={seconds}"))
                 .arg(&file)
                 .status()
                 .map_err(|e| e.to_string())?;
@@ -706,6 +755,7 @@ mod tests {
         assert_ne!(changed.narration, first.narration);
         let fourth = make(root, &script, &settings, &tone, &[], &|_, _| {}).unwrap();
         assert_eq!(fourth.generated, 0);
+        assert_eq!(fourth.narration, changed.narration);
         assert!(make(root, &script, &settings, &tone, &[5], &|_, _| {}).is_err());
     }
 }

@@ -524,6 +524,8 @@ pub fn faceless_voice_impl(
                 .into(),
         );
     }
+    // What this narration is made from: it can only certify this reviewed script.
+    let inputs = faceless::ready_inputs(&root, "voice").ok_or("Review the script first")?;
     let script = faceless::script::load_script(&root).ok_or("Write the script first")?;
     let profile = faceless::profile::load(&crate::transcript::settings::config_dir())?;
     let speak = voice::OpenRouter::from_keychain().ok_or(
@@ -607,6 +609,7 @@ pub fn faceless_voice_impl(
     made.length_problem = voice::length_problem(made.duration_us, production.format, spoken_words);
     // A listen already given stays with the same audio.
     made.accepted = same_file && previous.as_ref().is_some_and(|p| p.accepted);
+    made.inputs = inputs;
     finish_voice(&root, made, diagnostics, opened)
 }
 
@@ -629,11 +632,17 @@ fn finish_voice(
     opened: Option<OpenedProject>,
 ) -> Result<VoiceResult, String> {
     faceless::voice::save(root, &voice)?;
-    let done = voice.accepted || (voice.issues.is_empty() && voice.length_problem.is_none());
-    if done {
-        faceless::record_stage(root, "voice")?;
+    let mut diagnostics = diagnostics;
+    let heard = voice.accepted || (voice.issues.is_empty() && voice.length_problem.is_none());
+    let fresh = faceless::ready_inputs(root, "voice").as_deref() == Some(voice.inputs.as_str());
+    let done = if fresh && heard {
+        faceless::record_stage_for(root, "voice", &voice.inputs)?
     } else {
         faceless::clear_stage(root, "voice")?;
+        false
+    };
+    if !fresh || (heard && !done) {
+        diagnostics.push(SCRIPT_CHANGED.into());
     }
     Ok(VoiceResult {
         voice,
@@ -648,10 +657,25 @@ pub fn faceless_voice_get_impl(state: &AppState) -> Result<Option<faceless::voic
     Ok(faceless::voice::load(&production_root(state)?))
 }
 
+const SCRIPT_CHANGED: &str = "The script or its review changed after this narration was \
+     started, so it may not say what the script says now: voice it again (unchanged scenes are \
+     not paid for again).";
+
 /// The user listened: the names and numbers flagged are right, and the length will do.
-pub fn faceless_voice_accept_impl(state: &AppState) -> Result<VoiceResult, String> {
+/// `narration`: the take they listened to (`Voice::narration`); a newer take is not accepted
+/// for them. Narration made from an older script is never accepted.
+pub fn faceless_voice_accept_impl(
+    state: &AppState,
+    narration: Option<&str>,
+) -> Result<VoiceResult, String> {
     let root = production_root(state)?;
     let mut voice = faceless::voice::load(&root).ok_or("Voice the script first")?;
+    if narration.is_some_and(|n| n != voice.narration) {
+        return Err("The narration was voiced again since: listen to the new take".into());
+    }
+    if faceless::ready_inputs(&root, "voice").as_deref() != Some(voice.inputs.as_str()) {
+        return Err(SCRIPT_CHANGED.into());
+    }
     voice.accepted = true;
     finish_voice(&root, voice, Vec::new(), None)
 }
@@ -976,6 +1000,70 @@ mod tests {
         assert!(faceless::stage_states(&root, &production)
             .iter()
             .any(|s| s.id == "visuals" && s.state == faceless::StageState::Done));
+    }
+
+    /// GAP-008: narration made from script A never certifies script B, whether accepted late
+    /// or finished after B's review.
+    #[test]
+    fn old_narration_cannot_certify_a_newer_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = faceless::create(dir.path(), "Bound", Format::Short, &[]).unwrap();
+        let host = crate::mcp::tests_support::BareHost::default();
+        let state = &host.state;
+        super::super::open_project_impl(state, root.to_string_lossy().into()).unwrap();
+        let write = |id: &str, text: &str| {
+            let stage = faceless::STAGES.iter().find(|s| s.id == id).unwrap();
+            std::fs::write(root.join(faceless::DIR).join(stage.file), text).unwrap();
+            faceless::record_stage(&root, id).unwrap();
+        };
+        for id in ["research", "script", "review"] {
+            write(id, &format!("{id} A"));
+        }
+        let voice = faceless::voice::Voice {
+            narration: "voice/narration-a.wav".into(),
+            issues: vec![faceless::voice::Issue {
+                scene: 1,
+                kind: "number".into(),
+                expected: "4".into(),
+            }],
+            inputs: faceless::ready_inputs(&root, "voice").unwrap(),
+            ..Default::default()
+        };
+        faceless::voice::save(&root, &voice).unwrap();
+        // The script and its review move on to B; A's narration is still the voice file.
+        write("script", "script B");
+        write("review", "review B");
+        let voice_state = || {
+            let production = faceless::load(&root).unwrap();
+            faceless::stage_states(&root, &production)
+                .into_iter()
+                .find(|s| s.id == "voice")
+                .unwrap()
+                .state
+        };
+        let refused = faceless_voice_accept_impl(state, Some("voice/narration-a.wav"));
+        assert!(refused.err().unwrap().contains("changed"));
+        assert!(faceless_voice_accept_impl(state, None).is_err());
+        assert_ne!(voice_state(), faceless::StageState::Done);
+        assert!(!faceless::voice::load(&root).unwrap().accepted);
+        // A generation started on A that finishes now is kept but not done.
+        let late = finish_voice(&root, voice.clone(), Vec::new(), None).unwrap();
+        assert!(!late.done);
+        assert!(late
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("voice it again")));
+        assert_ne!(voice_state(), faceless::StageState::Done);
+        // Narration made from B can be accepted, but only the take that was heard.
+        let current = faceless::voice::Voice {
+            inputs: faceless::ready_inputs(&root, "voice").unwrap(),
+            ..voice
+        };
+        faceless::voice::save(&root, &current).unwrap();
+        assert!(faceless_voice_accept_impl(state, Some("voice/narration-old.wav")).is_err());
+        let accepted = faceless_voice_accept_impl(state, Some("voice/narration-a.wav")).unwrap();
+        assert!(accepted.done && accepted.voice.accepted);
+        assert_eq!(voice_state(), faceless::StageState::Done);
     }
 
     /// One short sentence through OpenRouter with the channel's voice, on the real key. Run by
