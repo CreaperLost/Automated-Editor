@@ -6,8 +6,8 @@
 #
 # Steps: cargo fmt --check, cargo test (all unit tests, incl. the smoke test), the GPU
 # compositor/export tests on a software adapter (if one exists), front-end typecheck + tests +
-# build, then the smoke test again with its summary line. clippy is reported, not gated: the
-# tree is not clippy-clean yet (see docs/HANDOFF.md).
+# build, then the smoke test again with its summary line, and clippy on the library with no
+# warnings allowed.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -77,11 +77,10 @@ if command -v python3 >/dev/null 2>&1; then
 else
   skip "doc links" "no python3"
 fi
-# Reported only.
-if (cd src-tauri && cargo clippy --version >/dev/null 2>&1) && ((!quick)); then
-  printf '\n==> clippy (not gating)\n'
-  warnings=$(cd src-tauri && cargo clippy --lib --color never --message-format short 2>&1 | grep -c ': warning:' || true)
-  results+=("INFO  clippy: $warnings warnings (not gating)")
+if (cd src-tauri && cargo clippy --version >/dev/null 2>&1); then
+  step "clippy (lib, no warnings)" bash -c 'cd src-tauri && cargo clippy --lib -- -D warnings'
+else
+  skip "clippy" "not installed (rustup component add clippy)"
 fi
 
 printf '\n\033[1mSummary\033[0m\n'

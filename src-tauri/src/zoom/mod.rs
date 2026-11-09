@@ -449,7 +449,7 @@ pub struct ZoomGeneration {
 }
 
 #[derive(Clone)]
-struct InterestPoint {
+pub struct InterestPoint {
     t_us: u64,
     end_us: u64,
     seq: u64,
@@ -592,10 +592,7 @@ fn usable_target(
     let Some(id) = geometry_id else {
         return false;
     };
-    match stream.geometries.get(id) {
-        Some(geometry) if geometry.supported => true,
-        _ => false,
-    }
+    matches!(stream.geometries.get(id), Some(geometry) if geometry.supported)
 }
 
 fn dist(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
@@ -705,7 +702,7 @@ fn extract_interest(
                     }
                 } else {
                     flush_dwell(&mut dwell, event.t_us, &mut interest);
-                    if *inside_source == false
+                    if !*inside_source
                         && diagnostics.len() < 256
                         && !diagnostics.iter().any(|d| d.starts_with("Off-source"))
                     {
@@ -719,7 +716,7 @@ fn extract_interest(
                 match &event.kind {
                     CanonicalKind::ButtonDown { button, .. } => {
                         match &mut held {
-                            None => held = Some(button.into_iter().copied().collect()),
+                            None => held = Some(button.iter().copied().collect()),
                             Some(buttons) => {
                                 if let Some(button) = button {
                                     if !buttons.contains(button) {

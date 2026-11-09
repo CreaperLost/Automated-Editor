@@ -50,6 +50,10 @@ impl Fft {
         self.n
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.n == 0
+    }
+
     /// Forward transform. `inverse` conjugates the twiddles and scales by 1/n.
     pub fn process(&self, data: &mut [Complex], inverse: bool) {
         assert_eq!(data.len(), self.n);

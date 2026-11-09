@@ -145,7 +145,7 @@ pub fn read_windows(
                         maximized,
                     })
                 });
-                stream.fronts.push(FrontWindow { t_us: t_us, window });
+                stream.fronts.push(FrontWindow { t_us, window });
             }
             RawKind::Gap { start_us, end_us } => {
                 if end_us >= start_us && end_us <= MAX_SAFE_TIME {
