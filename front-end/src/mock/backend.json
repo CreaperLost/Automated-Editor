@@ -293,7 +293,7 @@
     "config": null,
     "diagnostics": [],
     "guarded": false,
-    "key": "rec-5256ba75546a.mic",
+    "key": "rec-919554188b1d.mic",
     "noises": [],
     "revision": 0
   },
@@ -302,7 +302,7 @@
       {
         "durationUs": 6000000,
         "height": 180,
-        "id": "rec-5256ba75546a",
+        "id": "rec-919554188b1d",
         "kind": "recording",
         "name": "smoke",
         "path": "/home/george/AeroEdits/smoke.aero",
@@ -421,7 +421,7 @@
     "name": "Smoke",
     "noiseMutes": {},
     "previewAvailable": false,
-    "projectHandle": "c143b7fb-7a06-4c8f-9f9f-016cb3a69b87",
+    "projectHandle": "2f8bb30f-6c5b-4b25-bc90-d3ad684825c5",
     "projectPath": "/home/george/AeroEdits/Smoke",
     "redoAvailable": false,
     "revision": 0,
@@ -431,7 +431,7 @@
         {
           "clips": [
             {
-              "asset": "rec-5256ba75546a",
+              "asset": "rec-919554188b1d",
               "durationUs": 6000000,
               "id": "c1",
               "inUs": 0,
@@ -446,7 +446,7 @@
         {
           "clips": [
             {
-              "asset": "rec-5256ba75546a",
+              "asset": "rec-919554188b1d",
               "durationUs": 6000000,
               "id": "c2",
               "inUs": 0,
@@ -482,7 +482,7 @@
     "generation": 1,
     "positionUs": 0,
     "previewAvailable": false,
-    "projectHandle": "c143b7fb-7a06-4c8f-9f9f-016cb3a69b87",
+    "projectHandle": "2f8bb30f-6c5b-4b25-bc90-d3ad684825c5",
     "speed": 1.0,
     "state": "ready"
   },
@@ -807,7 +807,7 @@
         "endUs": 2350000,
         "startUs": 100000,
         "text": "Today we cut the pauses out.",
-        "trackId": "rec-5256ba75546a.mic",
+        "trackId": "rec-919554188b1d.mic",
         "wordIds": [
           "w-0",
           "w-1",
@@ -829,7 +829,7 @@
         "endUs": 5300000,
         "startUs": 4100000,
         "text": "Like this.",
-        "trackId": "rec-5256ba75546a.mic",
+        "trackId": "rec-919554188b1d.mic",
         "wordIds": [
           "w-6",
           "w-7"
@@ -840,7 +840,7 @@
         ]
       }
     ],
-    "trackId": "rec-5256ba75546a.mic"
+    "trackId": "rec-919554188b1d.mic"
   },
   "project_check": {
     "durationUs": 6000000,
@@ -1487,7 +1487,7 @@
       106,
       107
     ],
-    "trackId": "rec-5256ba75546a.mic"
+    "trackId": "rec-919554188b1d.mic"
   },
   "project_zoom_suggestions": {
     "config": {
@@ -1520,7 +1520,7 @@
   },
   "proposals_list": {
     "batches": [],
-    "projectHandle": "c143b7fb-7a06-4c8f-9f9f-016cb3a69b87",
+    "projectHandle": "2f8bb30f-6c5b-4b25-bc90-d3ad684825c5",
     "revision": 0
   },
   "publish_package": {
@@ -1741,13 +1741,13 @@
     }
   ],
   "transcript_get": {
-    "createdAt": "2026-11-09T11:56:06.412280506+00:00",
+    "createdAt": "2026-11-09T15:17:29.351941428+00:00",
     "language": "en",
     "model": "parakeet-tdt-0.6b-v3",
     "provider": "parakeet",
     "revision": 0,
-    "trackId": "rec-5256ba75546a.mic",
-    "wordStamp": "13ee36a5a2ea3691",
+    "trackId": "rec-919554188b1d.mic",
+    "wordStamp": "c27635ec3e96f370",
     "words": [
       {
         "editedEndUs": 450000,

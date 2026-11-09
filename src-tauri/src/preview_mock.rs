@@ -131,7 +131,7 @@ fn preview_mock_writes_the_front_end_answers() {
     // The Export dialog.
     put(
         "publish_package",
-        json(publish::publish_package_impl(&state, "video".into()).unwrap()),
+        json(publish::publish_package_impl(&state, &handle, "video".into()).unwrap()),
     );
     put(
         "project_check",
