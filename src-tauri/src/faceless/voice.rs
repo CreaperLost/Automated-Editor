@@ -513,6 +513,7 @@ fn tokens(text: &str) -> Vec<String> {
     if !letters.is_empty() {
         out.push(letters);
     }
+    let out = spelled_numbers(out);
     let is_num = |s: &String| s.chars().all(|c| c.is_ascii_digit());
     (0..out.len())
         .filter(|&i| {
@@ -524,6 +525,107 @@ fn tokens(text: &str) -> Vec<String> {
         })
         .map(|i| out[i].clone())
         .collect()
+}
+
+/// Joins a spelled number into digits, as transcription writes them: "ninety 1" → "91",
+/// "three hundred and sixty" → "360", "one thousand" → "1000". Digits said one by one
+/// ("1 2") stay apart.
+fn spelled_numbers(tokens: Vec<String>) -> Vec<String> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Last {
+        None,
+        Unit,
+        Tens,
+        Hundred,
+        Scale,
+        And,
+    }
+    const TEENS: [&str; 10] = [
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
+    ];
+    const TENS: [&str; 8] = [
+        "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+    ];
+    enum Word {
+        Unit(u64),
+        Tens(u64),
+        Hundred,
+        Scale(u64),
+    }
+    let word = |t: &str| -> Option<Word> {
+        if t.len() == 1 && t.chars().all(|c| c.is_ascii_digit()) {
+            return t.parse().ok().map(Word::Unit);
+        }
+        if let Some(i) = TEENS.iter().position(|w| *w == t) {
+            return Some(Word::Unit(10 + i as u64));
+        }
+        if let Some(i) = TENS.iter().position(|w| *w == t) {
+            return Some(Word::Tens(20 + 10 * i as u64));
+        }
+        match t {
+            "hundred" => Some(Word::Hundred),
+            "thousand" => Some(Word::Scale(1_000)),
+            "million" => Some(Word::Scale(1_000_000)),
+            "billion" => Some(Word::Scale(1_000_000_000)),
+            _ => None,
+        }
+    };
+    let mut out = Vec::with_capacity(tokens.len());
+    // The number being read: (total of finished scales, current group, last kind, words).
+    let (mut total, mut current, mut last, mut words) = (0u64, 0u64, Last::None, 0usize);
+    let flush = |out: &mut Vec<String>, total: &mut u64, current: &mut u64, words: &mut usize| {
+        if *words > 0 {
+            out.push((*total + *current).to_string());
+        }
+        (*total, *current, *words) = (0, 0, 0);
+    };
+    for (i, token) in tokens.iter().enumerate() {
+        let next_is_number = tokens.get(i + 1).is_some_and(|t| word(t).is_some());
+        if token == "and" && matches!(last, Last::Hundred | Last::Scale) && next_is_number {
+            last = Last::And;
+            continue;
+        }
+        let fits = |w: &Word, last: Last| match w {
+            Word::Unit(n) => match last {
+                Last::None | Last::Hundred | Last::Scale | Last::And => true,
+                Last::Tens => *n < 10,
+                Last::Unit => false,
+            },
+            Word::Tens(_) => matches!(last, Last::None | Last::Hundred | Last::Scale | Last::And),
+            Word::Hundred => matches!(last, Last::None | Last::Unit),
+            Word::Scale(_) => last != Last::And,
+        };
+        let Some(w) = word(token) else {
+            flush(&mut out, &mut total, &mut current, &mut words);
+            last = Last::None;
+            out.push(token.clone());
+            continue;
+        };
+        if !fits(&w, last) {
+            flush(&mut out, &mut total, &mut current, &mut words);
+            last = Last::None;
+        }
+        match w {
+            Word::Unit(n) => (current, last) = (current + n, Last::Unit),
+            Word::Tens(n) => (current, last) = (current + n, Last::Tens),
+            Word::Hundred => (current, last) = (current.max(1) * 100, Last::Hundred),
+            Word::Scale(n) => {
+                (total, current, last) = (total + current.max(1) * n, 0, Last::Scale);
+            }
+        }
+        words += 1;
+    }
+    flush(&mut out, &mut total, &mut current, &mut words);
+    out
 }
 
 fn contains(heard: &[String], wanted: &[String]) -> bool {
@@ -616,7 +718,14 @@ mod tests {
         assert_eq!(tokens("G P T 5"), ["gpt", "5"]);
         assert_eq!(tokens("1,048,576 tokens"), ["1048576", "tokens"]);
         assert_eq!(tokens("1 048 576"), ["1048576"]);
-        assert_eq!(tokens("seventy nine point one"), ["seventy", "9", "1"]);
+        assert_eq!(tokens("seventy nine point one"), ["79", "1"]);
+        assert_eq!(tokens("ninety-one percent"), ["91", "percent"]);
+        assert_eq!(tokens("three hundred and sixty tries"), ["360", "tries"]);
+        assert_eq!(tokens("one thousand rooms"), ["1000", "rooms"]);
+        assert_eq!(tokens("1,000 rooms"), ["1000", "rooms"]);
+        assert_eq!(tokens("two million and five"), ["2000005"]);
+        assert_eq!(tokens("one two three"), ["1", "2", "3"]);
+        assert_eq!(tokens("bread and butter"), ["bread", "and", "butter"]);
         assert_eq!(tokens("79 point 1%"), ["79", "1"]);
         assert_eq!(tokens("79.1%"), ["79", "1"]);
         assert_eq!(tokens("GPT-5.1"), ["gpt", "5", "1"]);
