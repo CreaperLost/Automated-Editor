@@ -1,0 +1,9 @@
+{
+  "name": "Key point",
+  "template": "key-point",
+  "variables": {
+    "detail": "",
+    "label": "If it holds up",
+    "statement": "Robot training waits less on people's hours, and more on computers."
+  }
+}

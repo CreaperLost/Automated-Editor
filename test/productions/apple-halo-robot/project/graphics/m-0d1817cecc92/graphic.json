@@ -1,0 +1,12 @@
+{
+  "name": "News headline",
+  "template": "headline",
+  "variables": {
+    "cue": 2.12,
+    "detail": "Then it walked into six real places nobody had mapped.",
+    "emphasis": "never",
+    "headline": "Apple's robot never saw a real home in training",
+    "label": "Robotics",
+    "source": "Source: Apple's paper"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Key point",
+  "template": "key-point",
+  "variables": {
+    "detail": "",
+    "label": "On its back",
+    "statement": "M4 Pro Mac mini, 64 GB"
+  }
+}

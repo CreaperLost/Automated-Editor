@@ -1,0 +1,12 @@
+{
+  "name": "Comparison bars",
+  "template": "bars",
+  "variables": {
+    "cue": 2.66,
+    "highlight": "Chained tasks",
+    "label": "Success rate",
+    "rows": "Single skills: 91|Chained tasks: 70",
+    "source": "Source: Humanoids Daily",
+    "unit": "%"
+  }
+}

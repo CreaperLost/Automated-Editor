@@ -1,0 +1,84 @@
+name: Faceless renders
+
+# Renders every saved faceless production in test/productions/ to a 1080x1920 MP4 with the
+# current code (narration, graphics through the real HyperFrames runtime, captions, export),
+# so a change to export, graphics or styles shows up in a real short. No paid calls: the
+# narration and research are saved with the production. The MP4s and their stills are
+# uploaded as `faceless-shorts`. This repository is public, so the artifact is too.
+on:
+  pull_request:
+    paths:
+      - src-tauri/src/export/**
+      - src-tauri/src/render/**
+      - src-tauri/src/graphics/**
+      - src-tauri/src/style/**
+      - src-tauri/src/media/**
+      - src-tauri/src/render_cli.rs
+      - src-tauri/graphics/**
+      - src-tauri/assets/fonts/**
+      - test/productions/**
+      - scripts/faceless-fixture.sh
+      - .github/workflows/faceless-render.yml
+  workflow_dispatch:
+
+concurrency:
+  group: faceless-render-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  render:
+    name: Render saved faceless shorts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: linux-cloud-check
+          save-if: false
+      - name: Set up the VM (no desktop shell libraries)
+        run: bash scripts/cloud-setup.sh
+        env:
+          AEROEDITS_SKIP_TAURI_DEPS: "1"
+      - name: Cache the graphics runtime
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/graphics-runtime
+          key: graphics-runtime-${{ runner.os }}-${{ hashFiles('src-tauri/src/graphics/runtime.rs', 'src-tauri/graphics/runtime/package-lock.json') }}
+      - name: Install the runtime (once per version)
+        working-directory: src-tauri
+        run: cargo test --lib graphics_runtime_installs -- --ignored --nocapture
+        env:
+          AEROEDITS_GRAPHICS_RUNTIME: ${{ runner.temp }}/graphics-runtime
+      - name: Build the app (no window)
+        working-directory: src-tauri
+        run: cargo build --bin aeroedits
+      - name: Render every production
+        env:
+          AEROEDITS_GRAPHICS_RUNTIME: ${{ runner.temp }}/graphics-runtime
+          OUT: ${{ runner.temp }}/faceless-shorts
+        run: |
+          mkdir -p "$OUT"
+          for dir in test/productions/*/; do
+            name="$(basename "$dir")"
+            project="$(bash scripts/faceless-fixture.sh restore "$name")"
+            start=$SECONDS
+            src-tauri/target/debug/aeroedits render "$project" \
+              --size 1080x1920 --fps 30 --frames 9 --out "$OUT/$name.mp4"
+            echo "$name: rendered in $((SECONDS - start)) s" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: faceless-shorts
+          path: ${{ runner.temp }}/faceless-shorts/
+          if-no-files-found: error
+          retention-days: 14

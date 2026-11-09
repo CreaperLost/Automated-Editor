@@ -1,0 +1,128 @@
+{
+  "nextId": 6,
+  "batches": [
+    {
+      "id": "b-1",
+      "agent": "claude-code",
+      "reason": "Added graphic m-0d1817cecc92 \"News headline\" (template headline) at 0:00.34 for 8.1 s, clip c2.",
+      "createdAt": "2026-11-09T16:00:26Z",
+      "baseRevision": 2,
+      "change": {
+        "kind": "action",
+        "action": "graphic_add"
+      },
+      "status": "accepted",
+      "decidedAt": "2026-11-09T16:00:26Z",
+      "appliedRevision": 3,
+      "summary": [
+        "Added graphic m-0d1817cecc92 \"News headline\" (template headline) at 0:00.34 for 8.1 s, clip c2.",
+        "Added graphic m-b2d6c7e8ac70 \"Number count-up\" (template count-up) at 0:08.44 for 5.6 s, clip c3.",
+        "Added graphic m-f0809fd4d0dc \"Key point\" (template key-point) at 0:14.04 for 3.3 s, clip c4.",
+        "Added graphic m-4227805acf76 \"Quote from a source\" (template quote) at 0:17.38 for 6.9 s, clip c5.",
+        "Added graphic m-04bff4583d06 \"Number count-up\" (template count-up) at 0:24.26 for 7.1 s, clip c6.",
+        "Added graphic m-097236ed908a \"Steps, linked\" (template steps-link) at 0:31.38 for 5.6 s, clip c7.",
+        "Added graphic m-e8335fed5dca \"Comparison bars\" (template bars) at 0:37.00 for 5.6 s, clip c8.",
+        "Added graphic m-d7a78b055b62 \"Claim and verdict\" (template verdict) at 0:42.60 for 6.6 s, clip c9.",
+        "Added graphic m-d81cce92d114 \"Key point\" (template key-point) at 0:49.22 for 5.2 s, clip c10.",
+        "They render in the background; graphic_render waits for them.",
+        "Length 0:54.39 → 0:54.42.",
+        "Revision 3; `undo` takes it back."
+      ]
+    },
+    {
+      "id": "b-2",
+      "agent": "claude-code",
+      "reason": "Graphic m-f0809fd4d0dc \"Key point\": {\"detail\":\"\",\"label\":\"On its back\",\"statement\":\"M4 Pro Mac mini, 64 GB\"}, the project's style.",
+      "createdAt": "2026-11-09T16:00:36Z",
+      "baseRevision": 3,
+      "change": {
+        "kind": "action",
+        "action": "graphic_set"
+      },
+      "status": "accepted",
+      "decidedAt": "2026-11-09T16:00:36Z",
+      "appliedRevision": 4,
+      "summary": [
+        "Graphic m-f0809fd4d0dc \"Key point\": {\"detail\":\"\",\"label\":\"On its back\",\"statement\":\"M4 Pro Mac mini, 64 GB\"}, the project's style.",
+        "It renders again by itself.",
+        "Revision 4; `undo` takes it back."
+      ]
+    },
+    {
+      "id": "b-3",
+      "agent": "claude-code",
+      "reason": "Graphic m-4227805acf76 \"Quote from a source\": {\"cue\":4.18,\"highlight\":\"at least an hour of human time\",\"label\":\"Apple's paper\",\"note\":\"Teleoperation\",\"quote\":\"an hour of data costs at least an hour of human time.\"}, the project's style.",
+      "createdAt": "2026-11-09T16:00:36Z",
+      "baseRevision": 4,
+      "change": {
+        "kind": "action",
+        "action": "graphic_set"
+      },
+      "status": "accepted",
+      "decidedAt": "2026-11-09T16:00:36Z",
+      "appliedRevision": 5,
+      "summary": [
+        "Graphic m-4227805acf76 \"Quote from a source\": {\"cue\":4.18,\"highlight\":\"at least an hour of human time\",\"label\":\"Apple's paper\",\"note\":\"Teleoperation\",\"quote\":\"an hour of data costs at least an hour of human time.\"}, the project's style.",
+        "It renders again by itself.",
+        "Revision 5; `undo` takes it back."
+      ]
+    },
+    {
+      "id": "b-4",
+      "agent": "claude-code",
+      "reason": "Graphic m-097236ed908a \"Steps, linked\": {\"cue\":3.2,\"label\":\"On the robot\",\"steps\":\"A request\\nQwen plans on the Mac mini\\nThe robot moves\",\"title\":\"No internet\"}, the project's style.",
+      "createdAt": "2026-11-09T16:00:36Z",
+      "baseRevision": 5,
+      "change": {
+        "kind": "action",
+        "action": "graphic_set"
+      },
+      "status": "accepted",
+      "decidedAt": "2026-11-09T16:00:36Z",
+      "appliedRevision": 6,
+      "summary": [
+        "Graphic m-097236ed908a \"Steps, linked\": {\"cue\":3.2,\"label\":\"On the robot\",\"steps\":\"A request\\nQwen plans on the Mac mini\\nThe robot moves\",\"title\":\"No internet\"}, the project's style.",
+        "It renders again by itself.",
+        "Revision 6; `undo` takes it back."
+      ]
+    },
+    {
+      "id": "b-5",
+      "agent": "claude-code",
+      "reason": "Graphic m-d7a78b055b62 \"Claim and verdict\": {\"claim\":\"Learns without people\",\"cue\":3.92,\"evidence\":\"Every new task needs a person|No comparison with others|Apple’s own tests\",\"label\":\"Still open\",\"source\":\"Source: Apple's paper\",\"verdict\":\"Unproven\"}, the project's style.",
+      "createdAt": "2026-11-09T16:00:36Z",
+      "baseRevision": 6,
+      "change": {
+        "kind": "action",
+        "action": "graphic_set"
+      },
+      "status": "accepted",
+      "decidedAt": "2026-11-09T16:00:36Z",
+      "appliedRevision": 7,
+      "summary": [
+        "Graphic m-d7a78b055b62 \"Claim and verdict\": {\"claim\":\"Learns without people\",\"cue\":3.92,\"evidence\":\"Every new task needs a person|No comparison with others|Apple’s own tests\",\"label\":\"Still open\",\"source\":\"Source: Apple's paper\",\"verdict\":\"Unproven\"}, the project's style.",
+        "It renders again by itself.",
+        "Revision 7; `undo` takes it back."
+      ]
+    },
+    {
+      "id": "b-6",
+      "agent": "claude-code",
+      "reason": "Graphic m-4227805acf76 \"Quote from a source\": {\"cue\":4.18,\"highlight\":\"at least an hour of human time\",\"label\":\"Apple's paper\",\"note\":\"Teleoperation\",\"quote\":\"an hour of data costs at least an hour of human time.\",\"source\":\"Source: Apple's paper\"}, the project's style.",
+      "createdAt": "2026-11-09T16:06:28Z",
+      "baseRevision": 7,
+      "change": {
+        "kind": "action",
+        "action": "graphic_set"
+      },
+      "status": "accepted",
+      "decidedAt": "2026-11-09T16:06:28Z",
+      "appliedRevision": 8,
+      "summary": [
+        "Graphic m-4227805acf76 \"Quote from a source\": {\"cue\":4.18,\"highlight\":\"at least an hour of human time\",\"label\":\"Apple's paper\",\"note\":\"Teleoperation\",\"quote\":\"an hour of data costs at least an hour of human time.\",\"source\":\"Source: Apple's paper\"}, the project's style.",
+        "It renders again by itself.",
+        "Revision 8; `undo` takes it back."
+      ]
+    }
+  ]
+}
