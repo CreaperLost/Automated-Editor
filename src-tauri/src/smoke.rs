@@ -55,7 +55,7 @@ fn missing_tools() -> Option<String> {
 }
 
 /// A 6 s `.aero` recording made of the fixtures: screen.mp4 (30 fps) and voice.wav (mic).
-fn recording(dir: &Path) -> PathBuf {
+pub(crate) fn recording(dir: &Path) -> PathBuf {
     let voice = std::fs::read(fixtures().join("voice.wav"))
         .unwrap_or_else(|e| panic!("read voice.wav: {e} (run scripts/make-fixtures.sh)"));
     recording_with_voice(dir, &voice)
@@ -291,7 +291,7 @@ fn smoke_recording_silence_cut_exports_a_shorter_mp4() {
 }
 
 /// The project made from `recording`, opened as the app opens it, with its mic's sound key.
-fn open(
+pub(crate) fn open(
     dir: &Path,
     recording: &Path,
 ) -> (AppState, crate::project::OpenedProject, PathBuf, String) {

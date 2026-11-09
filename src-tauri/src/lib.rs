@@ -26,6 +26,8 @@ pub mod own_library;
 mod perf;
 pub mod playback;
 pub mod preset;
+#[cfg(test)]
+mod preview_mock;
 pub mod project;
 pub mod proposals;
 pub mod publish;

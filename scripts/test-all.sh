@@ -65,6 +65,12 @@ if ((quick)); then
   skip "front-end build" "--quick"
 else
   step "front-end build"   bash -c 'cd front-end && npm run --silent build'
+  # The UI with a canned backend, screenshotted (front-end/preview-screenshots/); needs Playwright.
+  if (cd front-end && node -e "require('playwright')" >/dev/null 2>&1); then
+    step "front-end preview screenshots" bash -c 'cd front-end && npm run --silent build:preview && npm run --silent screenshots'
+  else
+    skip "front-end preview screenshots" "no Playwright (npm i --no-save playwright)"
+  fi
 fi
 if command -v python3 >/dev/null 2>&1; then
   step "doc links"         python3 scripts/check_doc_links.py --all

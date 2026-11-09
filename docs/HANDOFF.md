@@ -170,8 +170,10 @@ Carried over from the PC's memory notes. Treat as settled; don't re-ask.
 
 ## Proposal: preview builds of the front end
 
-So George can look at UI changes on his phone without the desktop app. Not set up (no accounts
-were created).
+So George can look at UI changes on his phone without the desktop app. Steps 1, 2 and 4 are
+built (CL-10, 9 Nov): `npm run build:preview` runs the UI on canned answers that the real commands
+wrote for the fixture project, the preview shows a real exported frame, and CI uploads phone and
+desktop screenshots as `ui-screenshots`. Hosting (step 3) is not set up: no accounts were created.
 
 1. Add a mock for `@tauri-apps/api`'s `invoke` and `listen` in `front-end/src/lib/ipc.ts`
    behind `import.meta.env.VITE_MOCK_IPC`: canned answers for `open_project`, `project_status`,

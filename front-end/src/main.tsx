@@ -9,6 +9,11 @@ if (import.meta.env.DEV) {
   (window as unknown as { __aeroProjectStore?: typeof useProjectStore }).__aeroProjectStore = useProjectStore;
 }
 
+// Preview builds (`npm run build:preview`): a canned backend stands in for the desktop app.
+if (import.meta.env.VITE_MOCK_IPC === "1") {
+  await import("./mock/install");
+}
+
 const root = document.getElementById("root");
 if (root) {
   ReactDOM.createRoot(root).render(
