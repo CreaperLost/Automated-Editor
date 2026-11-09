@@ -267,7 +267,7 @@ pub fn timeline_view(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                         .into_iter()
                         .filter_map(|w| {
                             let (a, b) = (w.edited_start_us?, w.edited_end_us?);
-                            (b > from && a < to).then(|| (a, b, w.word.id, w.word.text))
+                            (b > from && a < to).then_some((a, b, w.word.id, w.word.text))
                         })
                         .collect()
                 }

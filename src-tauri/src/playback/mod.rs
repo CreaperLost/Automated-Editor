@@ -278,9 +278,7 @@ impl PlaybackOwner {
         self.play_anchor = None;
         self.audio = None;
         self.state = PlaybackState::Paused;
-        if self.duration_us == 0 {
-            self.state = PlaybackState::Ended;
-        } else if self.position_us >= self.duration_us {
+        if self.duration_us == 0 || self.position_us >= self.duration_us {
             self.state = PlaybackState::Ended;
         } else if self.state == PlaybackState::Ended || self.state == PlaybackState::Closed {
             self.state = PlaybackState::Paused;

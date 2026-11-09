@@ -5030,47 +5030,44 @@ fn graphic_set_parts(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 )
             });
         }
-        match (&args.short, args.slot) {
-            (Some(wanted), Some(slot)) => {
-                let now = current(ctx)?;
-                let (title, shorts, size) = with_reader(ctx.state, |reader| {
-                    let document = reader.document();
-                    let mut shorts = document.shorts.clone();
-                    let short = shorts
-                        .iter_mut()
-                        .find(|s| s.id == *wanted || s.title.eq_ignore_ascii_case(wanted.trim()))
-                        .ok_or_else(|| format!("No short {wanted} (see shorts)"))?;
-                    let timeline = crate::shorts::short_timeline(document, short)?;
-                    let clips: Vec<String> = timeline
-                        .sequence
-                        .clips()
-                        .filter(|(_, c)| c.asset == args.graphic)
-                        .map(|(_, c)| c.id.clone())
-                        .collect();
-                    if clips.is_empty() {
-                        return Err(format!(
-                            "Graphic {} does not play in short \"{}\"",
-                            args.graphic, short.title
-                        ));
+        if let (Some(wanted), Some(slot)) = (&args.short, args.slot) {
+            let now = current(ctx)?;
+            let (title, shorts, size) = with_reader(ctx.state, |reader| {
+                let document = reader.document();
+                let mut shorts = document.shorts.clone();
+                let short = shorts
+                    .iter_mut()
+                    .find(|s| s.id == *wanted || s.title.eq_ignore_ascii_case(wanted.trim()))
+                    .ok_or_else(|| format!("No short {wanted} (see shorts)"))?;
+                let timeline = crate::shorts::short_timeline(document, short)?;
+                let clips: Vec<String> = timeline
+                    .sequence
+                    .clips()
+                    .filter(|(_, c)| c.asset == args.graphic)
+                    .map(|(_, c)| c.id.clone())
+                    .collect();
+                if clips.is_empty() {
+                    return Err(format!(
+                        "Graphic {} does not play in short \"{}\"",
+                        args.graphic, short.title
+                    ));
+                }
+                for clip in clips {
+                    if slot == crate::shorts::GraphicSlot::Full {
+                        short.layout.graphic_slots.remove(&clip);
+                    } else {
+                        short.layout.graphic_slots.insert(clip, slot);
                     }
-                    for clip in clips {
-                        if slot == crate::shorts::GraphicSlot::Full {
-                            short.layout.graphic_slots.remove(&clip);
-                        } else {
-                            short.layout.graphic_slots.insert(clip, slot);
-                        }
-                    }
-                    let size = crate::shorts::graphic_box(document, short, slot);
-                    Ok((short.title.clone(), shorts, size))
-                })?;
-                commands::project_shorts_set_impl(ctx.state, now.handle, now.revision, shorts)?;
-                lines.push(format!(
-                    "In short \"{title}\" it plays {}, in {}.",
-                    slot.describe(),
-                    crate::shorts::describe_box(size)
-                ));
-            }
-            _ => {}
+                }
+                let size = crate::shorts::graphic_box(document, short, slot);
+                Ok((short.title.clone(), shorts, size))
+            })?;
+            commands::project_shorts_set_impl(ctx.state, now.handle, now.revision, shorts)?;
+            lines.push(format!(
+                "In short \"{title}\" it plays {}, in {}.",
+                slot.describe(),
+                crate::shorts::describe_box(size)
+            ));
         }
         if let Some(length) = args.length_us {
             let now = current(ctx)?;

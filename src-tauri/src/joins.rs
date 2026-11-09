@@ -343,8 +343,7 @@ pub fn risky(root: &Path, document: &EditDocument, max: usize) -> Vec<(u64, Stri
         }
         let last = words
             .iter()
-            .filter(|w| w.source_end_us <= prev.source_end && w.source_end_us > prev.source_start)
-            .last();
+            .rfind(|w| w.source_end_us <= prev.source_end && w.source_end_us > prev.source_start);
         let first = words.iter().find(|w| {
             w.source_start_us >= next.source_start && w.source_start_us < next.source_end
         });
