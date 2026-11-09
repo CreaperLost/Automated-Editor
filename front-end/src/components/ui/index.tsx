@@ -155,6 +155,56 @@ export interface SegmentOption<T extends string | number> {
   disabled?: boolean;
 }
 
+/**
+ * Arrow keys, Home and End within a group of choices (radio group, tab list): moves to the
+ * next enabled choice and picks it, so the group is one Tab stop (GAP-028). Handled keys stop
+ * here and never reach the editor's shortcuts. Returns whether it handled the key.
+ */
+export function groupKey<T>(
+  event: React.KeyboardEvent<HTMLElement>,
+  values: T[],
+  enabled: (index: number) => boolean,
+  current: number,
+  pick: (value: T) => void,
+): boolean {
+  const n = values.length;
+  if (n === 0) return false;
+  const step = (from: number, by: number) => {
+    for (let i = 1; i <= n; i++) {
+      const at = (((from + by * i) % n) + n) % n;
+      if (enabled(at)) return at;
+    }
+    return from;
+  };
+  let next: number;
+  switch (event.key) {
+    case "ArrowRight":
+    case "ArrowDown":
+      next = step(current, 1);
+      break;
+    case "ArrowLeft":
+    case "ArrowUp":
+      next = step(current, -1);
+      break;
+    case "Home":
+      next = step(-1, 1);
+      break;
+    case "End":
+      next = step(n, -1);
+      break;
+    default:
+      return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  if (next !== current && enabled(next)) {
+    pick(values[next]);
+    const buttons = event.currentTarget.querySelectorAll<HTMLElement>("[data-choice]");
+    buttons[next]?.focus();
+  }
+  return true;
+}
+
 /** A row of mutually exclusive choices. */
 export function Segmented<T extends string | number>({
   options,
@@ -172,19 +222,33 @@ export function Segmented<T extends string | number>({
   label: string;
   className?: string;
 }) {
+  const current = options.findIndex((o) => o.value === value);
+  // The one Tab stop: the chosen option, else the first that can be chosen.
+  const stop = current >= 0 && !options[current].disabled ? current : options.findIndex((o) => !o.disabled);
   return (
     <div
       role="radiogroup"
       aria-label={label}
       className={cn("inline-flex rounded-control border border-studio-700 bg-studio-900 p-0.5 gap-0.5", className)}
+      onKeyDown={(event) =>
+        groupKey(
+          event,
+          options.map((o) => o.value),
+          (i) => !options[i].disabled,
+          current >= 0 ? current : stop,
+          onChange,
+        )
+      }
     >
-      {options.map((option) => {
+      {options.map((option, index) => {
         const selected = option.value === value;
         return (
           <button
             key={String(option.value)}
             type="button"
             role="radio"
+            data-choice=""
+            tabIndex={index === stop ? 0 : -1}
             aria-checked={selected}
             title={option.title}
             disabled={option.disabled}
@@ -228,15 +292,32 @@ export function Tabs<T extends string>({
   className?: string;
   size?: "sm" | "md";
 }) {
+  const current = items.findIndex((i) => i.value === value);
+  const stop = Math.max(0, current);
   return (
-    <div role="tablist" aria-label={label} className={cn("flex items-stretch gap-1", className)}>
-      {items.map(({ value: item, label: text, icon: Icon, title }) => {
+    <div
+      role="tablist"
+      aria-label={label}
+      className={cn("flex items-stretch gap-1", className)}
+      onKeyDown={(event) =>
+        groupKey(
+          event,
+          items.map((i) => i.value),
+          () => true,
+          stop,
+          onChange,
+        )
+      }
+    >
+      {items.map(({ value: item, label: text, icon: Icon, title }, index) => {
         const selected = item === value;
         return (
           <button
             key={item}
             type="button"
             role="tab"
+            data-choice=""
+            tabIndex={index === stop ? 0 : -1}
             aria-selected={selected}
             title={title}
             onClick={() => onChange(item)}
@@ -554,20 +635,84 @@ export const Field: React.FC<{
 
 /** A message in a strip: errors, notices. */
 /** The dimmed screen behind a dialog. A press on it, not on the dialog, calls `onClose`. */
-export const DialogBackdrop: React.FC<{ onClose?: () => void; selectable?: boolean; children: React.ReactNode }> = ({
-  onClose,
-  selectable,
-  children,
-}) => (
-  <div
-    className={cn("fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4", !selectable && "select-none")}
-    onPointerDown={(event) => {
-      if (event.target === event.currentTarget) onClose?.();
-    }}
-  >
-    {children}
-  </div>
-);
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/** Whether a dialog is open: editor shortcuts stay off while one is (GAP-019). */
+export function modalOpen(): boolean {
+  return typeof document !== "undefined" && document.querySelector("[data-modal]") !== null;
+}
+
+/**
+ * The backdrop of a dialog, and its keyboard boundary (GAP-019): focus moves into the dialog
+ * when it opens, Tab stays inside it, keys pressed in it never reach the editor's shortcuts, and
+ * focus goes back where it was when it closes.
+ */
+export const DialogBackdrop: React.FC<{
+  onClose?: () => void;
+  selectable?: boolean;
+  /** The dialog's accessible name, for dialogs whose own box has none. */
+  label?: string;
+  children: React.ReactNode;
+}> = ({ onClose, selectable, label, children }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const box = ref.current;
+    if (!box) return;
+    const before = document.activeElement as HTMLElement | null;
+    if (!box.contains(document.activeElement)) {
+      const first = box.querySelector<HTMLElement>("[autofocus]") ?? box.querySelector<HTMLElement>(FOCUSABLE);
+      (first ?? box).focus({ preventScroll: true });
+    }
+    return () => {
+      if (before && document.contains(before)) before.focus({ preventScroll: true });
+    };
+  }, []);
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    // Escape still reaches the window, where dialogs close themselves.
+    if (event.key !== "Escape") event.stopPropagation();
+    if (event.key !== "Tab") return;
+    const box = ref.current;
+    if (!box) return;
+    const stops = Array.from(box.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+      (el) => el.offsetParent !== null || el === document.activeElement,
+    );
+    if (stops.length === 0) {
+      event.preventDefault();
+      return;
+    }
+    const first = stops[0];
+    const last = stops[stops.length - 1];
+    const at = document.activeElement;
+    if (event.shiftKey && (at === first || at === box)) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && at === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+  return (
+    <div
+      ref={ref}
+      data-modal=""
+      tabIndex={-1}
+      role={label ? "dialog" : undefined}
+      aria-modal={label ? true : undefined}
+      aria-label={label}
+      className={cn(
+        "fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4 outline-none",
+        !selectable && "select-none",
+      )}
+      onKeyDown={onKeyDown}
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) onClose?.();
+      }}
+    >
+      {children}
+    </div>
+  );
+};
 
 export const Notice: React.FC<{
   tone?: "danger" | "accent" | "suggest" | "neutral";

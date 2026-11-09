@@ -88,7 +88,7 @@ export const PublishDialog: React.FC<{
   const field = "w-full rounded-control border border-studio-700 bg-studio-950 px-2 text-label text-studio-100 placeholder:text-studio-600 focus:outline-none focus:border-accent";
 
   return createPortal(
-    <DialogBackdrop onClose={onClose} selectable>
+    <DialogBackdrop onClose={onClose} selectable label="Publish">
       <div className="w-[760px] max-w-full max-h-[92vh] overflow-y-auto rounded-panel border border-studio-700 bg-studio-900 shadow-xl">
         <div className="flex items-center gap-2 px-5 py-4 border-b border-studio-800">
           <Upload className="w-5 h-5 text-studio-300" />
