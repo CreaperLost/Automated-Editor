@@ -317,7 +317,13 @@ pub fn stage_states(root: &Path, production: &Production) -> Vec<StageStatus> {
             let state = match production.stages.get(stage.id) {
                 Some(record) if file_hash(root, index).is_some() => {
                     let current = input_hash(root, production, index);
-                    if earlier_ok && current.as_deref() == Some(record.inputs.as_str()) {
+                    // Its own file must still be the one it wrote: a file replaced or damaged
+                    // since is not certified by the old record (GAP-027).
+                    let output = file_hash(root, index);
+                    if earlier_ok
+                        && current.as_deref() == Some(record.inputs.as_str())
+                        && output.as_deref() == Some(record.output.as_str())
+                    {
                         StageState::Done
                     } else {
                         StageState::Stale
@@ -497,6 +503,31 @@ mod tests {
             .into_iter()
             .map(|s| s.state)
             .collect()
+    }
+
+    /// GAP-027: a stage's own file replaced, damaged or removed after it finished is no longer
+    /// Done, and neither is what follows; the exact bytes back make it Done again.
+    #[test]
+    fn a_stage_whose_own_file_changed_is_not_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = create(dir.path(), "Receipts", Format::Short, &[]).unwrap();
+        for id in ["research", "script", "review"] {
+            write_stage(&root, id, &format!("{{\"{id}\": 1}}"));
+        }
+        let done = vec![StageState::Done; 3];
+        assert_eq!(states(&root)[..3], done[..]);
+        let review = root.join(DIR).join(STAGES[2].file);
+        for replaced in [Some("{\"review\": 2}"), Some("{not json"), None] {
+            match replaced {
+                Some(text) => std::fs::write(&review, text).unwrap(),
+                None => std::fs::remove_file(&review).unwrap(),
+            }
+            let now = states(&root);
+            assert_eq!(now[..2], done[..2]);
+            assert_ne!(now[2], StageState::Done, "{replaced:?}");
+        }
+        std::fs::write(&review, "{\"review\": 1}").unwrap();
+        assert_eq!(states(&root)[..3], done[..]);
     }
 
     #[test]

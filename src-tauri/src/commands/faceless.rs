@@ -527,6 +527,13 @@ pub fn faceless_voice_impl(
     // What this narration is made from: it can only certify this reviewed script.
     let inputs = faceless::ready_inputs(&root, "voice").ok_or("Review the script first")?;
     let script = faceless::script::load_script(&root).ok_or("Write the script first")?;
+    // The review itself, not only its stage record: of this script, with no blocker open,
+    // before anything is paid for.
+    let review = faceless::script::load_review(&root).ok_or("Review the script first")?;
+    if review.script != faceless::script::script_hash(&script) || !review.open_blockers().is_empty()
+    {
+        return Err("The review is not of this script, or a blocker is still open".into());
+    }
     let profile = faceless::profile::load(&crate::transcript::settings::config_dir())?;
     let speak = voice::OpenRouter::from_keychain().ok_or(
         "Voice needs an OpenRouter key: add it in Settings → Transcription (it is the same key)",
