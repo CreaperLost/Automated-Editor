@@ -31,6 +31,7 @@ pub mod proposals;
 pub mod publish;
 pub mod ranges;
 pub mod render;
+pub mod render_cli;
 pub mod secrets;
 pub mod sequence;
 pub mod shorts;

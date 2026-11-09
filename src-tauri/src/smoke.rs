@@ -1,6 +1,7 @@
 //! End-to-end smoke test of the core pipeline on the committed fixtures in `test/fixtures/`:
 //! a recording (screen + mic) opens as a project, the silence pass finds the pause, the cut
-//! is applied as the app applies it, and the edit exports to an MP4 that ffprobe checks.
+//! is applied as the app applies it, and `aeroedits render` exports the saved edit to an MP4
+//! (with stills) that ffprobe checks.
 //!
 //! Runs headless on Linux: it needs FFmpeg/ffprobe and a wgpu adapter (a software Vulkan
 //! adapter such as Mesa's lavapipe is enough). Without them it skips with a message, unless
@@ -13,13 +14,10 @@ use crate::commands::{
     detect_silence_impl, open_project_impl, project_sequence_edit_impl, AppState,
 };
 use crate::dsp::SilenceConfig;
-use crate::export::{prepare_job, run_export, ExportOwner, ExportSettings};
 use crate::fixtures::TestProject;
-use crate::media::EncoderGate;
-use crate::project::{JournalRecord, ProjectReader, TrackDescriptor, TrackType};
+use crate::project::{JournalRecord, TrackDescriptor, TrackType};
 use crate::sequence::edit::SequenceEdit;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 
 const FIXTURE_US: u64 = 6_000_000;
 
@@ -225,30 +223,25 @@ fn smoke_recording_silence_cut_exports_a_shorter_mp4() {
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent).unwrap();
     }
-    let document = ProjectReader::open(&folder).unwrap().document().clone();
-    let settings = ExportSettings {
-        width: 320,
-        height: 180,
-        fps: 30,
-        destination: Some(output.to_string_lossy().into()),
-        ..ExportSettings::default()
-    };
-    let captured = prepare_job(
-        &folder,
-        "smoke",
-        document,
-        settings,
-        &mut ExportOwner::new(),
-    )
-    .unwrap_or_else(|status| panic!("prepare failed: {:?}", status.failure));
-    let written = run_export(
-        &captured,
-        &AtomicBool::new(false),
-        |_, _| {},
-        &EncoderGate::new(),
-    )
-    .unwrap_or_else(|failure| panic!("export failed: {failure:?}"));
+    // Export the saved edit as `aeroedits render <project> --out x.mp4 --frames 3` does.
+    let request = crate::render_cli::parse(&[
+        folder.to_string_lossy().into(),
+        "--out".into(),
+        output.to_string_lossy().into(),
+        "--size".into(),
+        "320x180".into(),
+        "--frames".into(),
+        "3".into(),
+    ])
+    .unwrap();
+    let rendered = crate::render_cli::render(&request, |_, _| {})
+        .unwrap_or_else(|message| panic!("render failed: {message}"));
+    let written = rendered.video.clone();
     crate::media::release_decoders();
+    assert_eq!(rendered.stills.len(), 3, "{rendered:?}");
+    for still in rendered.stills.iter().chain(&rendered.contact_sheet) {
+        assert!(still.is_file(), "no still {still:?}");
+    }
     assert!(written.is_file(), "export wrote {written:?}");
 
     // Check the file the way a person would with ffprobe.

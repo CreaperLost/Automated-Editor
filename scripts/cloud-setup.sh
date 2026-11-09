@@ -54,7 +54,7 @@ fi
 
 command -v ffmpeg >/dev/null || die "ffmpeg missing after apt install"
 command -v ffprobe >/dev/null || die "ffprobe missing after apt install"
-ffmpeg -hide_banner -encoders 2>/dev/null | grep -q ' libx264 ' || die "this ffmpeg has no libx264 encoder"
+grep -q ' libx264 ' <<<"$(ffmpeg -hide_banner -encoders 2>/dev/null)" || die "this ffmpeg has no libx264 encoder"
 
 # --- Rust -------------------------------------------------------------------------------------
 # rust-toolchain.toml pins the version; rustup installs it on first use.

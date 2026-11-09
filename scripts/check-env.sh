@@ -30,7 +30,7 @@ row node    node --version
 row npm     npm --version
 row ffmpeg  bash -c 'ffmpeg -hide_banner -version'
 row ffprobe bash -c 'ffprobe -hide_banner -version'
-if ffmpeg -hide_banner -encoders 2>/dev/null | grep -q ' libx264 '; then
+if grep -q ' libx264 ' <<<"$(ffmpeg -hide_banner -encoders 2>/dev/null)"; then
   printf '  %-12s %s\n' libx264 "present"
 else
   printf '  %-12s MISSING (exports need it)\n' libx264; fail=1
