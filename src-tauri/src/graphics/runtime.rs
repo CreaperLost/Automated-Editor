@@ -440,8 +440,12 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// The system's own `tar` unpacks zip and tar archives alike (bsdtar on Windows and macOS).
+/// GNU tar (Linux: cloud sessions and CI) reads no zip, so `unzip` does those there.
 fn unpack(archive: &Path, into: &Path) -> Result<(), String> {
-    let tar = if cfg!(windows) {
+    let zip = archive.to_string_lossy().contains(".zip");
+    let tar = if cfg!(target_os = "linux") && zip {
+        PathBuf::from("unzip")
+    } else if cfg!(windows) {
         std::env::var_os("SystemRoot")
             .map(|root| PathBuf::from(root).join("System32").join("tar.exe"))
             .unwrap_or_else(|| PathBuf::from("tar.exe"))
@@ -451,11 +455,12 @@ fn unpack(archive: &Path, into: &Path) -> Result<(), String> {
         PathBuf::from("tar")
     };
     let mut command = Command::new(&tar);
+    if tar == Path::new("unzip") {
+        command.args(["-q", "-o"]).arg(archive).arg("-d").arg(into);
+    } else {
+        command.arg("-xf").arg(archive).arg("-C").arg(into);
+    }
     command
-        .arg("-xf")
-        .arg(archive)
-        .arg("-C")
-        .arg(into)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());

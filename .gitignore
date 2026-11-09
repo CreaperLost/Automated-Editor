@@ -4,6 +4,8 @@ Thumbs.db
 # Node
 node_modules/
 dist/
+dist-preview/
+preview-screenshots/
 build/
 
 # Rust / Cargo (Cargo.lock is committed: the app builds with exactly these crates)

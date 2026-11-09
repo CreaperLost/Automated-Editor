@@ -61,6 +61,18 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npx tsc --noEmit
       - run: npm run test:cleanup
+      # The UI in a browser with a canned backend (src/mock/), screenshotted at phone and
+      # desktop widths, so a PR shows what its screens look like.
+      - run: npm run build:preview
+      - run: npm install --no-save --no-audit --no-fund playwright@1.56.1 && npx playwright install --with-deps chromium
+      - run: npm run screenshots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-screenshots
+          path: front-end/preview-screenshots/
+          if-no-files-found: ignore
+          retention-days: 14
 
   rust-tests:
     name: Rust tests

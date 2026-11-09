@@ -88,8 +88,9 @@ bash scripts/test-all.sh
 The fixture smoke test renders through the library without a running GUI. Keep an output with
 `AEROEDITS_SMOKE_OUT=/tmp/smoke.mp4`, then inspect it with
 `bash scripts/snapshot-frames.sh /tmp/smoke.mp4 6`. Missing FFmpeg/adapter skips unless the
-require flags in `.env.example` are set. No API key is required for tests. A standalone project
-render CLI remains planned; `aeroedits do` connects to the running editor.
+require flags in `.env.example` are set. No API key is required for tests. `aeroedits render
+<project> --out x.mp4 --frames 6` exports a saved project with no app; `aeroedits do` connects to
+the running editor.
 
 ### Prerequisites
 

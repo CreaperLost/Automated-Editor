@@ -23,10 +23,10 @@ mock paid services.
 | <a id="cl-4"></a>CL-4 | Linked-cut restoration: [GAP-017](gap.md#gap-017) | Done 8 Nov. Restore independently offset audio/video source clocks from either track without substituting source time. |
 | <a id="cl-5"></a>CL-5 | Remaining correctness follow-ups | Done 9 Nov: every remaining gap.md finding is fixed or decided (see each record). |
 | <a id="cl-6"></a>CL-6 | Remove lib clippy warnings, then gate | Mechanical changes only; `cargo clippy --lib -- -D warnings` and relevant tests pass. Historical ~60 is not a fresh warning count. |
-| <a id="cl-7"></a>CL-7 | Broaden `src-tauri/src/smoke.rs` | Caption pixels, portrait export, output −14 LUFS ±1, mouth-noise mute; fixture-only, under 20 s each on lavapipe. Existing smoke covers silence/cut/export. |
-| <a id="cl-8"></a>CL-8 | Standalone headless render CLI | `aeroedits render <project> --out x.mp4` (+ `--frames N`) without a running app; smoke exercises CLI. Current `do` uses the running app. |
-| <a id="cl-9"></a>CL-9 | Linux real graphics gate in CI | Cache runtime; every bundled template passes `graphics_gate_real`, frames as artifacts. Needs runtime hosts/cache access. |
-| <a id="cl-10"></a>CL-10 | Mocked-IPC frontend preview/screenshots | [Design](HANDOFF.md#proposal-preview-builds-of-the-front-end); start/editor/Export at phone and desktop widths as CI artifacts. Hosting is a separate George decision. |
+| <a id="cl-7"></a>CL-7 | Broaden `src-tauri/src/smoke.rs` | Done 9 Nov: silence cut; mouth-noise found and muted plus −14 LUFS ±1 normalize; 9:16 project exports 720×1280 with caption pixels. About 2 s each on lavapipe. |
+| <a id="cl-8"></a>CL-8 | Standalone headless render CLI | Done 9 Nov: `aeroedits render <project> [--out x.mp4] [--short ID] [--size WxH] [--fps N] [--frames N]` (`src-tauri/src/render_cli.rs`); the smoke test exports through it. |
+| <a id="cl-9"></a>CL-9 | Linux real graphics gate in CI | Done 9 Nov: `graphics-gate.yml` (graphics PRs or by hand) caches the runtime and gates all 17 templates (about 5 min); contact sheets as `graphics-gate-sheets`. Linux unzips Chrome with `unzip` (GNU tar reads no zip). |
+| <a id="cl-10"></a>CL-10 | Mocked-IPC frontend preview/screenshots | Done 9 Nov: `npm run build:preview` (canned backend in `front-end/src/mock/`, written by the real commands) and `npm run screenshots`; CI's front-end job uploads `ui-screenshots` (start, editor, Export; phone and desktop). Hosting is a separate George decision. |
 | <a id="cl-11"></a>CL-11 | Execute FCL-7 | Same sound-bed task below; measured output loudness/ducking, no separate backlog copy. |
 | <a id="cl-12"></a>CL-12 | Execute FCL-9 | Same release/source-validation task below, mocked service first. |
 | <a id="cl-13"></a>CL-13 | Execute FCL-3's Script panel | Same UI task below; typecheck and mounted tests, screenshot when CL-10 exists. |

@@ -30,7 +30,9 @@ step() {  # step <name> <command...>
     results+=("PASS  $name ($((SECONDS - start))s)")
     local smoke
     smoke="$(grep -hE '^(smoke:|SKIPPED)' "$log" || true)"
-    [[ -n "$smoke" && -n "${GITHUB_ACTIONS:-}" ]] && echo "::notice title=smoke test::$smoke"
+    if [[ -n "$smoke" && -n "${GITHUB_ACTIONS:-}" ]]; then
+      while IFS= read -r line; do echo "::notice title=smoke test::$line"; done <<<"$smoke"
+    fi
   else
     results+=("FAIL  $name ($((SECONDS - start))s)"); failed=1
     # On GitHub Actions, the failure's last lines as an annotation: annotations are readable
@@ -55,7 +57,7 @@ elif have_vulkan || [[ "$(uname -s)" != "Linux" ]]; then
 else
   skip "GPU tests" "no Vulkan driver (apt install mesa-vulkan-drivers)"
 fi
-step "smoke: recording -> silence cut -> export -> ffprobe" \
+step "smoke: silence cut, mouth noise, loudness, portrait captions -> export -> ffprobe" \
   bash -c 'cd src-tauri && cargo test --lib smoke -- --nocapture'
 step "front-end typecheck" bash -c 'cd front-end && npx tsc --noEmit'
 step "front-end tests"     bash -c 'cd front-end && npm run --silent test:cleanup'
@@ -63,6 +65,12 @@ if ((quick)); then
   skip "front-end build" "--quick"
 else
   step "front-end build"   bash -c 'cd front-end && npm run --silent build'
+  # The UI with a canned backend, screenshotted (front-end/preview-screenshots/); needs Playwright.
+  if (cd front-end && node -e "require('playwright')" >/dev/null 2>&1); then
+    step "front-end preview screenshots" bash -c 'cd front-end && npm run --silent build:preview && npm run --silent screenshots'
+  else
+    skip "front-end preview screenshots" "no Playwright (npm i --no-save playwright)"
+  fi
 fi
 if command -v python3 >/dev/null 2>&1; then
   step "doc links"         python3 scripts/check_doc_links.py --all

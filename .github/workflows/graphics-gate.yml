@@ -1,0 +1,64 @@
+name: Graphics gate
+
+# Every bundled HyperFrames template through the real gate (Node + HyperFrames + headless
+# Chrome, the runtime the app downloads), on a PR that changes graphics, or by hand. The
+# contact sheets (16:9, 9:16, long text, split part) are uploaded as `graphics-gate-sheets`.
+on:
+  pull_request:
+    paths:
+      - src-tauri/graphics/**
+      - src-tauri/src/graphics/**
+      - .github/workflows/graphics-gate.yml
+  workflow_dispatch:
+
+concurrency:
+  group: graphics-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  gate:
+    name: graphics_gate_real (every template)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: linux-cloud-check
+          save-if: false
+      - name: Set up the VM (no desktop shell libraries)
+        run: bash scripts/cloud-setup.sh
+        env:
+          AEROEDITS_SKIP_TAURI_DEPS: "1"
+      # About 200 MB; its versions are pinned in runtime.rs.
+      - name: Cache the graphics runtime
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/graphics-runtime
+          key: graphics-runtime-${{ runner.os }}-${{ hashFiles('src-tauri/src/graphics/runtime.rs', 'src-tauri/graphics/runtime/package-lock.json') }}
+      - name: Install the runtime (once per version)
+        working-directory: src-tauri
+        run: cargo test --lib graphics_runtime_installs -- --ignored --nocapture
+        env:
+          AEROEDITS_GRAPHICS_RUNTIME: ${{ runner.temp }}/graphics-runtime
+      - name: Gate every template
+        working-directory: src-tauri
+        run: cargo test --lib graphics_gate_real -- --ignored --nocapture
+        env:
+          AEROEDITS_GRAPHICS_RUNTIME: ${{ runner.temp }}/graphics-runtime
+          GATE_SHEETS: ${{ runner.temp }}/sheets
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: graphics-gate-sheets
+          path: ${{ runner.temp }}/sheets/
+          if-no-files-found: ignore
+          retention-days: 14

@@ -32,7 +32,7 @@ fi
 # Core: a C toolchain for build scripts, pkg-config, FFmpeg (the app's media backend; Ubuntu's
 # build has libx264), and Mesa's lavapipe so wgpu has a software Vulkan adapter for the
 # compositor/export tests and the smoke test (no real GPU in a VM).
-packages=(build-essential pkg-config curl ca-certificates git xz-utils file
+packages=(build-essential pkg-config curl ca-certificates git xz-utils file unzip
           ffmpeg mesa-vulkan-drivers libvulkan1 libssl-dev)
 # The Tauri desktop shell (`cargo check --features tauri-app`), same list as .github/workflows/ci.yml.
 if [[ "${AEROEDITS_SKIP_TAURI_DEPS:-0}" != "1" ]]; then
@@ -54,7 +54,7 @@ fi
 
 command -v ffmpeg >/dev/null || die "ffmpeg missing after apt install"
 command -v ffprobe >/dev/null || die "ffprobe missing after apt install"
-ffmpeg -hide_banner -encoders 2>/dev/null | grep -q ' libx264 ' || die "this ffmpeg has no libx264 encoder"
+grep -q ' libx264 ' <<<"$(ffmpeg -hide_banner -encoders 2>/dev/null)" || die "this ffmpeg has no libx264 encoder"
 
 # --- Rust -------------------------------------------------------------------------------------
 # rust-toolchain.toml pins the version; rustup installs it on first use.

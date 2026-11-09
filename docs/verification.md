@@ -62,6 +62,18 @@ H.264 320×180 plus AAC. The prior six-frame inspection saw clock values 0.367, 
 not a newly viewed output. `src-tauri/src/smoke.rs` skips missing FFmpeg/adapter unless
 `AEROEDITS_REQUIRE_FFMPEG` / `AEROEDITS_REQUIRE_GPU` is set; CI sets them for the cloud run.
 
+9 Nov (CL-7/CL-8), cloud VM, lavapipe: the smoke test exports through `aeroedits render`, and
+two more smoke tests pass. A quiet voice (−30 LUFS) with a click at 3.0 s: the mouth-noise pass
+finds it, muting it leaves peak 0.013 there (room 0.022; 0.147 unmuted), and normalize gives
+−13.6 LUFS. A 9:16 project asked for 1280×720 exports 720×1280; “HELLO” is 4939 white pixels
+at 0.5 s and none at 3.0 s. Viewed frames: white outlined caption text low in the frame over
+the test pattern, “HELLO” then “HELLO WORLD”, none after.
+
+9 Nov (CL-9), cloud VM: the graphics runtime installs on Linux once Chrome's zip is unpacked
+with `unzip`, and `graphics_gate_real` passes all 17 bundled templates plus the one-off in 313 s.
+Viewed the headline sheet: clean at 16:9 and 9:16 with long text; in the split part the source
+line touches the subtitle's second line (the gate passes it).
+
 ## Faceless and publish acceptance
 
 Implementation present is not production acceptance. No live calls were made in this pass.

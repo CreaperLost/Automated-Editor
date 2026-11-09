@@ -28,7 +28,8 @@ Implementation: [Architecture](architecture.md). Work: [Roadmap](ROADMAP.md).
 Run `bash scripts/cloud-setup.sh`, then `bash scripts/check-env.sh`, then the touched checks
 or `bash scripts/test-all.sh`. The scripts and CI workflows are authoritative. A GUI is not
 available in a headless session; use the library smoke export and frame snapshots.
-`aeroedits do`/`--mcp-stdio` connect to a running app; a standalone render CLI remains CL-8.
+`aeroedits do`/`--mcp-stdio` connect to a running app; `aeroedits render <project> --out x.mp4
+--frames 6` exports a saved project with no app running (CL-8).
 
 No API key is needed to build/test; unit tests keep using mocks. **Keys for cloud sessions
 (George, 8 Nov):** `OPENROUTER_API_KEY` (the main one), `TREG_API_KEY` and `ZERNIO_API_KEY` are
@@ -174,8 +175,10 @@ Carried over from the PC's memory notes. Treat as settled; don't re-ask.
 
 ## Proposal: preview builds of the front end
 
-So George can look at UI changes on his phone without the desktop app. Not set up (no accounts
-were created).
+So George can look at UI changes on his phone without the desktop app. Steps 1, 2 and 4 are
+built (CL-10, 9 Nov): `npm run build:preview` runs the UI on canned answers that the real commands
+wrote for the fixture project, the preview shows a real exported frame, and CI uploads phone and
+desktop screenshots as `ui-screenshots`. Hosting (step 3) is not set up: no accounts were created.
 
 1. Add a mock for `@tauri-apps/api`'s `invoke` and `listen` in `front-end/src/lib/ipc.ts`
    behind `import.meta.env.VITE_MOCK_IPC`: canned answers for `open_project`, `project_status`,
