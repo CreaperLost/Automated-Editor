@@ -14,9 +14,9 @@ Implementation: [Architecture](architecture.md). Work: [Roadmap](ROADMAP.md).
   labels were removed. The original handoff recorded `AI-Automation` and PR #57 as the base;
   their current remote status has not been queried.
 - [gap.md](gap.md) is the canonical issue report: the P1s (GAP-004/008/011/016/017/037) were fixed
-  on 8 Nov (with GAP-015), remaining
-  correctness/performance findings, and explicitly labelled investigations. GAP-005/006 now
-  pass focused tests; GAP-001/014 describe replaced implementations, not open missing wiring.
+  on 8 Nov (with GAP-015) and every other finding on 9 Nov, except GAP-030/031/032, which need
+  George's judgement or real recordings. GAP-005/006 pass focused tests; GAP-001/014 describe
+  replaced implementations.
 - [Fresh focused results](verification.md#documentation-reconciliation-8-november-2026) and
   [remaining FCL/PUB acceptance](verification.md#faceless-and-publish-acceptance) are separate.
   No new full suite, native walkthrough, listening check, paid call or live upload was run.

@@ -2,14 +2,12 @@
 
 Reconciled 8 November 2026 against local HEAD `be7179c` on `claude/cloud-prep`.
 The working tree was clean, including untracked files, before this documentation-only pass.
-No application fixes were made. This is the canonical detailed issue report;
+That pass made no application fixes. This is the canonical detailed issue report;
 [Roadmap](ROADMAP.md) owns feature work and scheduling, not a second bug list.
 
-**27 findings remain open: 0 P1, 24 P2, 3 P3.** GAP-001/014 are superseded;
-GAP-005/006 are closed after current focused checks; the six P1s and GAP-015 are fixed. Four older follow-ups are retained as
-GAP-029..032 below (2 P2, 2 P3); their evidence labels distinguish traced limitations from
-investigations awaiting reproduction. The deeper review adds GAP-033 onward. Overlapping
-IDs created during concurrent documentation work were reconciled; each ID below is unique.
+**3 findings remain open: 0 P1, 1 P2, 2 P3** (GAP-030/031/032, which need George's judgement
+or real recordings). GAP-001/014 are superseded; GAP-005/006 are closed after current focused
+checks; every other finding was fixed on 8–9 Nov on branch `claude/project-thread-sc2z5d`. Records stay in place for their anchors.
 
 P1 means serious correctness, data loss or security risk; P2 means a normal-priority bug,
 material performance issue or validation gap; P3 means lower impact. **Code-traced** means
@@ -19,27 +17,16 @@ Scratch paths under `src-tauri/target/` in those records are local evidence, not
 Performance work counts are not measured desktop latency. Test scope and fresh results are in
 [Verification](verification.md#documentation-reconciliation-8-november-2026).
 
-The six P1s (GAP-004/008/011/016/017/037) and GAP-015 are fixed; their records stay in place
-for their anchors. Next: persistence/retry races and export input consistency. Browser regression coverage
-(GAP-024) should accompany lifecycle and keyboard fixes.
-
 ## Open findings
 
 | Area | Finding IDs |
 |---|---|
-| Voice and stage identity | [027](#gap-027) |
-| Publish and package persistence | [002](#gap-002) |
-| Export history, input capture and cost | [007](#gap-007), [009](#gap-009), [012](#gap-012), [018](#gap-018), [021](#gap-021) |
-| Sequence and captions | [022](#gap-022), [023](#gap-023) |
-| Async UI and mixer state | [003](#gap-003), [010](#gap-010), [020](#gap-020), [025](#gap-025) |
-| Research validation | [013](#gap-013), [026](#gap-026) |
-| Keyboard and test coverage | [019](#gap-019), [024](#gap-024), [028](#gap-028) |
-| Retained ownership and review follow-ups | [029](#gap-029), [030](#gap-030), [031](#gap-031), [032](#gap-032) |
-| Evidence refresh and import workflow | [033](#gap-033), [034](#gap-034) |
-| Durable metadata, chapter drafts and thumbnails | [035](#gap-035), [036](#gap-036), [038](#gap-038) |
+| Review and graphics follow-ups | [030](#gap-030), [031](#gap-031), [032](#gap-032) |
 
 <a id="gap-002"></a>
-### GAP-002 — P2: Release changes are silently treated as retries of the old upload
+### GAP-002 — Fixed: Release changes are silently treated as retries of the old upload
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** An upload with the same file, channel and title but a different release or package (description, tags, AI label, category, thumbnail) is refused with what to do: change it in YouTube Studio or the Zernio dashboard, or change the title for a new upload. Each upload records a `package_digest`. Updating an existing post is not built. Test: `a_changed_release_or_package_is_not_taken_for_a_retry`. The record below is the original finding.
 
 **Location:** `src-tauri/src/publish/mod.rs`, `upload_key` and the early-return branch in `upload`; `front-end/src/components/export/PublishDialog.tsx`, release selector and `upload`.
 
@@ -58,7 +45,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Should AeroEdits support publishing a saved draft and changing an existing release, or should those operations be directed to the external dashboard?
 
 <a id="gap-003"></a>
-### GAP-003 — P2: Late faceless-status responses can restore the wrong project's state
+### GAP-003 — Fixed: Late faceless-status responses can restore the wrong project's state
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** `facelessStore` applies only its latest refresh and clears on a path change, including `refresh(null)`. Test: `front-end/tests/raceFixes.test.ts`. The record below is the original finding.
 
 **Location:** `front-end/src/stores/facelessStore.ts`, `refresh`; `front-end/src/App.tsx`, `refreshFaceless` effect; `front-end/src/components/faceless/FacelessPanel.tsx`, refresh effect.
 
@@ -98,7 +87,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** When a new take changes duration, should later graphics be retimed automatically or marked stale for manual/agent repair?
 
 <a id="gap-007"></a>
-### GAP-007 — P2: Export-list polling repeatedly hashes the whole edit for every historical export while holding project locks
+### GAP-007 — Fixed: Export-list polling repeatedly hashes the whole edit for every historical export while holding project locks
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** `export_deliveries` keeps each fingerprint between polls while the revision, short, transcripts and graphics stay the same, so a poll no longer rehashes every edit. The list never overlaps its own polls and drops answers for an earlier project. The record below is the original finding.
 
 **Location:** `src-tauri/src/commands/mod.rs`, `export_deliveries_impl`; `src-tauri/src/export/deliveries.rs`, `fingerprint` and `list`; `front-end/src/components/export/DeliveryList.tsx`, 500 ms polling effect.
 
@@ -138,7 +129,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Can users deliberately retain narration after purely visual/script annotation changes? If so, define a spoken-content fingerprint separately from review metadata; do not allow changed spoken words to reuse old acceptance.
 
 <a id="gap-009"></a>
-### GAP-009 — P2: Export freshness ignores transcript changes that alter rendered captions
+### GAP-009 — Fixed: Export freshness ignores transcript changes that alter rendered captions
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** Fingerprints include the transcript words (when captions or a file show them) and the graphic files. Subtitle, transcript and sound exports record one too. Test: `outputs_are_recorded_newest_first_and_marked_older_than_the_edit`. The record below is the original finding.
 
 **Location:** `src-tauri/src/export/deliveries.rs`, `fingerprint` and `list`; `src-tauri/src/commands/transcript.rs`, `modify_transcript` / `transcript_run_impl`; `src-tauri/src/export/mod.rs`, caption-cue loading.
 
@@ -155,7 +148,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Should “current” mean identical rendered content or any changed project input? The former avoids false positives but requires target-specific dependency tracking.
 
 <a id="gap-010"></a>
-### GAP-010 — P2: Audio adjustments have no save queue and collide on the same edit revision
+### GAP-010 — Fixed: Audio adjustments have no save queue and collide on the same edit revision
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** Audio changes go through one queue (`front-end/src/lib/audioQueue.ts`) and each applies to the latest audio settings and revision. Test: `front-end/tests/raceFixes.test.ts`. The record below is the original finding.
 
 **Location:** `front-end/src/lib/trackMix.ts`, `saveTrackMix`; `front-end/src/components/audio/AudioSection.tsx`, `setPolish`, `update`, and `setVolume`; `src-tauri/src/commands/mod.rs`, `project_audio_update_impl`.
 
@@ -191,7 +186,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Should an already-started upload continue for A after the editor switches to B? Continuing can be supported safely by retaining A's captured context; new actions from A's stale dialog should still be rejected.
 
 <a id="gap-012"></a>
-### GAP-012 — P2: Export-history writes race with Forget and subtitle/audio exports
+### GAP-012 — Fixed: Export-history writes race with Forget and subtitle/audio exports
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** `exports.json` is written atomically under one lock for record and forget; a failed record is written to the export's log. The record below is the original finding.
 
 **Location:** `src-tauri/src/export/deliveries.rs`, `work`, `record`, `forget`, and `write`; `src-tauri/src/commands/mod.rs`, `export_forget_impl` and `export_file_impl`.
 
@@ -208,7 +205,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Should failure to save history mark a successful media export as “completed with warning,” or retain a pending history record for retry? The file's successful creation should remain accurately represented.
 
 <a id="gap-013"></a>
-### GAP-013 — P2: Research URL validation does not bind the connection to the address it checked
+### GAP-013 — Fixed: Research URL validation does not bind the connection to the address it checked
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** Each hop is fetched with a client pinned to the addresses its public check resolved (`resolve_public`, `resolve_to_addrs`). A proxy set on the computer still looks hosts up itself; the proxy is then what keeps requests off the local network. The record below is the original finding.
 
 **Location:** `src-tauri/src/faceless/evidence.rs`, `check_public`, `WebPages::new`, and `WebPages::page`.
 
@@ -286,7 +285,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Should restoration automatically include arbitrary manually linked clips, or only partners with a demonstrably matching cut? What should happen when a linked partner has no removed source media at that boundary?
 
 <a id="gap-018"></a>
-### GAP-018 — P2: An export's captured edit does not capture its mutable caption and graphic inputs
+### GAP-018 — Fixed: An export's captured edit does not capture its mutable caption and graphic inputs
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** An export captures the transcripts its captions read when Export is clicked (`ExportInputs`) and fails with a clear message if a placed graphic's files changed before it finished. The record below is the original finding.
 
 **Location:** `src-tauri/src/export/mod.rs`, `CapturedExport`, `prepare_job`, `run_export_logged`, and `SceneEvaluator::caption_at` (around lines 205, 2316, 2577, 2655, and 1803).
 
@@ -303,7 +304,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Does Export mean the project as it was when clicked or the latest content when rendering begins? The UI, job identity, input capture, and freshness checks should implement the same policy.
 
 <a id="gap-019"></a>
-### GAP-019 — P2: Editor shortcuts bypass modal and transcript interaction boundaries
+### GAP-019 — Fixed: Editor shortcuts bypass modal and transcript interaction boundaries
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** `DialogBackdrop` moves focus in, keeps Tab inside, stops its keys from reaching the editor and returns focus on close. Timeline shortcuts ignore handled keys and every key while a dialog is open; a transcript cut stops its key. Escape still closes every open dialog listening for it. Test: `front-end/tests/dialogKeys.test.ts`. The record below is the original finding.
 
 **Location:** `front-end/src/components/ui/index.tsx`, `DialogBackdrop`; `front-end/src/components/timeline/TimelineStudio.tsx`, global keydown listener around lines 1170–1188; `PublishDialog.tsx`, `AccountsDialog.tsx`, and other backdrop consumers.
 
@@ -322,7 +325,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Which global shortcuts, if any, should remain active while dialogs are open? Should a long-running upload/export dialog be dismissible without cancelling the work? Define those separately from keyboard focus behavior.
 
 <a id="gap-020"></a>
-### GAP-020 — P2: Late source suggestions can add an account to the wrong platform's watchlist
+### GAP-020 — Fixed: Late source suggestions can add an account to the wrong platform's watchlist
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** Source suggestions are kept per platform, stale answers are dropped, and Add uses the suggestion's own platform. The record below is the original finding.
 
 **Location:** `front-end/src/components/faceless/SourcesPanel.tsx`, `suggest`, platform-change effect, and suggestion Add handler.
 
@@ -341,7 +346,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Should discovery continue and cache results after the user leaves a tab, or should switching cancel it when the provider supports cancellation?
 
 <a id="gap-021"></a>
-### GAP-021 — P2: Graphic playback rereads and reparses source metadata for every frame
+### GAP-021 — Fixed: Graphic playback rereads and reparses source metadata for every frame
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** The scene evaluator keeps each graphic clip's spec per graphics generation. A graphic or style change bumps the generation; a style file edited by hand outside the app is picked up at the next change, as renders already were. Test: `a_graphic_spec_is_built_once_until_graphics_change`. The record below is the original finding.
 
 **Category:** Performance improvement opportunity; redundant work is confirmed in source, but its contribution to dropped frames has not been measured.
 
@@ -360,7 +367,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Which file-watcher or command events are authoritative for externally edited graphics and styles? Cache lifetime must preserve that live-editing behavior.
 
 <a id="gap-022"></a>
-### GAP-022 — P2: Automatic captions include muted speech that the output does not play
+### GAP-022 — Fixed: Automatic captions include muted speech that the output does not play
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** Automatic captions read only tracks that are heard (not muted, gain above zero). A sound chosen for captions is still read on a muted track, as a guide track. Clip gain and noise mutes do not hide words. Test: `captions_follow_the_speech_that_plays`. The record below is the original finding.
 
 **Location:** `src-tauri/src/export/mod.rs`, `caption_candidates` and `caption_track_cues`; `src-tauri/src/sequence/clock.rs`, `stream_entries`; compare `src-tauri/src/media/audio.rs`, `lanes`.
 
@@ -377,7 +386,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Should an explicitly selected caption source remain active when muted? Should moment-level noise mutes or clip gain also suppress words, or only whole-track mute?
 
 <a id="gap-023"></a>
-### GAP-023 — P2: Repeated source footage loses captions after its first timeline occurrence
+### GAP-023 — Fixed: Repeated source footage loses captions after its first timeline occurrence
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** `sequence::clock::layers` places every play of a moment; captions read each layer, so a repeated line is captioned each time. A caption edit applies to every play of that word. Test: `captions_follow_the_speech_that_plays`. The record below is the original finding.
 
 **Location:** `src-tauri/src/sequence/clock.rs`, `entries` and its `used` source-range set; `src-tauri/src/export/mod.rs`, `caption_track_cues`; `src-tauri/src/project/revision.rs`, `transcript_clock`.
 
@@ -394,7 +405,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Should editing one repeated caption change every instance or only the selected occurrence? How should competing simultaneous speakers be presented?
 
 <a id="gap-024"></a>
-### GAP-024 — P2: Frontend checks do not exercise real React lifecycle, focus, or browser interaction
+### GAP-024 — Fixed: Frontend checks do not exercise real React lifecycle, focus, or browser interaction
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** `front-end/tests/dom.ts` mounts the real React DOM renderer on a jsdom page, in StrictMode, with keys that bubble to the window. The first suite covers dialog focus and keys and choice-group arrows. More suites (package autosave with Upload, project switching) can now be added on it. Runs in `npm run test:cleanup` and so in CI. The record below is the original finding.
 
 **Category:** Test-quality improvement; this is a coverage limitation, not a claim that the existing unit tests are invalid.
 
@@ -411,7 +424,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for implementation:** Which smoke flows need the actual desktop WebView, and which can run in a normal browser with IPC mocks? Keep native rendering/OS integration checks separate from browser-only behavior.
 
 <a id="gap-025"></a>
-### GAP-025 — P2: A preview frame can become stale during image decoding and still be painted after a seek
+### GAP-025 — Fixed: A preview frame can become stale during image decoding and still be painted after a seek
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** A decoded preview frame is checked again against the current generation before it is painted. The record below is the original finding.
 
 **Location:** `front-end/src/components/canvas/NativePreviewHost.tsx`, `useEngineFrames`, `offer`, and the asynchronous `draw` loop.
 
@@ -428,7 +443,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Should the old image be retained or cleared while waiting for the first frame of a new target? Whichever policy is chosen, a newly completed obsolete decode should not overwrite the intended state.
 
 <a id="gap-026"></a>
-### GAP-026 — P2: Numeric evidence checks miss negative values and do not preserve units or magnitude
+### GAP-026 — Fixed: Numeric evidence checks miss negative values and do not preserve units or magnitude
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** `numbers` compares quantities: sign, scale (thousand, million, billion, k, bn), percent and percentage points. 1,000 and 1k are equal. Units, currency and what is counted are not compared, so a pass still does not prove the sentence. Test: `a_number_keeps_its_sign_scale_and_kind`. The record below is the original finding.
 
 **Category:** Confirmed validation gap, with an additional content-quality improvement for quantity semantics. Passing this check should not be presented as factual verification of a claim.
 
@@ -447,7 +464,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Which numerical transformations may an author make without a new source or explicit derivation? Should derived values be represented as calculations with cited inputs rather than ordinary quoted facts?
 
 <a id="gap-027"></a>
-### GAP-027 — P2: Stage completion ignores the recorded output hash and can certify a replaced or corrupt result
+### GAP-027 — Fixed: Stage completion ignores the recorded output hash and can certify a replaced or corrupt result
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** A stage is done only when its own file still hashes to the recorded output. Voicing refuses a script whose review is stale or blocked, before any paid call. Test: `a_stage_whose_own_file_changed_is_not_done`. The record below is the original finding.
 
 **Location:** `src-tauri/src/faceless/mod.rs`, `StageRecord.output`, `record_stage`, and `stage_states`; `src-tauri/src/commands/faceless.rs`, review prerequisite in `faceless_voice_impl`.
 
@@ -464,7 +483,9 @@ for their anchors. Next: persistence/retry races and export input consistency. B
 **Questions for the fix:** Which direct file edits should be automatically revalidated, and which require an explicit review/acceptance step? Should corruption be a distinct error state rather than ordinary Stale?
 
 <a id="gap-028"></a>
-### GAP-028 — P3: Shared tab and segmented controls expose selection semantics without matching keyboard navigation
+### GAP-028 — Fixed: Shared tab and segmented controls expose selection semantics without matching keyboard navigation
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** `Segmented` and `Tabs` are one Tab stop; arrows, Home and End move and pick at once, skipping disabled options. Tabs do not own their panels, so no panel ids were added. Test: `front-end/tests/keyboard.test.ts`, `dialogKeys.test.ts`. The record below is the original finding.
 
 **Category:** UI/accessibility improvement, confirmed by inspection of the shared controls; no assistive-technology walkthrough was performed.
 
@@ -487,7 +508,9 @@ claiming a new desktop reproduction. Feature requests such as resumable jobs and
 remain in [Roadmap](ROADMAP.md#unscheduled-capabilities).
 
 <a id="gap-029"></a>
-### GAP-029 — P2: Checkpoint save lacks a locked project-identity recheck
+### GAP-029 — Fixed: Checkpoint save lacks a locked project-identity recheck
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** The checkpoint save checks the project handle again under the lock. Test: `a_checkpoint_for_another_project_is_refused_under_the_lock`. The record below is the original finding.
 
 **Status / affected paths:** Code-traced race window, not executed. AGT-1 follow-up in
 `src-tauri/src/mcp/tools.rs` (`call`), `mcp/actions.rs` (`checkpoint`, save branch),
@@ -630,7 +653,9 @@ remains [GAP-027](#gap-027); the removed missing-wiring report is not proof of e
 ## Additional findings from the deeper review
 
 <a id="gap-033"></a>
-### GAP-033 — P2: Refreshing a corrected source keeps facts whose evidence is no longer present
+### GAP-033 — Fixed: Refreshing a corrected source keeps facts whose evidence is no longer present
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** Fetching a page again rechecks its facts: one the page no longer supports is taken out and listed as refused (a script citing it then fails its check). A page that cannot be read again keeps what was read before. Test: `a_corrected_page_drops_the_facts_it_no_longer_supports`. The record below is the original finding.
 
 **Location:** `src-tauri/src/faceless/evidence.rs`, `fetch`, `save`, and `add_facts`; `front-end/src/components/faceless/ResearchView.tsx`, checked-facts presentation.
 
@@ -647,7 +672,9 @@ remains [GAP-027](#gap-027); the removed missing-wiring report is not proof of e
 **Questions for the fix:** Should a fact supported by an older source snapshot remain usable with an explicit as-of date, or must all production facts match the latest successful fetch? How should an unavailable source differ from a corrected one?
 
 <a id="gap-034"></a>
-### GAP-034 — P2: An unrelated edit during media import discards the completed extraction and requires starting over
+### GAP-034 — Fixed: An unrelated edit during media import discards the completed extraction and requires starting over
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** An import refuses a stale revision before extracting, then commits its assets onto the latest revision instead of failing after the work is done. The record below is the original finding.
 
 **Category:** Performance/workflow improvement opportunity. Stale-revision rejection protects consistency, but it makes otherwise independent import work unnecessarily fragile.
 
@@ -666,7 +693,9 @@ remains [GAP-027](#gap-027); the removed missing-wiring report is not proof of e
 **Questions for implementation:** Should importing media be allowed to commit after unrelated edits? How long should prepared results survive if a user postpones the retry?
 
 <a id="gap-035"></a>
-### GAP-035 — P2: Unreadable publish metadata is silently treated as empty and overwritten by the next save
+### GAP-035 — Fixed: Unreadable publish metadata is silently treated as empty and overwritten by the next save
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** Write paths and the upload journal read package and upload files strictly: a damaged file is reported and never overwritten. Publish shows the problem. Test: `a_damaged_package_file_is_never_overwritten`. The record below is the original finding.
 
 **Location:** `src-tauri/src/files.rs`, `load_json`; `src-tauri/src/publish/mod.rs`, `packages`, `save_package`, and similarly the upload-history reader.
 
@@ -683,7 +712,9 @@ remains [GAP-027](#gap-027); the removed missing-wiring report is not proof of e
 **Questions for the fix:** Should the app keep one last-known-good version or a small rotating backup? Which settings are safe to reset automatically, and which require explicit recovery?
 
 <a id="gap-036"></a>
-### GAP-036 — P2: An unrelated project revision discards an unfinished chapter title
+### GAP-036 — Fixed: An unrelated project revision discards an unfinished chapter title
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** Chapter drafts reset on a project change and stay until their title is saved or the chapter is gone. The record below is the original finding.
 
 **Location:** `front-end/src/components/chapters/ChaptersPanel.tsx`, `titles` state, revision effect, and `commitTitle`.
 
@@ -719,7 +750,9 @@ remains [GAP-027](#gap-027); the removed missing-wiring report is not proof of e
 **Questions for the fix:** Should a second request join the existing job, queue, or fail with its status? Are independent alternative takes intended, and who may choose the active one? The current single-production output should not silently intermix them.
 
 <a id="gap-038"></a>
-### GAP-038 — P2: Thumbnail replacement deletes the existing image before the replacement commits
+### GAP-038 — Fixed: Thumbnail replacement deletes the existing image before the replacement commits
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** A new thumbnail is written under a new name, the package is saved, then old files are removed; a failed save removes the new file. Test: `a_failed_thumbnail_replacement_keeps_the_old_one`. The record below is the original finding.
 
 **Location:** `src-tauri/src/publish/mod.rs`, `set_thumbnail`, especially removal of both extension variants before `write_atomic` and package save.
 
