@@ -674,9 +674,7 @@ export const DialogBackdrop: React.FC<{
     if (event.key !== "Tab") return;
     const box = ref.current;
     if (!box) return;
-    const stops = Array.from(box.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
-      (el) => el.offsetParent !== null || el === document.activeElement,
-    );
+    const stops = Array.from(box.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => !el.closest("[hidden], [inert]"));
     if (stops.length === 0) {
       event.preventDefault();
       return;
