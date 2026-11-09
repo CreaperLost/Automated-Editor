@@ -2380,6 +2380,10 @@ pub fn project_media_import_impl(
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         require_handle(reader, &project_handle)?;
+        // A request already stale is refused before any extraction.
+        if reader.document().revision != expected_revision {
+            return Err("The project changed: import again".into());
+        }
         reader.root().to_path_buf()
     };
     let chosen: Vec<std::path::PathBuf> = paths.iter().map(std::path::PathBuf::from).collect();
@@ -2410,7 +2414,11 @@ pub fn project_media_import_impl(
         }
         return Err("The project was closed during the import".into());
     };
-    reader.add_assets(expected_revision, assets)
+    // Importing only adds assets: an edit made while the files were extracted doesn't undo the
+    // work. They are added to the edit as it is now (GAP-034); the history still checks ids
+    // and limits.
+    let latest = reader.document().revision;
+    reader.add_assets(latest, assets)
 }
 
 pub fn project_media_remove_impl(

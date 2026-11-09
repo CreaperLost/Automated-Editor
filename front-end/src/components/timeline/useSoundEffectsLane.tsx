@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Sparkles, Volume2, VolumeX } from "lucide-react";
+import { updateAudio } from "../../lib/audioQueue";
 import { api } from "../../lib/ipc";
-import { DEFAULT_AUDIO_SETTINGS, DEFAULT_SOUND_EFFECTS, type SoundEffect } from "../../lib/types";
+import { DEFAULT_SOUND_EFFECTS, type SoundEffect } from "../../lib/types";
 import { useProjectStore } from "../../stores/projectStore";
 import { HDR_BUTTON, HeaderRow, MIN_LANE_PX, type TimelineView } from "./timelineShared";
 
@@ -23,7 +24,6 @@ export function useSoundEffectsLane({
   onError: (message?: string) => void;
 }) {
   const openedProject = useProjectStore((s) => s.openedProject);
-  const applyOpenedProject = useProjectStore((s) => s.applyOpenedProject);
   const [effects, setEffects] = useState<SoundEffect[]>([]);
   const settings = openedProject?.audio?.soundEffects ?? DEFAULT_SOUND_EFFECTS;
   const hasRecording = !!openedProject?.assets.some((a) => a.kind === "recording");
@@ -55,16 +55,9 @@ export function useSoundEffectsLane({
   if (!openedProject || !hasRecording) return { header: null, lane: null };
 
   const toggleMute = () => {
-    void api
-      .projectAudioUpdate(openedProject.projectHandle, openedProject.revision, {
-        ...DEFAULT_AUDIO_SETTINGS,
-        ...openedProject.audio,
-        soundEffects: { ...settings, muted: !settings.muted },
-      })
-      .then((updated) => {
-        applyOpenedProject(updated);
-        onError(undefined);
-      })
+    const muted = !settings.muted;
+    void updateAudio((audio) => ({ ...audio, soundEffects: { ...settings, ...audio.soundEffects, muted } }))
+      .then(() => onError(undefined))
       .catch((err) => onError(String(err)));
   };
   const whooshes = effects.length - clicks;

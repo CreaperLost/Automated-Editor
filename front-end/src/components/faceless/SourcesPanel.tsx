@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
 import { Button, IconButton, Segmented, cn } from "../ui";
 import { api } from "../../lib/ipc";
@@ -27,8 +27,13 @@ export const SourcesPanel: React.FC<{ onError: (message: string) => void }> = ({
   const [list, setList] = useState<FacelessWatched[]>([]);
   const [handle, setHandle] = useState("");
   const [group, setGroup] = useState("creators");
-  const [candidates, setCandidates] = useState<FacelessCandidate[] | null>(null);
+  // Suggestions belong to the platform they were asked for (GAP-020).
+  const [found, setFound] = useState<{ platform: Platform; candidates: FacelessCandidate[] } | null>(null);
+  const candidates = found?.platform === platform ? found.candidates : null;
+  const setCandidates = (update: (cs: FacelessCandidate[] | null) => FacelessCandidate[] | null) =>
+    setFound((f) => (f ? { ...f, candidates: update(f.candidates) ?? [] } : f));
   const [finding, setFinding] = useState(false);
+  const asked = useRef(0);
 
   const load = useCallback(
     () =>
@@ -41,7 +46,11 @@ export const SourcesPanel: React.FC<{ onError: (message: string) => void }> = ({
   useEffect(() => {
     if (open) void load();
   }, [open, load]);
-  useEffect(() => setCandidates(null), [platform]);
+  useEffect(() => {
+    asked.current++;
+    setFound(null);
+    setFinding(false);
+  }, [platform]);
 
   const run = async (work: Promise<unknown>) => {
     try {
@@ -53,17 +62,18 @@ export const SourcesPanel: React.FC<{ onError: (message: string) => void }> = ({
   };
 
   const suggest = async () => {
+    const mine = ++asked.current;
+    const askedFor = platform;
     setFinding(true);
     try {
-      setCandidates(
-        platform === "x"
-          ? await api.facelessSuggestX()
-          : await api.facelessFindCreators(platform as "tiktok" | "instagram"),
-      );
+      const result =
+        askedFor === "x" ? await api.facelessSuggestX() : await api.facelessFindCreators(askedFor as "tiktok" | "instagram");
+      // A platform switched since: this answer is for a list no longer shown.
+      if (mine === asked.current) setFound({ platform: askedFor, candidates: result });
     } catch (err) {
-      onError(String(err));
+      if (mine === asked.current) onError(String(err));
     } finally {
-      setFinding(false);
+      if (mine === asked.current) setFinding(false);
     }
   };
 
@@ -169,7 +179,13 @@ export const SourcesPanel: React.FC<{ onError: (message: string) => void }> = ({
                       size="sm"
                       label={`Watch @${c.handle}`}
                       onClick={() =>
-                        void run(api.facelessWatchAdd(platform, c.handle, platform === "x" ? group : undefined, c.name, c.followers)).then(
+                        void run(api.facelessWatchAdd(
+                            c.platform as Platform,
+                            c.handle,
+                            c.platform === "x" ? group : undefined,
+                            c.name,
+                            c.followers,
+                          )).then(
                           () => setCandidates((cs) => cs?.filter((x) => x.handle !== c.handle) ?? null),
                         )
                       }

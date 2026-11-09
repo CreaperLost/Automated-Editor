@@ -6,6 +6,7 @@ import { Button, Notice, Switch } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { saveTrackMix } from "../../lib/trackMix";
+import { updateAudio } from "../../lib/audioQueue";
 import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { clipName, clipRole, trackLabel } from "../../lib/sequence";
 import {
@@ -304,11 +305,7 @@ const MouthClickCleanup: React.FC = () => {
     setBusy(true);
     setError(undefined);
     try {
-      const next = await api.projectAudioUpdate(current.projectHandle, current.revision, {
-        ...DEFAULT_AUDIO_SETTINGS, ...current.audio, mouthClicks, mouthClickStrength: strength,
-      });
-      if (run === generation.current && useProjectStore.getState().openedProject?.projectHandle === current.projectHandle)
-        useProjectStore.getState().applyOpenedProject(next);
+      await updateAudio((audio) => ({ ...audio, mouthClicks, mouthClickStrength: strength }));
     } catch (err) {
       if (run === generation.current) setError(String(err));
     } finally {
@@ -394,17 +391,15 @@ export const AudioSection: React.FC = () => {
   const update = (patch: Partial<AudioSettings>) => {
     const next = { ...draft, ...patch };
     setDraft(next);
-    settingsSave.schedule((opened) => {
-      // Track volumes are saved on their own; keep the latest ones.
-      void api
-        .projectAudioUpdate(opened.projectHandle, opened.revision, {
-          ...next,
-          tracks: opened.audio?.tracks,
-        })
-        .then((updated) => {
-          applyOpenedProject(updated);
-          setError(undefined);
-        })
+    settingsSave.schedule(() => {
+      // Only the settings changed here: track mixes are saved on their own, in the same queue.
+      const changed = Object.keys(patch) as (keyof AudioSettings)[];
+      void updateAudio((audio) => {
+        const merged = { ...audio };
+        for (const key of changed) (merged as Record<string, unknown>)[key] = next[key];
+        return merged;
+      })
+        .then(() => setError(undefined))
         .catch((err) => setError(String(err)));
     });
   };
