@@ -162,7 +162,7 @@ pub fn snapshot(video: &Path, count: u32) -> Result<(Vec<PathBuf>, PathBuf), Str
     let folder = video.with_file_name(format!("{stem} frames"));
     std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     let run = |args: &[&std::ffi::OsStr]| -> Result<(), String> {
-        let output = std::process::Command::new(&ffmpeg)
+        let output = std::process::Command::new(ffmpeg)
             .args(["-hide_banner", "-v", "error", "-y"])
             .args(args)
             .output()
