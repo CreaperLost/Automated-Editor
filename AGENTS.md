@@ -36,7 +36,7 @@ here: no copies of graphics, drafts, plans or notes. Graphics go into the projec
 | `src-tauri/src/preset/`, `style/` | Presets (what to do, `preset/methods/*.md`) and styles (how it looks) |
 | `src-tauri/src/graphics/` | HyperFrames graphics: runtime download, templates, render gate |
 | `src-tauri/src/faceless/`, `publish/` | Faceless explainer pipeline (FCL), package + Zernio upload (PUB) |
-| `src-tauri/src/smoke.rs` | Headless end-to-end smoke test (recording → silence cut → export → ffprobe) |
+| `src-tauri/src/smoke.rs` | Headless end-to-end smoke tests: silence cut, mouth-noise mute + loudness, portrait captions → `aeroedits render` → ffprobe |
 | `src-tauri/assets/` | Fonts, sounds, image library (compiled into the binary) |
 | `front-end/src/` | React UI; `lib/ipc.ts` wraps every backend command; zustand stores |
 | `test/fixtures/` | 6 s screen/voice/clip media (`scripts/make-fixtures.sh` regenerates) |
@@ -55,7 +55,7 @@ bash scripts/test-all.sh         # everything below; --quick skips the GPU set a
 | Rust format (gate) | `cd src-tauri && cargo fmt --check` (run `cargo fmt` before every commit touching Rust) |
 | Rust tests | `cd src-tauri && cargo test` (~800 tests; media tests need FFmpeg) |
 | GPU compositor/export tests | `cd src-tauri && cargo test --lib gpu -- --include-ignored` (software Vulkan via `mesa-vulkan-drivers`) |
-| Smoke test | `cd src-tauri && AEROEDITS_SMOKE_OUT=/tmp/smoke.mp4 cargo test --lib smoke -- --nocapture` |
+| Smoke test | `cd src-tauri && AEROEDITS_SMOKE_OUT=/tmp/smoke.mp4 AEROEDITS_SMOKE_DIR=/tmp/smoke cargo test --lib smoke -- --nocapture` (the other smoke exports go to the folder) |
 | Look at an output | `bash scripts/snapshot-frames.sh /tmp/smoke.mp4 6` then Read the PNGs / `contact-sheet.png` |
 | Render a project, no app | `cd src-tauri && cargo run --bin aeroedits -- render <project> --out /tmp/x.mp4 --frames 6` (prints the MP4, stills and contact sheet) |
 | Front-end | `cd front-end && npx tsc --noEmit && npm run test:cleanup && npm run build` (no ESLint configured; tests are node scripts, not vitest) |

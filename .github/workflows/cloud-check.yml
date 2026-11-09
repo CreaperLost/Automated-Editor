@@ -50,12 +50,15 @@ jobs:
           AEROEDITS_REQUIRE_FFMPEG: "1"
           AEROEDITS_REQUIRE_GPU: "1"
           AEROEDITS_SMOKE_OUT: ${{ runner.temp }}/smoke/smoke.mp4
-      - name: Frame snapshots of the smoke export
+          AEROEDITS_SMOKE_DIR: ${{ runner.temp }}/smoke
+      - name: Frame snapshots of the smoke exports
         if: always()
         run: |
-          if [ -f "$RUNNER_TEMP/smoke/smoke.mp4" ]; then
-            bash scripts/snapshot-frames.sh "$RUNNER_TEMP/smoke/smoke.mp4" 6 "$RUNNER_TEMP/smoke/frames"
-          fi
+          for video in "$RUNNER_TEMP"/smoke/*.mp4; do
+            [ -f "$video" ] || continue
+            name="$(basename "${video%.mp4}")"
+            bash scripts/snapshot-frames.sh "$video" 6 "$RUNNER_TEMP/smoke/$name-snapshots"
+          done
       - name: Upload the smoke export and its frames
         if: always()
         uses: actions/upload-artifact@v4
