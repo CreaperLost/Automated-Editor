@@ -5,9 +5,9 @@ The working tree was clean, including untracked files, before this documentation
 That pass made no application fixes. This is the canonical detailed issue report;
 [Roadmap](ROADMAP.md) owns feature work and scheduling, not a second bug list.
 
-**3 findings remain open: 0 P1, 1 P2, 2 P3** (GAP-030/031/032, which need George's judgement
-or real recordings). GAP-001/014 are superseded; GAP-005/006 are closed after current focused
-checks; every other finding was fixed on 8–9 Nov on branch `claude/project-thread-sc2z5d`. Records stay in place for their anchors.
+**No findings remain open.** GAP-001/014 are superseded; GAP-005/006 are closed after focused
+checks; GAP-032 was decided (keep old graphics); every other finding was fixed on 8–9 Nov on
+branch `claude/project-thread-sc2z5d`. Records stay in place for their anchors.
 
 P1 means serious correctness, data loss or security risk; P2 means a normal-priority bug,
 material performance issue or validation gap; P3 means lower impact. **Code-traced** means
@@ -19,9 +19,7 @@ Performance work counts are not measured desktop latency. Test scope and fresh r
 
 ## Open findings
 
-| Area | Finding IDs |
-|---|---|
-| Review and graphics follow-ups | [030](#gap-030), [031](#gap-031), [032](#gap-032) |
+None.
 
 <a id="gap-002"></a>
 ### GAP-002 — Fixed: Release changes are silently treated as retries of the old upload
@@ -535,7 +533,9 @@ the stale call and leave B's files unchanged. Check current-project save and aut
 barrier or injected dispatcher is needed to exercise the race; do not rely on sleep timing.
 
 <a id="gap-030"></a>
-### GAP-030 — P3: Sampled graphic checks cannot establish phone readability or continuous clearance
+### GAP-030 — Fixed: Sampled graphic checks cannot establish phone readability or continuous clearance
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** The check before export flags graphic text under 2.8% of the screen's short side (`graphic_text_size`, `Kind::GraphicTextSmall`), read from the composition's font sizes and the look's tokens. 2.8% is Apple's smallest recommended iOS text (11 pt) on a phone about 390 pt wide showing the video full width, either shape. Four templates' footnotes were raised to the label size so every built-in graphic passes (`built_in_graphics_are_readable_on_a_phone`). Text sized in em or % is not measured, and face clearance between samples is still sampled. The record below is the original finding.
 
 **Status / affected paths:** Confirmed coverage limit, not a newly reproduced overlap.
 `src-tauri/src/mcp/graphic_checks.rs` (`check_moments`, `bands_with_words`),
@@ -561,7 +561,9 @@ size is acceptable. Native frame/runtime access is needed for the visual checks.
 font size or continuous-clearance guarantee has been agreed.
 
 <a id="gap-031"></a>
-### GAP-031 — P2: Reworded restarts remain a review-coverage gap
+### GAP-031 — Fixed: Reworded restarts remain a review-coverage gap
+
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** A narrow rule flags a short phrase broken off on a word nothing ends on, then a pause and a new clause in other words (`reworded`). It only flags; the review decides. Tested on made-up sentences (`a_reworded_restart_is_flagged_and_a_pause_to_think_is_not`); the labelled English recording is still not in the repo, so it was not measured on real speech. The record below is the original finding.
 
 **Status / affected paths:** Historical labelled case plus current code inspection; not rerun
 on real audio. `src-tauri/src/ai/candidates.rs`, `transcript/edit.rs`, `ai/review_probe.rs`,
@@ -588,7 +590,9 @@ word timing. Decide whether this optional rewording should merely be flagged; no
 auto-cut policy is authorized by the old observation.
 
 <a id="gap-032"></a>
-### GAP-032 — P3: Unplaced graphic-folder retention needs a safe ownership check
+### GAP-032 — Decided: Unplaced graphic-folder retention needs a safe ownership check
+
+**Decided (9 Nov, branch `claude/project-thread-sc2z5d`):** George, 9 Nov: keep old graphics. Graphic folders and versions are never cleaned up automatically, whether or not the timeline uses them. The record below is the original finding.
 
 **Status / affected paths:** Retained investigation, not a newly measured leak.
 `src-tauri/src/project/history.rs`, `project/revision.rs`, `graphics/mod.rs`, `graphics/versions.rs`.

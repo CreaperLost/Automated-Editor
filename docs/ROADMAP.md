@@ -21,7 +21,7 @@ mock paid services.
 | <a id="cl-2"></a>CL-2 | Package close/autosave/upload: [GAP-015](gap.md#gap-015), [GAP-016](gap.md#gap-016) | Done 8 Nov (save queue tests; mounted dialog tests still wait on CL-15). Latest draft persists to its owner; Upload awaits successful validation/save. |
 | <a id="cl-3"></a>CL-3 | Narration identity/input binding: [GAP-004](gap.md#gap-004), [GAP-008](gap.md#gap-008) | Done 8 Nov, with GAP-037's one-job guard. Changed fake take imports new audio/transcript and clears acceptance; stale script cannot certify old narration. |
 | <a id="cl-4"></a>CL-4 | Linked-cut restoration: [GAP-017](gap.md#gap-017) | Done 8 Nov. Restore independently offset audio/video source clocks from either track without substituting source time. |
-| <a id="cl-5"></a>CL-5 | Remaining correctness follow-ups | Done 9 Nov: every remaining gap.md finding except GAP-030/031/032 is fixed (see each record). Those three need George or real recordings. |
+| <a id="cl-5"></a>CL-5 | Remaining correctness follow-ups | Done 9 Nov: every remaining gap.md finding is fixed or decided (see each record). |
 | <a id="cl-6"></a>CL-6 | Remove lib clippy warnings, then gate | Mechanical changes only; `cargo clippy --lib -- -D warnings` and relevant tests pass. Historical ~60 is not a fresh warning count. |
 | <a id="cl-7"></a>CL-7 | Broaden `src-tauri/src/smoke.rs` | Caption pixels, portrait export, output −14 LUFS ±1, mouth-noise mute; fixture-only, under 20 s each on lavapipe. Existing smoke covers silence/cut/export. |
 | <a id="cl-8"></a>CL-8 | Standalone headless render CLI | `aeroedits render <project> --out x.mp4` (+ `--frames N`) without a running app; smoke exercises CLI. Current `do` uses the running app. |
