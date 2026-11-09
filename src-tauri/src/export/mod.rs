@@ -310,6 +310,12 @@ pub struct SceneEvaluator {
     sources: std::cell::RefCell<Sources>,
     /// Pointer pictures by file, decoded once.
     cursor_images: std::cell::RefCell<CursorImages>,
+    /// Each graphic clip's render spec, with the graphics generation it was made at: building
+    /// one reads and parses the graphic's source and its style, too slow for every frame
+    /// (GAP-021). A change to a graphic or a style bumps the generation.
+    graphic_specs: std::cell::RefCell<
+        std::collections::HashMap<String, (u64, std::sync::Arc<crate::graphics::render::Spec>)>,
+    >,
     /// What stands in for a graphic still rendering, by its name and size.
     graphic_placeholders:
         std::cell::RefCell<std::collections::HashMap<(String, u32, u32), VideoFrame>>,
@@ -591,6 +597,7 @@ impl SceneEvaluator {
             zooms: Default::default(),
             sources: Default::default(),
             cursor_images: Default::default(),
+            graphic_specs: Default::default(),
             graphic_placeholders: Default::default(),
             shortcut_badge: Default::default(),
             window_crops: Default::default(),
@@ -1200,15 +1207,29 @@ impl SceneEvaluator {
         let full_camera = self
             .full_camera
             .get_or_init(|| crate::graphics::full_camera_ranges(&self.document));
-        let spec = render::Spec::for_clip(
-            &self.root,
-            &self.document,
-            asset,
-            clip,
-            (self.width, self.height),
-            full_camera,
-            self.graphics_quality,
-        );
+        let generation = render::generation();
+        let cached = self
+            .graphic_specs
+            .borrow()
+            .get(&clip.id)
+            .filter(|(made_at, _)| *made_at == generation)
+            .map(|(_, spec)| spec.clone());
+        let spec = cached.unwrap_or_else(|| {
+            let spec = std::sync::Arc::new(render::Spec::for_clip(
+                &self.root,
+                &self.document,
+                asset,
+                clip,
+                (self.width, self.height),
+                full_camera,
+                self.graphics_quality,
+            ));
+            self.graphic_specs
+                .borrow_mut()
+                .insert(clip.id.clone(), (generation, spec.clone()));
+            spec
+        });
+        let spec = &*spec;
         // Never past a render's last frame.
         let last_frame = 1_000_000 / spec.fps as u64;
         if let Some(path) = self.pinned_graphics.get(&spec) {
@@ -4785,6 +4806,65 @@ mod tests {
         }
         // The preview of a 4K project still plays the draft.
         assert_eq!(spec((3840, 2160), Quality::Draft).density, 1);
+    }
+
+    /// A graphic's spec is built once per clip, not for every frame, and again only after a
+    /// graphic or style changed (GAP-021).
+    #[test]
+    fn a_graphic_spec_is_built_once_until_graphics_change() {
+        use crate::graphics::render::{Quality, Spec};
+        let dir = tempfile::tempdir().unwrap();
+        let mut document = overlays_document(dir.path(), 1);
+        let card =
+            crate::graphics::create(dir.path(), "title", None, &serde_json::Map::new()).unwrap();
+        let clip = Clip {
+            mix: Default::default(),
+            id: "g1".into(),
+            asset: card.id.clone(),
+            stream: "picture".into(),
+            start_us: 0,
+            in_us: 0,
+            duration_us: 1_000_000,
+            link: None,
+            fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
+        };
+        document.assets.push(card.clone());
+        let spec = Spec::for_clip(dir.path(), &document, &card, &clip, (320, 180), &[], {
+            Quality::Draft
+        });
+        let render = dir.path().join("pinned.mp4");
+        let evaluator = SceneEvaluator::new(dir.path().to_path_buf(), document, 320, 180)
+            .unwrap()
+            .with_pinned_graphics([(spec, render.clone())].into());
+        let built = || {
+            evaluator
+                .graphic_specs
+                .borrow()
+                .get("g1")
+                .unwrap()
+                .1
+                .clone()
+        };
+        for at in [0, 100_000, 500_000] {
+            assert!(matches!(
+                evaluator.graphic_job(&clip, at),
+                Some(PictureJob::Video(path, _)) if path == render
+            ));
+        }
+        let first = built();
+        evaluator.graphic_job(&clip, 600_000);
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &built()),
+            "one spec for every frame"
+        );
+        crate::graphics::render::sources_changed();
+        evaluator.graphic_job(&clip, 700_000);
+        assert!(
+            !std::sync::Arc::ptr_eq(&first, &built()),
+            "built again after a change"
+        );
+        assert_eq!(*first, *built());
     }
 
     /// Recording video is decoded as NV12 and converted on the GPU; the picture must match the
