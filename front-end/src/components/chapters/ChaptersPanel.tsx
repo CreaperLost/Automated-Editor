@@ -50,7 +50,21 @@ export const ChaptersPanel: React.FC = () => {
   const [titles, setTitles] = useState<Record<string, string>>({});
 
   const chapters = openedProject?.chapters ?? [];
-  useEffect(() => setTitles({}), [openedProject?.revision]);
+  // Unfinished titles survive unrelated revisions (GAP-036): a draft goes when another project
+  // opens, when its chapter goes, or once the saved title is the draft.
+  useEffect(() => setTitles({}), [openedProject?.projectHandle]);
+  useEffect(() => {
+    setTitles((drafts) => {
+      const kept = Object.fromEntries(
+        Object.entries(drafts).filter(([id, title]) => {
+          const chapter = chapters.find((c) => c.id === id);
+          return chapter !== undefined && chapter.title !== title.trim();
+        }),
+      );
+      return Object.keys(kept).length === Object.keys(drafts).length ? drafts : kept;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(chapters)]);
 
   // The speech on the timeline the AI reads.
   const speechKey = soundSources(openedProject).find((sound) => sound.placed)?.key;

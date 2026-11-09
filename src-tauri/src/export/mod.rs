@@ -189,7 +189,7 @@ impl ExportStatus {
     }
 
     /// Adds a line to the log, `started` being when the export began.
-    fn log(&mut self, started: std::time::Instant, level: ExportLogLevel, text: String) {
+    pub(crate) fn log(&mut self, started: std::time::Instant, level: ExportLogLevel, text: String) {
         if self.log.len() >= MAX_LOG_LINES {
             self.log.remove(0);
         }
@@ -210,6 +210,48 @@ pub struct CapturedExport {
     pub temp: PathBuf,
     pub settings: ExportSettings,
     pub lease: Arc<File>,
+    /// What else it draws, as it was when Export was clicked (GAP-018): the transcripts its
+    /// captions read, and a digest of its graphics' sources, checked again before rendering.
+    pub inputs: ExportInputs,
+}
+
+/// The inputs of an export besides the edit document, captured with it.
+#[derive(Clone, Debug, Default)]
+pub struct ExportInputs {
+    /// By sound key: the transcripts captions read.
+    pub transcripts: std::collections::BTreeMap<String, crate::transcript::Transcript>,
+    /// [`crate::graphics::render::sources_digest`] when captured.
+    pub graphics: String,
+}
+
+impl ExportInputs {
+    /// `document`'s inputs in the project at `root`, as they are now.
+    pub fn capture(root: &Path, document: &EditDocument) -> Self {
+        let keys: Vec<String> = match &document.captions.track_id {
+            Some(id) => vec![id.clone()],
+            None => caption_candidates(document),
+        };
+        let transcripts = keys
+            .into_iter()
+            .filter_map(|key| {
+                let transcript = crate::transcript::store::load_transcript(root, &key)
+                    .ok()
+                    .flatten()?;
+                Some((key, transcript))
+            })
+            .collect();
+        Self {
+            transcripts,
+            graphics: crate::graphics::render::sources_digest(root, document),
+        }
+    }
+
+    /// A digest of the transcripts, for telling whether the words drawn changed.
+    pub fn words_digest(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let text = serde_json::to_string(&self.transcripts).unwrap_or_default();
+        format!("{:x}", Sha256::digest(text.as_bytes()))[..16].to_string()
+    }
 }
 
 type Zooms = std::sync::Arc<Vec<crate::zoom::ZoomSuggestion>>;
@@ -248,6 +290,8 @@ pub struct SceneEvaluator {
     screen_styles: std::cell::OnceCell<(EditLayout, std::collections::HashMap<String, EditLayout>)>,
     /// Caption cues from the captioned sound's transcript; empty when captions are off.
     caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
+    /// Captured transcripts for captions; `None` reads the project's files.
+    transcripts: Option<std::collections::BTreeMap<String, crate::transcript::Transcript>>,
     /// The captions' typeface and accent, from the style and the look.
     caption_look: std::cell::OnceCell<crate::captions::CaptionLook>,
     /// Where graphics fill the frame: no captions there.
@@ -266,6 +310,12 @@ pub struct SceneEvaluator {
     sources: std::cell::RefCell<Sources>,
     /// Pointer pictures by file, decoded once.
     cursor_images: std::cell::RefCell<CursorImages>,
+    /// Each graphic clip's render spec, with the graphics generation it was made at: building
+    /// one reads and parses the graphic's source and its style, too slow for every frame
+    /// (GAP-021). A change to a graphic or a style bumps the generation.
+    graphic_specs: std::cell::RefCell<
+        std::collections::HashMap<String, (u64, std::sync::Arc<crate::graphics::render::Spec>)>,
+    >,
     /// What stands in for a graphic still rendering, by its name and size.
     graphic_placeholders:
         std::cell::RefCell<std::collections::HashMap<(String, u32, u32), VideoFrame>>,
@@ -538,6 +588,7 @@ impl SceneEvaluator {
             pinned_graphics: Default::default(),
             screen_styles: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
+            transcripts: None,
             caption_look: std::cell::OnceCell::new(),
             caption_free: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
@@ -546,6 +597,7 @@ impl SceneEvaluator {
             zooms: Default::default(),
             sources: Default::default(),
             cursor_images: Default::default(),
+            graphic_specs: Default::default(),
             graphic_placeholders: Default::default(),
             shortcut_badge: Default::default(),
             window_crops: Default::default(),
@@ -596,6 +648,15 @@ impl SceneEvaluator {
     }
 
     /// Plays graphics from the renders `quality` names (an export's final ones).
+    /// Captions read these transcripts (captured with an export) instead of the live files.
+    pub fn with_transcripts(
+        mut self,
+        transcripts: std::collections::BTreeMap<String, crate::transcript::Transcript>,
+    ) -> Self {
+        self.transcripts = Some(transcripts);
+        self
+    }
+
     pub fn with_graphics_quality(mut self, quality: crate::graphics::render::Quality) -> Self {
         self.graphics_quality = quality;
         self
@@ -1146,15 +1207,29 @@ impl SceneEvaluator {
         let full_camera = self
             .full_camera
             .get_or_init(|| crate::graphics::full_camera_ranges(&self.document));
-        let spec = render::Spec::for_clip(
-            &self.root,
-            &self.document,
-            asset,
-            clip,
-            (self.width, self.height),
-            full_camera,
-            self.graphics_quality,
-        );
+        let generation = render::generation();
+        let cached = self
+            .graphic_specs
+            .borrow()
+            .get(&clip.id)
+            .filter(|(made_at, _)| *made_at == generation)
+            .map(|(_, spec)| spec.clone());
+        let spec = cached.unwrap_or_else(|| {
+            let spec = std::sync::Arc::new(render::Spec::for_clip(
+                &self.root,
+                &self.document,
+                asset,
+                clip,
+                (self.width, self.height),
+                full_camera,
+                self.graphics_quality,
+            ));
+            self.graphic_specs
+                .borrow_mut()
+                .insert(clip.id.clone(), (generation, spec.clone()));
+            spec
+        });
+        let spec = &*spec;
         // Never past a render's last frame.
         let last_frame = 1_000_000 / spec.fps as u64;
         if let Some(path) = self.pinned_graphics.get(&spec) {
@@ -1806,10 +1881,11 @@ impl SceneEvaluator {
             return None;
         }
         let cues = self.caption_cues.get_or_init(|| {
-            let load = |key: &str| {
-                crate::transcript::store::load_transcript(&self.root, key)
+            let load = |key: &str| match &self.transcripts {
+                Some(captured) => captured.get(key).cloned(),
+                None => crate::transcript::store::load_transcript(&self.root, key)
                     .ok()
-                    .flatten()
+                    .flatten(),
             };
             caption_track_cues(&self.document, settings, load)
                 .unwrap_or_default()
@@ -1860,8 +1936,14 @@ impl SceneEvaluator {
     }
 }
 
-/// The sounds captions may read, best first: speech on the timeline (top audio track first,
-/// earliest clip first), then the rest of the project's speech.
+/// Whether `track` is heard in the output: not muted and not turned all the way down, as the
+/// mixer plays it. Automatic captions read only what is heard (GAP-022).
+fn audible(document: &EditDocument, track: &crate::sequence::Track) -> bool {
+    !track.muted && document.audio.track_gain(&track.id) > 0.0
+}
+
+/// The sounds captions may read, best first: speech heard on the timeline (top audio track
+/// first, earliest clip first), then the rest of the project's speech.
 pub fn caption_candidates(document: &EditDocument) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut push = |key: String| {
@@ -1869,7 +1951,11 @@ pub fn caption_candidates(document: &EditDocument) -> Vec<String> {
             out.push(key);
         }
     };
-    for track in document.sequence.audio_tracks() {
+    for track in document
+        .sequence
+        .audio_tracks()
+        .filter(|t| audible(document, t))
+    {
         for clip in &track.clips {
             if crate::sequence::clip_role(&document.assets, track, clip) == Some(Role::Mic) {
                 push(clip.source().key());
@@ -1886,7 +1972,9 @@ pub fn caption_candidates(document: &EditDocument) -> Vec<String> {
 
 /// The captions of `document`, each with the transcript it reads, in edited time: the chosen
 /// sound's, else the first transcribed speech of each recording or file, so every recording
-/// on the timeline is captioned. Where two speak at once the earlier caption gives way.
+/// on the timeline is captioned. Automatic captions follow only the clips that are heard; a
+/// chosen sound is captioned even on a muted track (a guide track). A line that plays twice is
+/// captioned each time. Where two speak at once the earlier caption gives way.
 /// `None` when nothing is transcribed.
 pub fn caption_track_cues(
     document: &EditDocument,
@@ -1915,15 +2003,24 @@ pub fn caption_track_cues(
         return None;
     }
     let mut cues: Vec<(String, crate::captions::CaptionCue)> = Vec::new();
+    let chosen = settings.track_id.is_some();
     for transcript in &transcripts {
-        let Ok(clock) = document.transcript_clock(&transcript.track_id) else {
+        let Ok(source) = document.stream_ref(&transcript.track_id) else {
             continue;
         };
-        cues.extend(
-            crate::captions::build_cues(transcript, &clock, settings)
-                .into_iter()
-                .map(|cue| (transcript.track_id.clone(), cue)),
-        );
+        let plays = crate::sequence::clock::layers(&document.sequence, |track, clip| {
+            clip.asset == source.asset
+                && clip.stream == source.stream
+                && (chosen || audible(document, track))
+        });
+        for entries in plays {
+            let clock = crate::sequence::clock::mapper(&entries);
+            cues.extend(
+                crate::captions::build_cues(transcript, &clock, settings)
+                    .into_iter()
+                    .map(|cue| (transcript.track_id.clone(), cue)),
+            );
+        }
     }
     cues.sort_by_key(|(_, cue)| cue.start_us);
     for i in 1..cues.len() {
@@ -2408,6 +2505,7 @@ pub fn prepare_job(
         lease: Arc::new(lease),
         job_id,
         root: root.to_path_buf(),
+        inputs: ExportInputs::capture(root, &document),
         document,
         dest,
         temp,
@@ -2569,6 +2667,16 @@ fn export_to_temp(
             format!("{finding}: done"),
         ));
     }
+    // The export draws the project as it was when Export was clicked: a graphic changed
+    // since would not be that (GAP-018).
+    if crate::graphics::render::sources_digest(&captured.root, &captured.document)
+        != captured.inputs.graphics
+    {
+        return Err(ExportFailure::Native {
+            message: "A graphic changed after Export was clicked: export again to include it"
+                .into(),
+        });
+    }
     // Every graphic's final render must be there before the first frame: at the export's
     // frame rate, and sharper than the preview's draft when the export is larger.
     let graphics_quality = crate::graphics::render::Quality::Final {
@@ -2666,6 +2774,7 @@ fn export_to_temp(
     ))
     .with_graphics_quality(graphics_quality)
     .with_pinned_graphics(pinned.renders.clone())
+    .with_transcripts(captured.inputs.transcripts.clone())
     // The GPU converts frames to the encoder's YUV: a third of the bytes to read back and
     // pipe, and no conversion on the CPU.
     .with_nv12_output(ExportWriter::takes_nv12());
@@ -4005,6 +4114,63 @@ mod tests {
         assert!(caption_track_cues(&document, &document.captions, |_| None).is_none());
     }
 
+    /// Captions follow what is heard: a muted speech track is not captioned unless chosen
+    /// (GAP-022), and a line that plays twice is captioned both times (GAP-023).
+    #[test]
+    fn captions_follow_the_speech_that_plays() {
+        use crate::project::revision::EditDocument;
+        use crate::sequence::tests::recording;
+        use crate::transcript::{test_word, ProviderKind, Transcript};
+
+        const S: u64 = 1_000_000;
+        let mut document = EditDocument::from_recording(recording("a", S, &[])).unwrap();
+        let load = |key: &str| {
+            (key == "a.mic").then(|| {
+                Transcript::new(
+                    key.into(),
+                    ProviderKind::ElevenLabs,
+                    "scribe_v2".into(),
+                    None,
+                    vec![test_word("again", 100, 400)],
+                )
+            })
+        };
+        let starts = |document: &EditDocument, settings: &crate::captions::CaptionSettings| {
+            caption_track_cues(document, settings, load)
+                .unwrap()
+                .iter()
+                .map(|(_, cue)| cue.start_us)
+                .collect::<Vec<_>>()
+        };
+        // The same second of speech again at 2 s.
+        let mic = document
+            .sequence
+            .tracks
+            .iter()
+            .position(|t| t.clips.iter().any(|c| c.stream == "mic"))
+            .unwrap();
+        let mut repeat = document.sequence.tracks[mic].clips[0].clone();
+        repeat.id = "repeat".into();
+        repeat.start_us = 2 * S;
+        repeat.link = None;
+        document.sequence.tracks[mic].clips.push(repeat);
+        assert_eq!(starts(&document, &document.captions), [100_000, 2_100_000]);
+        // Muted: nothing heard, nothing captioned; chosen, it is read as a guide track.
+        document.sequence.tracks[mic].muted = true;
+        assert!(starts(&document, &document.captions).is_empty());
+        let mut chosen = document.captions.clone();
+        chosen.track_id = Some("a.mic".into());
+        assert_eq!(starts(&document, &chosen), [100_000, 2_100_000]);
+        // The same sound on a muted track and a heard one: only the heard one counts.
+        let mut heard = document.sequence.tracks[mic].clone();
+        heard.id = "heard".into();
+        heard.muted = false;
+        heard.clips.retain(|c| c.id == "repeat");
+        heard.clips[0].id = "heard-repeat".into();
+        document.sequence.tracks.push(heard);
+        assert_eq!(starts(&document, &document.captions), [2_100_000]);
+    }
+
     /// Captions come from the mic transcript, skip cut words and land in the frame.
     #[test]
     fn captions_render_from_the_transcript_in_edited_time() {
@@ -4640,6 +4806,69 @@ mod tests {
         }
         // The preview of a 4K project still plays the draft.
         assert_eq!(spec((3840, 2160), Quality::Draft).density, 1);
+    }
+
+    /// A graphic's spec is built once per clip, not for every frame, and again only after a
+    /// graphic or style changed (GAP-021).
+    #[test]
+    fn a_graphic_spec_is_built_once_until_graphics_change() {
+        use crate::graphics::render::{Quality, Spec};
+        let dir = tempfile::tempdir().unwrap();
+        let mut document = overlays_document(dir.path(), 1);
+        let card =
+            crate::graphics::create(dir.path(), "title", None, &serde_json::Map::new()).unwrap();
+        let clip = Clip {
+            mix: Default::default(),
+            id: "g1".into(),
+            asset: card.id.clone(),
+            stream: "picture".into(),
+            start_us: 0,
+            in_us: 0,
+            duration_us: 1_000_000,
+            link: None,
+            fit: crate::sequence::Fit::Contain,
+            speed: 1.0,
+        };
+        document.assets.push(card.clone());
+        let spec = Spec::for_clip(dir.path(), &document, &card, &clip, (320, 180), &[], {
+            Quality::Draft
+        });
+        let render = dir.path().join("pinned.mp4");
+        let evaluator = SceneEvaluator::new(dir.path().to_path_buf(), document, 320, 180)
+            .unwrap()
+            .with_pinned_graphics([(spec, render.clone())].into());
+        let built = || {
+            evaluator
+                .graphic_specs
+                .borrow()
+                .get("g1")
+                .unwrap()
+                .1
+                .clone()
+        };
+        for at in [0, 100_000, 500_000] {
+            assert!(matches!(
+                evaluator.graphic_job(&clip, at),
+                Some(PictureJob::Video(path, _)) if path == render
+            ));
+        }
+        let first = built();
+        let before = crate::graphics::render::generation();
+        evaluator.graphic_job(&clip, 600_000);
+        // Other tests may change graphics meanwhile: only compare within one generation.
+        if crate::graphics::render::generation() == before {
+            assert!(
+                std::sync::Arc::ptr_eq(&first, &built()),
+                "one spec for every frame"
+            );
+        }
+        crate::graphics::render::sources_changed();
+        evaluator.graphic_job(&clip, 700_000);
+        assert!(
+            !std::sync::Arc::ptr_eq(&first, &built()),
+            "built again after a change"
+        );
+        assert_eq!(*first, *built());
     }
 
     /// Recording video is decoded as NV12 and converted on the GPU; the picture must match the

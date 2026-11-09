@@ -402,8 +402,9 @@ fn faceless_visuals_get(
 #[tauri::command]
 fn faceless_voice_accept(
     state: tauri::State<'_, AppState>,
+    narration: String,
 ) -> Result<commands::faceless::VoiceResult, String> {
-    commands::faceless::faceless_voice_accept_impl(&state)
+    commands::faceless::faceless_voice_accept_impl(&state, Some(&narration))
 }
 
 /// The Zernio connection and its YouTube channels (reads them from Zernio).
@@ -449,30 +450,38 @@ fn publish_set_channel(channel: String) -> Result<(), String> {
 #[tauri::command]
 fn publish_package(
     state: tauri::State<'_, AppState>,
+    project_handle: String,
     target: String,
 ) -> Result<commands::publish::PackageView, String> {
-    commands::publish::publish_package_impl(&state, target)
+    commands::publish::publish_package_impl(&state, &project_handle, target)
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 fn publish_package_save(
     state: tauri::State<'_, AppState>,
+    project_handle: String,
     target: String,
     package: publish::Package,
 ) -> Result<commands::publish::PackageView, String> {
-    commands::publish::publish_package_save_impl(&state, target, package)
+    commands::publish::publish_package_save_impl(&state, &project_handle, target, package)
 }
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 async fn publish_thumbnail_file(
     app: tauri::AppHandle,
+    project_handle: String,
     target: String,
     path: String,
 ) -> Result<commands::publish::PackageView, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        commands::publish::publish_thumbnail_file_impl(&app.state::<AppState>(), target, path)
+        commands::publish::publish_thumbnail_file_impl(
+            &app.state::<AppState>(),
+            &project_handle,
+            target,
+            path,
+        )
     })
     .await
     .map_err(|e| e.to_string())?
@@ -482,6 +491,7 @@ async fn publish_thumbnail_file(
 #[tauri::command]
 async fn publish_thumbnail_frame(
     app: tauri::AppHandle,
+    project_handle: String,
     target: String,
     file: String,
     at_us: u64,
@@ -489,6 +499,7 @@ async fn publish_thumbnail_frame(
     tauri::async_runtime::spawn_blocking(move || {
         commands::publish::publish_thumbnail_frame_impl(
             &app.state::<AppState>(),
+            &project_handle,
             target,
             file,
             at_us,
@@ -503,11 +514,17 @@ async fn publish_thumbnail_frame(
 #[tauri::command]
 async fn publish_thumbnail_edit(
     app: tauri::AppHandle,
+    project_handle: String,
     target: String,
     at_us: u64,
 ) -> Result<commands::publish::PackageView, String> {
     blocking(move || {
-        commands::publish::publish_thumbnail_edit_impl(&app.state::<AppState>(), target, at_us)
+        commands::publish::publish_thumbnail_edit_impl(
+            &app.state::<AppState>(),
+            &project_handle,
+            target,
+            at_us,
+        )
     })
     .await
 }
@@ -517,6 +534,7 @@ async fn publish_thumbnail_edit(
 #[tauri::command]
 async fn publish_upload(
     app: tauri::AppHandle,
+    project_handle: String,
     target: String,
     file: String,
     release: publish::Release,
@@ -524,6 +542,7 @@ async fn publish_upload(
     tauri::async_runtime::spawn_blocking(move || {
         commands::publish::publish_upload_impl(
             &app.state::<AppState>(),
+            &project_handle,
             target,
             file,
             release,
@@ -536,9 +555,13 @@ async fn publish_upload(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
-async fn publish_refresh(app: tauri::AppHandle, id: String) -> Result<publish::Upload, String> {
+async fn publish_refresh(
+    app: tauri::AppHandle,
+    project_handle: String,
+    id: String,
+) -> Result<publish::Upload, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        commands::publish::publish_refresh_impl(&app.state::<AppState>(), id)
+        commands::publish::publish_refresh_impl(&app.state::<AppState>(), &project_handle, id)
     })
     .await
     .map_err(|e| e.to_string())?

@@ -69,6 +69,7 @@ pub enum Kind {
     PastMediaEnd,
     GraphicFont,
     GraphicReadingTime,
+    GraphicTextSmall,
     GraphicCoversFace,
     GraphicHidesCaptions,
     CaptionsCrossSplit,
@@ -219,6 +220,7 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
     past_media_end(&mut out, document);
     graphic_fonts(&mut out, root, document);
     graphic_reading_time(&mut out, root, document);
+    graphic_text_size(&mut out, root, document);
     CheckReport {
         revision: document.revision,
         duration_us: document.duration_us(),
@@ -1096,6 +1098,119 @@ fn graphic_reading_time(out: &mut Builder, root: &Path, document: &EditDocument)
     }
 }
 
+/// The smallest text a graphic should show, as a share of the screen's short side (GAP-030).
+/// Apple's smallest recommended iOS text size is 11 pt; a phone about 390 pt wide shows a 9:16
+/// video full width, and a 16:9 one full width turned sideways, so the short side spans about
+/// 390 pt and 11 pt is 2.8% of it.
+const MIN_TEXT_SHARE: f64 = 0.028;
+
+/// A CSS `font-size` value in vmin of a composition whose short side is `short_px`, with the
+/// look's `--look-*` tokens: `8vmin`, `40px`, `var(--look-body)`, `calc(var(--look-label) *
+/// 0.8)`. `None` for what can't be told from the file alone (em, %, clamp...).
+fn font_size_vmin(
+    value: &str,
+    tokens: &std::collections::BTreeMap<String, String>,
+    short_px: f64,
+    depth: u8,
+) -> Option<f64> {
+    let value = value.trim().trim_end_matches("!important").trim();
+    if depth > 4 {
+        return None;
+    }
+    if let Some(n) = value.strip_suffix("vmin") {
+        return n.trim().parse().ok();
+    }
+    if let Some(n) = value.strip_suffix("px") {
+        return n.trim().parse::<f64>().ok().map(|px| px / short_px * 100.0);
+    }
+    if let Some(name) = value
+        .strip_prefix("var(--look-")
+        .and_then(|v| v.strip_suffix(')'))
+    {
+        let name = name.split(',').next()?.trim();
+        return font_size_vmin(tokens.get(name)?, tokens, short_px, depth + 1);
+    }
+    let inner = value.strip_prefix("calc(")?.strip_suffix(')')?;
+    let (a, b) = inner.split_once('*')?;
+    let (a, b) = (a.trim(), b.trim());
+    match (a.parse::<f64>(), b.parse::<f64>()) {
+        (_, Ok(k)) => font_size_vmin(a, tokens, short_px, depth + 1).map(|v| v * k),
+        (Ok(k), _) => font_size_vmin(b, tokens, short_px, depth + 1).map(|v| v * k),
+        _ => None,
+    }
+}
+
+/// Graphics with text smaller than a phone shows legibly ([`MIN_TEXT_SHARE`]), read from the
+/// sizes their composition asks for with the style's look. Text sized some other way (em, %)
+/// is not measured.
+fn graphic_text_size(out: &mut Builder, root: &Path, document: &EditDocument) {
+    let Ok(canvas) = document.layout.preview_dimensions() else {
+        return;
+    };
+    let (w, h) = crate::graphics::render::render_size(canvas.0, canvas.1);
+    let canvas_short = w.min(h) as f64;
+    let mut seen: Vec<&str> = Vec::new();
+    for clip in document.sequence.video_tracks().flat_map(|t| &t.clips) {
+        let Some(asset) = document.asset(&clip.asset).filter(|a| a.is_graphic()) else {
+            continue;
+        };
+        if seen.contains(&asset.id.as_str()) {
+            continue;
+        }
+        seen.push(&asset.id);
+        let spec = crate::graphics::render::Spec::for_clip(
+            root,
+            document,
+            asset,
+            clip,
+            canvas,
+            &[],
+            crate::graphics::render::Quality::Draft,
+        );
+        let short_px = spec.width.min(spec.height).max(1) as f64;
+        let tokens: std::collections::BTreeMap<String, String> = spec
+            .look
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.trim().strip_prefix("--look-")?.split_once(':')?;
+                Some((
+                    name.trim().to_string(),
+                    value.trim().trim_end_matches(';').to_string(),
+                ))
+            })
+            .collect();
+        let html =
+            std::fs::read_to_string(spec.dir.join(crate::graphics::ENTRY)).unwrap_or_default();
+        let smallest = html
+            .match_indices("font-size")
+            .filter_map(|(i, _)| {
+                let rest = html[i + "font-size".len()..]
+                    .trim_start()
+                    .strip_prefix(':')?;
+                let value = rest.split([';', '}', '"', '\n']).next()?;
+                font_size_vmin(value, &tokens, short_px, 0)
+            })
+            .fold(f64::INFINITY, f64::min);
+        // In canvas terms: a composition in part of a short's frame has a smaller short side.
+        let share = smallest * short_px / canvas_short / 100.0;
+        if !share.is_finite() || share + 1e-9 >= MIN_TEXT_SHARE {
+            continue;
+        }
+        out.push(
+            Kind::GraphicTextSmall,
+            Severity::Info,
+            format!("\"{}\" has text too small for a phone", asset.name),
+            format!(
+                "Its smallest text is {:.1}% of the screen's short side; below {:.1}% it is \
+                 hard to read on a phone. Raise the style's graphics size or that font-size.",
+                share * 100.0,
+                MIN_TEXT_SHARE * 100.0
+            ),
+        )
+        .at(clip.start_us, clip.end_us());
+    }
+}
+
 /// More than this between linked sound and picture of one media is heard as lip-sync drift.
 const SYNC_SLACK_US: u64 = 20_000;
 
@@ -1525,6 +1640,108 @@ mod tests {
         assert_eq!(hint.severity, Severity::Info);
         assert!(hint.detail.contains("2.00 s"), "{}", hint.detail);
         assert!(!kinds(&place(10 * S)).contains(&Kind::GraphicReadingTime));
+    }
+
+    /// Text under 2.8% of the screen's short side is flagged as too small for a phone; the
+    /// sizes are read from the composition and the look's tokens (GAP-030).
+    #[test]
+    fn graphic_text_too_small_for_a_phone_is_flagged() {
+        let tokens: std::collections::BTreeMap<String, String> = [
+            ("label".to_string(), "3vmin".to_string()),
+            ("body".to_string(), "var(--look-label)".to_string()),
+        ]
+        .into();
+        let size = |v: &str| font_size_vmin(v, &tokens, 1080.0, 0);
+        assert_eq!(size("var(--look-body)"), Some(3.0));
+        assert!((size("calc(var(--look-label) * 0.8)").unwrap() - 2.4).abs() < 1e-9);
+        assert!((size("calc(0.5 * var(--look-label))").unwrap() - 1.5).abs() < 1e-9);
+        assert_eq!(size("54px"), Some(5.0));
+        assert_eq!(size("1.2em"), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        let asset = crate::graphics::create(dir.path(), "blank", Some("Tiny"), &Default::default())
+            .unwrap();
+        let entry = crate::graphics::folder(dir.path(), &asset.id).join(crate::graphics::ENTRY);
+        let html = std::fs::read_to_string(&entry).unwrap();
+        let check = |css: &str| {
+            std::fs::write(
+                &entry,
+                html.replacen("</style>", &format!("{css}</style>"), 1),
+            )
+            .unwrap();
+            let mut doc = document(60);
+            doc.assets.push(asset.clone());
+            let edit = SequenceEdit::OnNewTrack {
+                track_kind: crate::sequence::TrackKind::Video,
+                edit: Box::new(SequenceEdit::PlaceAsset {
+                    asset_id: asset.id.clone(),
+                    at_us: 5 * S,
+                    track_id: None,
+                    streams: Vec::new(),
+                    range: Some(crate::sequence::SourceRange {
+                        start_us: 0,
+                        end_us: 3 * S,
+                    }),
+                }),
+            };
+            doc.sequence = crate::sequence::edit::apply(&doc.sequence, &doc.assets, &edit)
+                .unwrap()
+                .0;
+            run(dir.path(), &doc, &[])
+                .findings
+                .into_iter()
+                .find(|f| f.kind == Kind::GraphicTextSmall)
+        };
+        let small = check(".note { font-size: 20px; }").expect("20 px of 1080 is 1.9%");
+        assert!(small.detail.contains("1.9%"), "{}", small.detail);
+        assert!(
+            check(".note { font-size: 40px; }").is_none(),
+            "3.7% is fine"
+        );
+    }
+
+    /// Every built-in graphic, in the default style, is readable on a phone in either shape.
+    #[test]
+    fn built_in_graphics_are_readable_on_a_phone() {
+        for portrait in [false, true] {
+            for entry in std::fs::read_dir("graphics/templates").unwrap() {
+                let name = entry.unwrap().file_name().into_string().unwrap();
+                let dir = tempfile::tempdir().unwrap();
+                let asset =
+                    crate::graphics::create(dir.path(), &name, None, &Default::default()).unwrap();
+                let mut doc = EditDocument::default();
+                if portrait {
+                    doc.layout.aspect_ratio = "9:16".into();
+                }
+                doc.assets.push(asset.clone());
+                let mut track = crate::sequence::Track::new(
+                    "tg".to_string(),
+                    crate::sequence::TrackKind::Video,
+                );
+                track.clips.push(crate::sequence::Clip {
+                    mix: Default::default(),
+                    id: "g".into(),
+                    asset: asset.id.clone(),
+                    stream: "picture".into(),
+                    start_us: 0,
+                    in_us: 0,
+                    duration_us: 3 * S,
+                    link: None,
+                    fit: crate::sequence::Fit::Contain,
+                    speed: 1.0,
+                });
+                doc.sequence.tracks.push(track);
+                let mut found = Builder {
+                    findings: Vec::new(),
+                };
+                graphic_text_size(&mut found, dir.path(), &doc);
+                assert!(
+                    found.findings.is_empty(),
+                    "{name} (portrait {portrait}): {}",
+                    found.findings[0].detail
+                );
+            }
+        }
     }
 
     #[test]

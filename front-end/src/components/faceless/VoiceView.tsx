@@ -10,9 +10,10 @@ const seconds = (us: number) => `${(us / 1e6).toFixed(1)} s`;
 
 /** The production's narration: make it (one click, the channel's voice on your OpenRouter key),
  * then what the transcription heard differently, to listen to and accept. */
-export const VoiceView: React.FC<{ refreshKey: unknown; ready: boolean; onChange: () => void }> = ({
+export const VoiceView: React.FC<{ refreshKey: unknown; ready: boolean; stale: boolean; onChange: () => void }> = ({
   refreshKey,
   ready,
+  stale,
   onChange,
 }) => {
   const [voice, setVoice] = useState<FacelessVoice | null>(null);
@@ -130,7 +131,13 @@ export const VoiceView: React.FC<{ refreshKey: unknown; ready: boolean; onChange
               </p>
             ) : (
               <div className="flex items-center gap-2">
-                <Button size="sm" variant="secondary" disabled={busy !== null} onClick={() => void run(api.facelessVoiceAccept)}>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!ready || stale || busy !== null}
+                  title={ready && !stale ? undefined : "The script changed since this narration: voice it again"}
+                  onClick={() => void run(() => api.facelessVoiceAccept(voice.narration))}
+                >
                   It sounds right
                 </Button>
                 <span className="text-studio-500">or fix the script and voice again</span>

@@ -69,7 +69,7 @@ export const AccountsDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =
   const youtube = accounts?.channels ?? [];
 
   return createPortal(
-    <DialogBackdrop onClose={onClose} selectable>
+    <DialogBackdrop onClose={onClose} selectable label="Accounts">
       <div className="w-[520px] max-w-full rounded-panel border border-studio-700 bg-studio-900 shadow-xl">
         <div className="flex items-center gap-2 px-5 py-4 border-b border-studio-800">
           <Upload className="w-5 h-5 text-studio-300" />

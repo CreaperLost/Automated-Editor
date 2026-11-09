@@ -202,16 +202,108 @@ pub fn normalize(text: &str) -> String {
         .to_lowercase()
 }
 
-/// The numbers in `text` ("1,200", "2.5", "40"), not parts of words like "gpt-5" or "h100".
+/// The quantities in `text`, each written one way so that equal ones compare equal: "1,200"
+/// and "1.2 thousand" are "1200", "$6.34 million" is "6.34 million", "40 percent" is "40%",
+/// "-3" keeps its sign (GAP-026). Parts of words like "gpt-5", "covid-19" or "h100" are not
+/// quantities. Only the number, its sign, its scale and whether it is a percentage or points
+/// are compared: not its unit, currency or what it counts.
 pub fn numbers(text: &str) -> Vec<String> {
-    let re = regex::Regex::new(r"\d+(?:[.,]\d+)*").unwrap();
-    re.find_iter(text)
-        .filter(|m| {
-            let before = text[..m.start()].chars().next_back();
-            !before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-')
-        })
-        .map(|m| m.as_str().to_string())
-        .collect()
+    static QUANTITY: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = QUANTITY.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)(\d+(?:[.,]\d+)*)(?:\s*(%|percent\b|per cent\b|percentage points?\b|thousand\b|million\b|billion\b|trillion\b|k\b|bn\b))?",
+        )
+        .unwrap()
+    });
+    let mut out = Vec::new();
+    for found in re.captures_iter(text) {
+        let digits = found.get(1).unwrap();
+        let mut before = text[..digits.start()].chars().rev();
+        let negative = match before.next() {
+            Some(c) if c.is_alphanumeric() || c == '_' || c == '.' || c == ',' => continue,
+            Some('-') => match before.next() {
+                // "gpt-5": part of a name.
+                Some(c) if c.is_alphabetic() || c == '_' => continue,
+                // "10-20": a range.
+                Some(c) if c.is_ascii_digit() => false,
+                _ => true,
+            },
+            _ => false,
+        };
+        let Some(mut value) = quantity(digits.as_str()) else {
+            continue;
+        };
+        let suffix = found
+            .get(2)
+            .map(|m| m.as_str().to_lowercase())
+            .unwrap_or_default();
+        let kind = match suffix.as_str() {
+            "%" | "percent" | "per cent" => "%",
+            s if s.starts_with("percentage point") => " points",
+            "thousand" | "k" => {
+                value *= 1e3;
+                ""
+            }
+            "million" => {
+                value *= 1e6;
+                ""
+            }
+            "billion" | "bn" => {
+                value *= 1e9;
+                ""
+            }
+            "trillion" => {
+                value *= 1e12;
+                ""
+            }
+            _ => "",
+        };
+        if negative {
+            value = -value;
+        }
+        out.push(format!("{}{kind}", show_quantity(value)));
+    }
+    out
+}
+
+/// "1,200" is 1200 and "2.5" two and a half; "2,5" (one or two digits after the comma) is also
+/// two and a half, and "1.200.000" (several dots) is grouped.
+fn quantity(digits: &str) -> Option<f64> {
+    let dots = digits.matches('.').count();
+    let commas = digits.matches(',').count();
+    let plain = if dots > 1 {
+        digits.replace('.', "").replace(',', ".")
+    } else if commas == 1
+        && dots == 0
+        && digits
+            .rsplit(',')
+            .next()
+            .is_some_and(|tail| tail.len() != 3)
+    {
+        digits.replace(',', ".")
+    } else {
+        digits.replace(',', "")
+    };
+    plain.parse().ok()
+}
+
+/// A quantity written one way: millions and up by their scale word, smaller ones plainly.
+fn show_quantity(value: f64) -> String {
+    let trim = |x: f64| {
+        let text = format!("{x:.6}");
+        let text = text.trim_end_matches('0').trim_end_matches('.');
+        if text == "-0" {
+            "0".to_string()
+        } else {
+            text.to_string()
+        }
+    };
+    for (scale, name) in [(1e12, "trillion"), (1e9, "billion"), (1e6, "million")] {
+        if value.abs() >= scale {
+            return format!("{} {name}", trim(value / scale));
+        }
+    }
+    trim(value)
 }
 
 /// Why a fact fails the check, or `None` when it passes.
@@ -459,20 +551,28 @@ pub fn is_public(ip: IpAddr) -> bool {
 /// Refuses anything but http(s) on a host whose every address is public: these URLs come from
 /// the web and must never reach this computer's own network.
 pub fn check_public(raw: &str) -> Result<url::Url, String> {
+    resolve_public(raw).map(|(url, _)| url)
+}
+
+/// [`check_public`], with the addresses it checked: the page is fetched from these and no
+/// others, so a second lookup cannot send it somewhere private (GAP-013).
+pub fn resolve_public(raw: &str) -> Result<(url::Url, Vec<std::net::SocketAddr>), String> {
     let url = url::Url::parse(raw).map_err(|_| format!("not a web address: {raw}"))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(format!("not a web address: {raw}"));
     }
     let host = url.host_str().ok_or("no host")?.to_string();
     let port = url.port_or_known_default().unwrap_or(443);
-    let addresses: Vec<_> = (host.as_str(), port)
+    // An IPv6 literal comes bracketed in the URL.
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    let addresses: Vec<_> = (bare, port)
         .to_socket_addrs()
         .map_err(|_| format!("cannot resolve {host}"))?
         .collect();
     if addresses.is_empty() || addresses.iter().any(|a| !is_public(a.ip())) {
         return Err(format!("{host} is not on the public internet"));
     }
-    Ok(url)
+    Ok((url, addresses))
 }
 
 /// A fetched page's text, or why it couldn't be read.
@@ -492,27 +592,35 @@ pub trait PageFetch: Sync {
     fn page(&self, url: &str) -> Page;
 }
 
-pub struct WebPages {
-    client: reqwest::blocking::Client,
-}
+pub struct WebPages;
 
 impl WebPages {
     pub fn new() -> Result<Self, String> {
-        Ok(Self {
-            client: reqwest::blocking::Client::builder()
-                // Redirects are followed by hand, so each hop passes the address check.
-                .redirect(reqwest::redirect::Policy::none())
-                // Says what it is; a site that refuses it is reported unreadable, and the
-                // agent finds the same words elsewhere. Never dressed up as a browser.
-                .user_agent(concat!(
-                    "AeroEdits/",
-                    env!("CARGO_PKG_VERSION"),
-                    " (fact check of a cited page)"
-                ))
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .map_err(|e| e.to_string())?,
-        })
+        Self::client(None)?;
+        Ok(Self)
+    }
+
+    /// The client for one request; with `pinned`, it connects only to those addresses of that
+    /// host. A proxy set for this computer still carries the request and looks the host up
+    /// itself: the proxy is then what keeps it off the local network.
+    fn client(
+        pinned: Option<(&str, &[std::net::SocketAddr])>,
+    ) -> Result<reqwest::blocking::Client, String> {
+        let mut builder = reqwest::blocking::Client::builder()
+            // Redirects are followed by hand, so each hop passes the address check.
+            .redirect(reqwest::redirect::Policy::none())
+            // Says what it is; a site that refuses it is reported unreadable, and the
+            // agent finds the same words elsewhere. Never dressed up as a browser.
+            .user_agent(concat!(
+                "AeroEdits/",
+                env!("CARGO_PKG_VERSION"),
+                " (fact check of a cited page)"
+            ))
+            .timeout(std::time::Duration::from_secs(30));
+        if let Some((host, addresses)) = pinned {
+            builder = builder.resolve_to_addrs(host, addresses);
+        }
+        builder.build().map_err(|e| e.to_string())
     }
 }
 
@@ -520,11 +628,16 @@ impl PageFetch for WebPages {
     fn page(&self, url: &str) -> Page {
         let mut current = url.to_string();
         for _ in 0..6 {
-            let checked = match check_public(&current) {
-                Ok(u) => u,
+            let (checked, addresses) = match resolve_public(&current) {
+                Ok(found) => found,
                 Err(e) => return Page::Unreadable(e),
             };
-            let response = match self.client.get(checked.clone()).send() {
+            let host = checked.host_str().unwrap_or_default().to_string();
+            let client = match Self::client(Some((&host, &addresses))) {
+                Ok(client) => client,
+                Err(e) => return Page::Unreadable(e),
+            };
+            let response = match client.get(checked.clone()).send() {
                 Ok(r) => r,
                 Err(e) if e.is_timeout() => return Page::Unreadable("timed out".into()),
                 Err(_) => return Page::Unreadable("could not connect".into()),
@@ -913,12 +1026,61 @@ pub fn fetch(
                 chars: 0,
             },
         };
-        dossier.sources.retain(|s| s.url != url);
-        dossier.sources.push(source.clone());
+        // A page that can't be read again keeps what was read before: unavailable is not
+        // corrected. Its line still says why it failed.
+        let earlier_read = dossier
+            .sources
+            .iter()
+            .any(|s| s.url == url && s.status == SourceStatus::Fetched);
+        if source.status == SourceStatus::Fetched || !earlier_read {
+            dossier.sources.retain(|s| s.url != url);
+            dossier.sources.push(source.clone());
+        }
+        if source.status == SourceStatus::Fetched {
+            recheck_facts(root, &mut dossier, &url);
+        }
         out.push(source);
     }
     save(root, &mut dossier)?;
     Ok(out)
+}
+
+/// Checks the facts from `url` against its page as now saved: one whose quote or numbers are
+/// gone is taken out and listed as refused, so a corrected page never keeps a stale fact
+/// (GAP-033). A script citing it then fails its check until the scene is rewritten.
+fn recheck_facts(root: &Path, dossier: &mut Dossier, url: &str) {
+    let text = source_text(root, url).unwrap_or_default();
+    let published_on = dossier
+        .sources
+        .iter()
+        .find(|s| s.url == url)
+        .and_then(|s| s.published_on.clone());
+    let mut gone = Vec::new();
+    dossier.facts.retain_mut(|fact| {
+        if fact.input.url != url {
+            return true;
+        }
+        match verify(&fact.input.statement, &fact.input.quote, &text) {
+            None => {
+                fact.source_date = published_on.clone();
+                true
+            }
+            Some(reason) => {
+                gone.push(Rejected {
+                    statement: fact.input.statement.clone(),
+                    url: url.to_string(),
+                    reason: format!(
+                        "{} was taken out when the page was fetched again: {reason}",
+                        fact.id
+                    ),
+                });
+                false
+            }
+        }
+    });
+    dossier.rejected.extend(gone);
+    let keep_from = dossier.rejected.len().saturating_sub(100);
+    dossier.rejected.drain(..keep_from);
 }
 
 /// What adding facts did: the ids kept and the facts refused with why.
@@ -1062,7 +1224,7 @@ mod tests {
         // A planted number.
         assert_eq!(
             verify("Binance lost $6.43 billion.", quote, &text).as_deref(),
-            Some("number 6.43 is not in the quote")
+            Some("number 6.43 billion is not in the quote")
         );
         // Words the page doesn't have, and curly quotes or spacing that it does.
         assert!(verify("x", "Binance confirmed $6.34 billion was stolen", &text).is_some());
@@ -1077,6 +1239,42 @@ mod tests {
         assert!(verify("x", "short", &text).is_some());
         // GPT-5 and H100 are names, not numbers.
         assert!(numbers("GPT-5 on H100s costs 40 dollars") == vec!["40"]);
+    }
+
+    /// A number keeps its sign, scale and kind: a percentage is not a count, a billion not a
+    /// million, and a negative number is checked like any other (GAP-026).
+    #[test]
+    fn a_number_keeps_its_sign_scale_and_kind() {
+        let quote = "The trial included 40 people and raised $6.34 million in 2024";
+        let page = format!("Story. {quote}. More.");
+        assert_eq!(verify("The trial included 40 people.", quote, &page), None);
+        assert_eq!(
+            verify("It raised 6,340,000 dollars.", quote, &page),
+            None,
+            "the same amount written out"
+        );
+        assert!(verify("The trial included 40 percent of people.", quote, &page).is_some());
+        assert!(verify("The trial raised $6.34 billion.", quote, &page).is_some());
+        assert_eq!(
+            verify("The trial lost -999 dollars.", quote, &page).as_deref(),
+            Some("number -999 is not in the quote")
+        );
+        assert_eq!(
+            numbers("1,000 or 1k or 1 thousand"),
+            ["1000", "1000", "1000"]
+        );
+        assert_eq!(
+            numbers("rose 5% or 5 percentage points"),
+            ["5%", "5 points"]
+        );
+        assert_eq!(
+            numbers("from 10-20, down -3 (-4)"),
+            ["10", "20", "-3", "-4"]
+        );
+        assert_eq!(
+            numbers("covid-19 and 2,5 and 1.200.000"),
+            ["2.5", "1.2 million"]
+        );
     }
 
     #[test]
@@ -1154,6 +1352,12 @@ mod tests {
         assert!(check_public("http://192.168.1.1/").is_err());
         assert!(check_public("http://[::1]/").is_err());
         assert!(check_public("file:///C:/Windows").is_err());
+        // The addresses checked are the ones fetched from (GAP-013).
+        let (_, addresses) = resolve_public("http://1.1.1.1/").unwrap();
+        assert_eq!(addresses, ["1.1.1.1:80".parse().unwrap()]);
+        let (_, addresses) = resolve_public("https://[2606:4700::1111]/").unwrap();
+        assert_eq!(addresses, ["[2606:4700::1111]:443".parse().unwrap()]);
+        assert!(WebPages::client(Some(("example.com", &addresses))).is_ok());
         assert!(!is_public("10.0.0.5".parse().unwrap()));
         assert!(!is_public("100.64.1.1".parse().unwrap()));
         assert!(is_public("8.8.8.8".parse().unwrap()));
@@ -1178,6 +1382,78 @@ mod tests {
                 other => other,
             }
         }
+    }
+
+    /// A page that says something else when fetched again loses the facts it no longer
+    /// supports; one that can't be read again keeps what was read before (GAP-033).
+    #[test]
+    fn a_corrected_page_drops_the_facts_it_no_longer_supports() {
+        struct Changing(std::sync::Mutex<&'static str>);
+        impl PageFetch for Changing {
+            fn page(&self, _url: &str) -> Page {
+                match *self.0.lock().unwrap() {
+                    "" => Page::Unreadable("timed out".into()),
+                    text => Page::Text {
+                        text: text.into(),
+                        published_on: None,
+                        via: None,
+                    },
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root =
+            super::super::create(dir.path(), "Trial", super::super::Format::Long, &[]).unwrap();
+        let url = vec!["https://a.com/trial".to_string()];
+        let web = Changing(std::sync::Mutex::new(
+            "The trial included 40 people and ended in May.",
+        ));
+        fetch(&root, &web, &url, false).unwrap();
+        let fact = |statement: &str, quote: &str| FactInput {
+            statement: statement.into(),
+            quote: quote.into(),
+            url: url[0].clone(),
+            kind: None,
+            scope: None,
+            uncertainty: None,
+            counterpoint: None,
+            number_context: None,
+        };
+        let added = add_facts(
+            &root,
+            vec![
+                fact("40 people took part.", "The trial included 40 people"),
+                fact("It ended in May.", "and ended in May"),
+            ],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(added.kept.len(), 2);
+        // Unavailable is not corrected: both facts and the saved page stay.
+        *web.0.lock().unwrap() = "";
+        let lines = fetch(&root, &web, &url, true).unwrap();
+        assert_eq!(lines[0].status, SourceStatus::Unreadable);
+        let dossier = load(&root).unwrap();
+        assert_eq!(dossier.facts.len(), 2);
+        assert_eq!(dossier.sources[0].status, SourceStatus::Fetched);
+        // Corrected: the count changed, so that fact goes; the other still holds.
+        *web.0.lock().unwrap() = "The trial included 38 people and ended in May.";
+        fetch(&root, &web, &url, true).unwrap();
+        let dossier = load(&root).unwrap();
+        assert_eq!(
+            dossier
+                .facts
+                .iter()
+                .map(|f| f.input.statement.as_str())
+                .collect::<Vec<_>>(),
+            ["It ended in May."]
+        );
+        assert!(dossier
+            .rejected
+            .last()
+            .unwrap()
+            .reason
+            .contains("taken out when the page was fetched again"));
     }
 
     #[test]

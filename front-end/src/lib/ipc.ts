@@ -539,20 +539,24 @@ export const api = {
   /** Saves the Treg key (research); answers where the key now comes from. */
   tregSetKey: (key: string) => invokeTauri<string | null>("treg_set_key", { key }),
   tregKeySource: () => invokeTauri<string | null>("treg_key_source"),
-  publishPackage: (target: string) => invokeTauri<PublishPackageView>("publish_package", { target }),
-  publishPackageSave: (target: string, pkg: PublishPackage) =>
-    invokeTauri<PublishPackageView>("publish_package_save", { target, package: pkg }),
-  publishThumbnailFile: (target: string, path: string) =>
-    invokeTauri<PublishPackageView>("publish_thumbnail_file", { target, path }),
-  publishThumbnailFrame: (target: string, file: string, atUs: number) =>
-    invokeTauri<PublishPackageView>("publish_thumbnail_frame", { target, file, atUs }),
+  // Each publish call names the project it is for; the back end refuses it once another
+  // project is open (GAP-011).
+  publishPackage: (projectHandle: string, target: string) =>
+    invokeTauri<PublishPackageView>("publish_package", { projectHandle, target }),
+  publishPackageSave: (projectHandle: string, target: string, pkg: PublishPackage) =>
+    invokeTauri<PublishPackageView>("publish_package_save", { projectHandle, target, package: pkg }),
+  publishThumbnailFile: (projectHandle: string, target: string, path: string) =>
+    invokeTauri<PublishPackageView>("publish_thumbnail_file", { projectHandle, target, path }),
+  publishThumbnailFrame: (projectHandle: string, target: string, file: string, atUs: number) =>
+    invokeTauri<PublishPackageView>("publish_thumbnail_frame", { projectHandle, target, file, atUs }),
   /** The thumbnail from a frame of the edit as it is now (no export needed). */
-  publishThumbnailEdit: (target: string, atUs: number) =>
-    invokeTauri<PublishPackageView>("publish_thumbnail_edit", { target, atUs }),
+  publishThumbnailEdit: (projectHandle: string, target: string, atUs: number) =>
+    invokeTauri<PublishPackageView>("publish_thumbnail_edit", { projectHandle, target, atUs }),
   /** Uploads a finished export to YouTube through Zernio. Never public without the user's click. */
-  publishUpload: (target: string, file: string, release: PublishRelease) =>
-    invokeTauri<PublishUpload>("publish_upload", { target, file, release }),
-  publishRefresh: (id: string) => invokeTauri<PublishUpload>("publish_refresh", { id }),
+  publishUpload: (projectHandle: string, target: string, file: string, release: PublishRelease) =>
+    invokeTauri<PublishUpload>("publish_upload", { projectHandle, target, file, release }),
+  publishRefresh: (projectHandle: string, id: string) =>
+    invokeTauri<PublishUpload>("publish_refresh", { projectHandle, id }),
   /** Opens a Zernio or YouTube page in the browser. */
   openUrl: (url: string) => invokeTauri<void>("open_url", { url }),
   /** The open production's research, or null before any. */
@@ -564,7 +568,8 @@ export const api = {
   facelessVisuals: (fill = false) => invokeTauri<FacelessVisualsResult>("faceless_visuals", { fill }),
   facelessVisualsGet: () => invokeTauri<FacelessVisuals | null>("faceless_visuals_get"),
   /** The user listened: what the transcription heard differently is right. */
-  facelessVoiceAccept: () => invokeTauri<FacelessVoiceResult>("faceless_voice_accept"),
+  facelessVoiceAccept: (narration: string) =>
+    invokeTauri<FacelessVoiceResult>("faceless_voice_accept", { narration }),
   /** The open project's production, or null for an ordinary project. */
   facelessStatus: () => invokeTauri<FacelessProduction | null>("faceless_status"),
   pickExportDestination: (projectHandle?: string) =>

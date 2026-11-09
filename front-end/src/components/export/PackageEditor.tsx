@@ -1,11 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Film, ImagePlus, Loader2, Search } from "lucide-react";
 import { api } from "../../lib/ipc";
+import { packageSaver } from "../../lib/packageSaver";
 import type { PublishPackage, PublishPackageView, TregKeyword } from "../../lib/types";
 import { useProjectStore } from "../../stores/projectStore";
 import { Button, Switch, cn } from "../ui";
-
-const SAVE_AFTER_MS = 600;
 
 /** What a package still lacks for YouTube, in a few words; empty when it has it all. */
 export function packageGaps(view: PublishPackageView | null): string[] {
@@ -23,16 +22,21 @@ export function packageGaps(view: PublishPackageView | null): string[] {
  * A video's YouTube package (PUB-1), the same for every kind of video: title, description,
  * tags, the AI label and the thumbnail, saved in the project as you type. Your agent writes the
  * same fields with `publish`. `file`: a finished export to take a thumbnail frame from; without
- * it the frame comes from the edit at the playhead.
+ * it the frame comes from the edit at the playhead. Saves belong to `projectHandle` and
+ * `target`, not to the editor: closing it sends the last change (see `packageSaver`). Key the
+ * editor by `projectHandle` so another project starts a fresh one.
  */
 export const PackageEditor: React.FC<{
+  projectHandle: string;
   target: string;
   file?: string;
   durationUs?: number;
   onChange?: (view: PublishPackageView) => void;
   /** Read again when this changes (an agent may have written the package). */
   refreshKey?: unknown;
-}> = ({ target, file, durationUs, onChange, refreshKey }) => {
+  /** Fields can't change: an upload is using the package as saved. */
+  locked?: boolean;
+}> = ({ projectHandle, target, file, durationUs, onChange, refreshKey, locked = false }) => {
   const [view, setView] = useState<PublishPackageView | null>(null);
   const [draft, setDraft] = useState<PublishPackage | null>(null);
   const [tags, setTags] = useState("");
@@ -41,7 +45,6 @@ export const PackageEditor: React.FC<{
   const [seed, setSeed] = useState("");
   const [keywords, setKeywords] = useState<TregKeyword[] | null>(null);
   const [frameAt, setFrameAt] = useState(1);
-  const pending = useRef<number | undefined>(undefined);
   const editing = useRef(false);
 
   const show = (v: PublishPackageView, fields = true) => {
@@ -55,12 +58,41 @@ export const PackageEditor: React.FC<{
 
   useEffect(() => {
     // An agent's change shows, unless the user is typing.
-    if (editing.current) return;
-    void api.publishPackage(target).then((v) => show(v)).catch((err) => setError(String(err)));
+    if (editing.current || packageSaver.pending(projectHandle, target)) return;
+    void api
+      .publishPackage(projectHandle, target)
+      .then((v) => {
+        // A draft whose save failed comes back rather than being replaced by the old package.
+        const unsaved = packageSaver.unsaved(projectHandle, target);
+        show(v, !unsaved);
+        if (unsaved) {
+          editing.current = true;
+          setDraft(unsaved.draft);
+          setTags(unsaved.draft.tags.join(", "));
+          setError(unsaved.error);
+        }
+      })
+      .catch((err) => setError(String(err)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target, refreshKey]);
+  }, [projectHandle, target, refreshKey]);
 
-  useEffect(() => () => window.clearTimeout(pending.current), []);
+  useEffect(() => {
+    const off = packageSaver.onSaved(projectHandle, target, (result) => {
+      if ("error" in result) {
+        setError(result.error);
+        return;
+      }
+      if (!packageSaver.pending(projectHandle, target)) editing.current = false;
+      setError(undefined);
+      show(result.view, false);
+    });
+    // Closing sends what is still waiting, to the project it was typed in.
+    return () => {
+      off();
+      packageSaver.sendNow(projectHandle, target);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectHandle, target]);
 
   const tagList = (text: string) =>
     text
@@ -70,20 +102,11 @@ export const PackageEditor: React.FC<{
 
   /** Keeps `next` a moment after the last keystroke. */
   const change = (next: PublishPackage, nextTags = tags) => {
+    if (locked) return;
     setDraft(next);
     setTags(nextTags);
     editing.current = true;
-    window.clearTimeout(pending.current);
-    pending.current = window.setTimeout(() => {
-      void api
-        .publishPackageSave(target, { ...next, tags: tagList(nextTags) })
-        .then((v) => {
-          editing.current = false;
-          setError(undefined);
-          show(v, false);
-        })
-        .catch((err) => setError(String(err)));
-    }, SAVE_AFTER_MS);
+    packageSaver.schedule(projectHandle, target, { ...next, tags: tagList(nextTags) });
   };
 
   const run = async (what: string, work: () => Promise<void>) => {
@@ -116,6 +139,7 @@ export const PackageEditor: React.FC<{
           <input
             className={cn(field, "h-8 mt-1")}
             value={draft.title}
+            disabled={locked}
             onChange={(e) => change({ ...draft, title: e.target.value })}
             placeholder="Name the subject early, with one concrete stake"
           />
@@ -127,6 +151,7 @@ export const PackageEditor: React.FC<{
           <textarea
             className={cn(field, "mt-1 h-36 py-1.5 resize-y")}
             value={draft.description}
+            disabled={locked}
             onChange={(e) => change({ ...draft, description: e.target.value })}
             placeholder="What it covers, chapters, sources"
           />
@@ -147,7 +172,7 @@ export const PackageEditor: React.FC<{
         )}
         <label className="block">
           <span className="text-meta text-studio-400">Tags, separated by commas</span>
-          <input className={cn(field, "h-8 mt-1")} value={tags} onChange={(e) => change(draft, e.target.value)} />
+          <input className={cn(field, "h-8 mt-1")} value={tags} disabled={locked} onChange={(e) => change(draft, e.target.value)} />
         </label>
         <div className="space-y-1">
           <div className="flex items-center gap-2">
@@ -197,6 +222,7 @@ export const PackageEditor: React.FC<{
         <div className="flex items-center gap-3">
           <Switch
             checked={draft.aiDisclosure}
+            disabled={locked}
             onChange={(on) => change({ ...draft, aiDisclosure: on })}
             label="Altered or synthetic content"
           />
@@ -224,11 +250,11 @@ export const PackageEditor: React.FC<{
           size="sm"
           variant="secondary"
           icon={ImagePlus}
-          disabled={!!busy}
+          disabled={!!busy || locked}
           onClick={() =>
             void run("image", async () => {
               const path = await api.pickWallpaperSource();
-              if (path) show(await api.publishThumbnailFile(target, path), false);
+              if (path) show(await api.publishThumbnailFile(projectHandle, target, path), false);
             })
           }
         >
@@ -250,10 +276,10 @@ export const PackageEditor: React.FC<{
               size="sm"
               variant="ghost"
               icon={busy === "frame" ? Loader2 : Film}
-              disabled={!!busy}
+              disabled={!!busy || locked}
               onClick={() =>
                 void run("frame", async () =>
-                  show(await api.publishThumbnailFrame(target, file, Math.round(frameAt * 1e6)), false),
+                  show(await api.publishThumbnailFrame(projectHandle, target, file, Math.round(frameAt * 1e6)), false),
                 )
               }
             >
@@ -266,11 +292,11 @@ export const PackageEditor: React.FC<{
               size="sm"
               variant="ghost"
               icon={busy === "frame" ? Loader2 : Film}
-              disabled={!!busy}
+              disabled={!!busy || locked}
               title="The edit's frame where the playhead is, graphics drawn"
               onClick={() =>
                 void run("frame", async () =>
-                  show(await api.publishThumbnailEdit(target, Math.round(useProjectStore.getState().currentTimeUs)), false),
+                  show(await api.publishThumbnailEdit(projectHandle, target, Math.round(useProjectStore.getState().currentTimeUs)), false),
                 )
               }
             >

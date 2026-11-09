@@ -938,31 +938,55 @@ impl<'a> Editor<'a> {
                 continue;
             };
             let speed = self.seq.tracks[t].clips[c].speed;
-            let group: Vec<(usize, Clip)> = partners
-                .iter()
-                .filter_map(|p| {
-                    let (t, c) = self.find(p).ok()?;
-                    let clip = &self.seq.tracks[t].clips[c];
-                    (clip.end_us() == at && clip.speed == speed).then(|| (t, clip.clone()))
-                })
-                .collect();
             // Everything after moves along, and each recorded stretch comes back as a piece
             // playing at the clip's speed: across a recorder pause, the pieces stay apart as
             // they were recorded.
-            let lens: Vec<u64> = cut
-                .iter()
-                .map(|&(a, b)| fit_len(timeline_len(b - a, speed), speed, b - a))
-                .collect();
+            let lens_of = |cut: &[(u64, u64)], speed: f64| -> Vec<u64> {
+                cut.iter()
+                    .map(|&(a, b)| fit_len(timeline_len(b - a, speed), speed, b - a))
+                    .collect()
+            };
+            let lens = lens_of(&cut, speed);
+            // Each partner ending here puts back its own cut, from its own source clock. A
+            // partner cut differently (another source, other pauses or speed, or no cut at all)
+            // has no matching media to restore, so the restore is refused rather than guessed.
+            let mut group: Vec<(usize, Clip, Vec<(u64, u64)>)> = Vec::new();
+            for p in &partners {
+                let Ok((pt, pc)) = self.find(p) else {
+                    continue;
+                };
+                let clip = &self.seq.tracks[pt].clips[pc];
+                if clip.end_us() != at {
+                    continue;
+                }
+                let own = if *p == id {
+                    cut.clone()
+                } else {
+                    match self.cut_after(pt, pc) {
+                        Some(own) if lens_of(&own, clip.speed) == lens => own,
+                        _ => {
+                            return Err(format!(
+                                "A clip linked to this one on {} was cut differently, so its \
+                                 media there is unknown. Unlink it to restore this cut alone.",
+                                self.seq
+                                    .number(&self.seq.tracks[pt].id)
+                                    .unwrap_or_else(|| "another track".into())
+                            ))
+                        }
+                    }
+                };
+                group.push((pt, clip.clone(), own));
+            }
             let mut links = HashMap::new();
             self.insert_time(at, lens.iter().sum(), &mut links);
             let mut start = at;
-            for ((a, _), len) in cut.into_iter().zip(lens) {
+            for (i, len) in lens.into_iter().enumerate() {
                 let link = (group.len() > 1).then(|| self.link_id());
-                for (t, member) in &group {
+                for (t, member, own) in &group {
                     let piece = Clip {
                         id: self.clip_id(),
                         start_us: start,
-                        in_us: a,
+                        in_us: own[i].0,
                         duration_us: len,
                         link: link.clone(),
                         ..member.clone()
@@ -975,7 +999,7 @@ impl<'a> Editor<'a> {
                 restored.extend(link);
                 start += len;
             }
-            for (_, member) in group {
+            for (_, member, _) in group {
                 restored.insert(member.id);
                 restored.extend(member.link);
             }
@@ -2574,6 +2598,95 @@ mod tests {
                 );
             }
             assert_eq!(layout(&one), layout(&seq), "cut {ranges:?}, one by one");
+        }
+    }
+
+    /// Screen video on V1 and separately recorded sound on A1, each cut at timeline 2 s:
+    /// the video plays source 0-2 s then 3-5 s, the sound 10-12 s then from `12 s + sound_gap_us`.
+    fn linked_sources(sound_gap_us: u64) -> (Vec<Asset>, Sequence) {
+        let assets = vec![video("v", 10 * S), video("a", 20 * S)];
+        let clip = |id: &str, asset: &str, stream: &str, start_us, in_us| Clip {
+            id: id.into(),
+            asset: asset.into(),
+            stream: stream.into(),
+            start_us,
+            in_us,
+            duration_us: 2 * S,
+            link: None,
+            fit: Fit::default(),
+            speed: 1.0,
+            mix: crate::sequence::ClipMix::default(),
+        };
+        let mut v1 = Track::new("t0".into(), TrackKind::Video);
+        v1.clips = vec![
+            clip("c0", "v", "picture", 0, 0),
+            clip("c1", "v", "picture", 2 * S, 3 * S),
+        ];
+        let mut a1 = Track::new("t1".into(), TrackKind::Audio);
+        a1.clips = vec![
+            clip("c2", "a", "sound0", 0, 10 * S),
+            clip("c3", "a", "sound0", 2 * S, 12 * S + sound_gap_us),
+        ];
+        let seq = Sequence {
+            tracks: vec![v1, a1],
+            magnetic: true,
+        };
+        let link = SequenceEdit::Link {
+            clip_ids: vec!["c0".into(), "c2".into()],
+        };
+        (assets.clone(), run(&seq, &assets, link))
+    }
+
+    /// GAP-017: each linked partner restores its own removed media, from either track.
+    #[test]
+    fn restoring_a_cut_keeps_each_linked_sources_own_clock() {
+        let (assets, seq) = linked_sources(S);
+        for from in ["c0", "c2"] {
+            let restored = run(
+                &seq,
+                &assets,
+                SequenceEdit::RestoreCuts {
+                    clip_ids: vec![from.into()],
+                },
+            );
+            assert_eq!(
+                layout(&restored),
+                vec![
+                    ("V1".into(), "picture".into(), 0, 0, 5000),
+                    ("A1".into(), "sound0".into(), 0, 10_000, 5000),
+                ],
+                "restored from {from}"
+            );
+        }
+        let all = run(
+            &seq,
+            &assets,
+            SequenceEdit::RestoreCuts { clip_ids: vec![] },
+        );
+        assert_eq!(all.tracks[1].clips[0].in_us, 10 * S);
+        assert_eq!(all.tracks[1].clips[0].duration_us, 5 * S);
+    }
+
+    /// A partner with no cut, or a cut of another length, has nothing known to put back.
+    #[test]
+    fn restoring_refuses_a_partner_cut_differently() {
+        for gap in [0, S / 2, 2 * S] {
+            let (assets, seq) = linked_sources(gap);
+            for from in ["c0", "c2"] {
+                let edit = SequenceEdit::RestoreCuts {
+                    clip_ids: vec![from.into()],
+                };
+                if gap == 0 && from == "c2" {
+                    // The sound plays on without a cut: there is nothing to restore from it.
+                    assert!(apply(&seq, &assets, &edit).is_err());
+                    continue;
+                }
+                let err = apply(&seq, &assets, &edit).unwrap_err();
+                assert!(
+                    err.contains("cut differently"),
+                    "gap {gap}, from {from}: {err}"
+                );
+            }
         }
     }
 

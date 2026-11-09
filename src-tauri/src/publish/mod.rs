@@ -113,8 +113,15 @@ fn dir(root: &Path) -> PathBuf {
     root.join(DIR)
 }
 
+/// Every package in the project; empty when there are none, an error when the file is damaged
+/// (it is then never written over: GAP-035).
+pub fn read_packages(root: &Path) -> Result<BTreeMap<String, Package>, String> {
+    Ok(crate::files::read_json(&dir(root).join(PACKAGES))?.unwrap_or_default())
+}
+
+/// [`read_packages`] for showing: a damaged file reads as empty.
 pub fn packages(root: &Path) -> BTreeMap<String, Package> {
-    crate::files::load_json(&dir(root).join(PACKAGES)).unwrap_or_default()
+    read_packages(root).unwrap_or_default()
 }
 
 pub fn package(root: &Path, target: &str) -> Package {
@@ -150,7 +157,7 @@ pub fn save_package(root: &Path, target: &str, mut package: Package) -> Result<P
         .map(|t| t.trim().trim_start_matches('#').to_string())
         .filter(|t| !t.is_empty())
         .collect();
-    let mut all = packages(root);
+    let mut all = read_packages(root)?;
     package.thumbnail = all.get(target).and_then(|p| p.thumbnail.clone());
     all.insert(target.into(), package.clone());
     crate::files::save_json(&dir(root).join(PACKAGES), &all)?;
@@ -196,16 +203,54 @@ pub fn set_thumbnail(root: &Path, target: &str, bytes: &[u8]) -> Result<Package,
     } else {
         ext
     };
+    let mut all = read_packages(root)?;
     std::fs::create_dir_all(dir(root)).map_err(|e| e.to_string())?;
-    let name = format!("thumbnail-{target}.{ext}");
-    for old in ["jpg", "png"] {
-        let _ = std::fs::remove_file(dir(root).join(format!("thumbnail-{target}.{old}")));
+    // A new file under a name of its own first, then the package pointing at it, and only then
+    // the old picture goes: a failure part way leaves the old thumbnail and package as they
+    // were (GAP-038).
+    let digest: String = Sha256::digest(&bytes)
+        .iter()
+        .take(6)
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let name = format!("thumbnail-{target}-{digest}.{ext}");
+    let path = dir(root).join(&name);
+    crate::files::write_atomic(&path, &bytes)?;
+    let entry = all.entry(target.into()).or_default();
+    let old = entry.thumbnail.replace(name.clone());
+    if let Err(e) = crate::files::save_json(&dir(root).join(PACKAGES), &all) {
+        if old.as_deref() != Some(name.as_str()) {
+            let _ = std::fs::remove_file(&path);
+        }
+        return Err(e);
     }
-    crate::files::write_atomic(&dir(root).join(&name), &bytes)?;
-    let mut all = packages(root);
-    all.entry(target.into()).or_default().thumbnail = Some(name);
-    crate::files::save_json(&dir(root).join(PACKAGES), &all)?;
+    retire_thumbnails(root, target, &name);
     Ok(all.remove(target).unwrap_or_default())
+}
+
+/// Removes `target`'s thumbnail files other than `keep`, once the package points at `keep`.
+fn retire_thumbnails(root: &Path, target: &str, keep: &str) {
+    let Ok(entries) = std::fs::read_dir(dir(root)) else {
+        return;
+    };
+    let exact = [
+        format!("thumbnail-{target}.jpg"),
+        format!("thumbnail-{target}.png"),
+    ];
+    let prefix = format!("thumbnail-{target}-");
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let digest_named = name.strip_prefix(&prefix).is_some_and(|rest| {
+            rest.split_once('.').is_some_and(|(hex, ext)| {
+                hex.len() == 12
+                    && hex.chars().all(|c| c.is_ascii_hexdigit())
+                    && (ext == "jpg" || ext == "png")
+            })
+        });
+        if name != keep && (exact.contains(&name) || digest_named) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// An image too large for YouTube, as a 1280×720-or-smaller JPEG under 2 MB.
@@ -272,6 +317,9 @@ pub struct Upload {
     pub target: String,
     pub file: String,
     pub title: String,
+    /// The description, tags, labels and thumbnail it was sent with (a digest).
+    #[serde(default)]
+    pub package_digest: String,
     pub channel: String,
     pub release: Release,
     /// Zernio's idempotency key: the same file, channel and title always give the same key.
@@ -298,8 +346,14 @@ impl Upload {
     }
 }
 
+/// The upload journal; an error when it is damaged, so nothing is posted twice or written over.
+pub fn read_uploads(root: &Path) -> Result<Vec<Upload>, String> {
+    Ok(crate::files::read_json(&dir(root).join(UPLOADS))?.unwrap_or_default())
+}
+
+/// [`read_uploads`] for showing: a damaged journal reads as empty.
 pub fn uploads(root: &Path) -> Vec<Upload> {
-    crate::files::load_json(&dir(root).join(UPLOADS)).unwrap_or_default()
+    read_uploads(root).unwrap_or_default()
 }
 
 fn save_uploads(root: &Path, all: &[Upload]) -> Result<(), String> {
@@ -307,7 +361,7 @@ fn save_uploads(root: &Path, all: &[Upload]) -> Result<(), String> {
 }
 
 fn record(root: &Path, upload: &Upload) -> Result<(), String> {
-    let mut all = uploads(root);
+    let mut all = read_uploads(root)?;
     match all.iter_mut().find(|u| u.id == upload.id) {
         Some(existing) => *existing = upload.clone(),
         None => all.push(upload.clone()),
@@ -393,6 +447,49 @@ pub fn post_body(
     body
 }
 
+/// A digest of what an upload sends besides the file and title: description, tags, labels,
+/// category and the thumbnail's bytes.
+fn package_digest(root: &Path, package: &Package) -> String {
+    let thumbnail = thumbnail_path(root, package)
+        .and_then(|p| std::fs::read(p).ok())
+        .map(|b| Sha256::digest(&b).to_vec())
+        .unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(
+        serde_json::to_vec(&(
+            &package.description,
+            &package.tags,
+            package.ai_disclosure,
+            &package.category_id,
+        ))
+        .unwrap_or_default(),
+    );
+    hasher.update(&thumbnail);
+    hasher
+        .finalize()
+        .iter()
+        .take(12)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn release_label(release: &Release) -> String {
+    match release {
+        Release::Private => "private".into(),
+        Release::Draft => "a draft".into(),
+        Release::Scheduled { at } => format!("scheduled for {}", at.format("%Y-%m-%d %H:%M UTC")),
+    }
+}
+
+/// What differs between an earlier upload and this request, if anything.
+fn changed_since(earlier: &Upload, release: &Release, digest: &str) -> Option<String> {
+    if &earlier.release != release {
+        return Some(format!("you asked for {} now", release_label(release)));
+    }
+    (earlier.package_digest != digest)
+        .then(|| "its description, tags, labels or thumbnail changed since".to_string())
+}
+
 /// Fills an upload from Zernio's post: its status, the YouTube id and real visibility.
 fn apply_post(upload: &mut Upload, post: &Value) {
     if let Some(id) = post["_id"].as_str() {
@@ -433,7 +530,7 @@ pub fn upload(
     progress: &dyn Fn(&str),
 ) -> Result<Upload, String> {
     check_target(target)?;
-    let package = package(root, target);
+    let package = read_packages(root)?.remove(target).unwrap_or_default();
     if let Some(problem) = package_problem(&package) {
         return Err(problem);
     }
@@ -450,10 +547,27 @@ pub fn upload(
     }
     progress("Checking the file");
     let key = upload_key(&file_digest(file)?, channel, package.title.trim());
-    if let Some(mut earlier) = uploads(root)
+    let sent = package_digest(root, &package);
+    if let Some(mut earlier) = read_uploads(root)?
         .into_iter()
         .find(|u| u.key == key && u.status != "failed")
     {
+        // The same export, channel and title went up before. Only an exact retry is answered
+        // from it; a new release or changed details would otherwise be dropped without a word
+        // (GAP-002).
+        if let Some(change) = changed_since(&earlier, &release, &sent) {
+            return Err(format!(
+                "This export already went to Zernio on {} as {}, and {change}. Uploading again \
+                 would not change that post: change it in YouTube Studio{} or the Zernio \
+                 dashboard ({}), or change the title to send a new video.",
+                earlier.attempted_at.format("%Y-%m-%d %H:%M UTC"),
+                release_label(&earlier.release),
+                earlier
+                    .studio_link()
+                    .map_or(String::new(), |l| format!(" ({l})")),
+                zernio::DASHBOARD_URL
+            ));
+        }
         // Already sent: read where it stands instead of posting twice.
         if let Some(post_id) = earlier.post_id.clone() {
             if let Ok(post) = client.post(&post_id) {
@@ -499,6 +613,7 @@ pub fn upload(
         target: target.into(),
         file: file.to_string_lossy().into_owned(),
         title: package.title.trim().into(),
+        package_digest: sent,
         channel: channel.into(),
         release: release.clone(),
         key: key.clone(),
@@ -539,7 +654,7 @@ pub fn upload(
 
 /// Reads an upload's status again from Zernio.
 pub fn refresh(root: &Path, client: &zernio::Client, id: &str) -> Result<Upload, String> {
-    let mut upload = uploads(root)
+    let mut upload = read_uploads(root)?
         .into_iter()
         .find(|u| u.id == id)
         .ok_or("No such upload")?;
@@ -769,7 +884,11 @@ mod tests {
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
         let p = set_thumbnail(&root, "video", &png).unwrap();
-        assert_eq!(p.thumbnail.as_deref(), Some("thumbnail-video.png"));
+        let name = p.thumbnail.clone().unwrap();
+        assert!(
+            name.starts_with("thumbnail-video-") && name.ends_with(".png"),
+            "{name}"
+        );
         assert!(thumbnail_path(&root, &p).is_some());
         let mut small = Vec::new();
         image::RgbImage::new(100, 100)
@@ -791,7 +910,124 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(saved.thumbnail.as_deref(), Some("thumbnail-video.png"));
+        assert_eq!(saved.thumbnail.as_deref(), Some(name.as_str()));
+    }
+
+    fn png(width: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        image::RgbImage::new(width, 720)
+            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    /// GAP-038: a replacement that fails part way leaves the old thumbnail and package usable;
+    /// one that works removes the old picture.
+    #[test]
+    fn a_failed_thumbnail_replacement_keeps_the_old_one() {
+        let (_dir, root, _) = project();
+        let first = set_thumbnail(&root, "video", &png(1280)).unwrap();
+        let old = thumbnail_path(&root, &first).unwrap();
+        let old_bytes = std::fs::read(&old).unwrap();
+        // The package can't be written: a folder stands where it goes.
+        let packages_file = dir(&root).join(PACKAGES);
+        let saved = std::fs::read(&packages_file).unwrap();
+        std::fs::remove_file(&packages_file).unwrap();
+        std::fs::create_dir(&packages_file).unwrap();
+        assert!(set_thumbnail(&root, "video", &png(1300)).is_err());
+        std::fs::remove_dir(&packages_file).unwrap();
+        std::fs::write(&packages_file, saved).unwrap();
+        assert_eq!(
+            std::fs::read(&old).unwrap(),
+            old_bytes,
+            "the old picture stays"
+        );
+        assert_eq!(package(&root, "video").thumbnail, first.thumbnail);
+        let thumbnails = || {
+            std::fs::read_dir(dir(&root))
+                .unwrap()
+                .filter(|e| {
+                    let e = e.as_ref().unwrap();
+                    e.file_name().to_string_lossy().starts_with("thumbnail-")
+                })
+                .count()
+        };
+        assert_eq!(thumbnails(), 1, "the half-made new one is cleaned up");
+        let second = set_thumbnail(&root, "video", &png(1300)).unwrap();
+        assert_ne!(second.thumbnail, first.thumbnail);
+        assert!(
+            !old.exists(),
+            "replaced once the package points at the new one"
+        );
+        assert_eq!(thumbnails(), 1);
+    }
+
+    /// GAP-035: a damaged package file is reported and never written over.
+    #[test]
+    fn a_damaged_package_file_is_never_overwritten() {
+        let (_dir, root, _) = project();
+        let path = dir(&root).join(PACKAGES);
+        std::fs::create_dir_all(dir(&root)).unwrap();
+        let damaged = br#"{"video":{"title":"Main"},"s1":{"title":"Short dra"#;
+        std::fs::write(&path, damaged).unwrap();
+        assert!(read_packages(&root).unwrap_err().contains("damaged"));
+        let words = Package {
+            title: "New".into(),
+            ..Default::default()
+        };
+        assert!(save_package(&root, "video", words).is_err());
+        assert!(set_thumbnail(&root, "video", &png(1280)).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), damaged, "left as it was");
+        // A damaged journal blocks uploads and records too.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(dir(&root).join(UPLOADS), b"[{").unwrap();
+        assert!(read_uploads(&root).is_err());
+        // A missing file is simply empty.
+        std::fs::remove_file(dir(&root).join(UPLOADS)).unwrap();
+        assert!(read_packages(&root).unwrap().is_empty());
+        assert!(read_uploads(&root).unwrap().is_empty());
+    }
+
+    /// GAP-002: once an export is sent, only an exact retry is answered from that upload; a new
+    /// release or changed details are refused with what to do, and nothing is posted.
+    #[test]
+    fn a_changed_release_or_package_is_not_taken_for_a_retry() {
+        let (_dir, root, file) = project();
+        let words = |description: &str| Package {
+            title: "My video".into(),
+            description: description.into(),
+            ..Default::default()
+        };
+        save_package(&root, "video", words("What it shows")).unwrap();
+        let fake = Fake::default();
+        let client = Client { http: &fake };
+        let now = Utc::now();
+        let send = |release: Release| {
+            upload(
+                &root,
+                &client,
+                "video",
+                &file,
+                release,
+                "ch1",
+                "28",
+                now,
+                &|_| {},
+            )
+        };
+        send(Release::Draft).unwrap();
+        assert_eq!(*fake.posts.lock(), 1);
+        // Exactly the same again: answered from the first, not posted twice.
+        assert_eq!(send(Release::Draft).unwrap().release, Release::Draft);
+        let at = now + chrono::Duration::days(1);
+        let scheduled = send(Release::Scheduled { at }).unwrap_err();
+        assert!(scheduled.contains("as a draft"), "{scheduled}");
+        assert!(scheduled.contains("scheduled for"), "{scheduled}");
+        assert!(send(Release::Private).unwrap_err().contains("private now"));
+        save_package(&root, "video", words("Better words")).unwrap();
+        assert!(send(Release::Draft).unwrap_err().contains("description"));
+        assert_eq!(*fake.posts.lock(), 1, "nothing more was posted");
+        assert_eq!(read_uploads(&root).unwrap().len(), 1);
     }
 
     #[test]

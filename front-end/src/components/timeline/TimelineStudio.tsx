@@ -30,7 +30,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { Badge, Button, IconButton, cn } from "../ui";
+import { Badge, Button, IconButton, cn, modalOpen } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { useAgentStore } from "../../stores/agentStore";
 import { useTimeline } from "../../hooks/useTimeline";
@@ -1168,6 +1168,9 @@ export const TimelineStudio: React.FC = () => {
   const ONCE: HotkeyAction[] = ["playPause", "shuttleForward", "pause", "split", "rippleTrimPrevious", "rippleTrimNext", "toggleLink", "deleteSelection", "rippleDelete", "selectAll", "deselectAll"];
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // A key another part handled (a transcript cut, a tab's arrows), or pressed while a dialog
+      // is open, is not the editor's (GAP-019).
+      if (event.defaultPrevented || modalOpen()) return;
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       const action = useHotkeyStore.getState().actionFor(event);
