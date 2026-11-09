@@ -10,7 +10,7 @@ if (import.meta.env.DEV) {
 }
 
 // Preview builds (`npm run build:preview`): a canned backend stands in for the desktop app.
-if (import.meta.env.VITE_MOCK_IPC === "1") {
+if (import.meta.env.MODE === "mock") {
   await import("./mock/install");
 }
 
