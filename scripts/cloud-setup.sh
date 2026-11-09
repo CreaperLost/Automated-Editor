@@ -32,7 +32,7 @@ fi
 # Core: a C toolchain for build scripts, pkg-config, FFmpeg (the app's media backend; Ubuntu's
 # build has libx264), and Mesa's lavapipe so wgpu has a software Vulkan adapter for the
 # compositor/export tests and the smoke test (no real GPU in a VM).
-packages=(build-essential pkg-config curl ca-certificates git xz-utils file
+packages=(build-essential pkg-config curl ca-certificates git xz-utils file unzip
           ffmpeg mesa-vulkan-drivers libvulkan1 libssl-dev)
 # The Tauri desktop shell (`cargo check --features tauri-app`), same list as .github/workflows/ci.yml.
 if [[ "${AEROEDITS_SKIP_TAURI_DEPS:-0}" != "1" ]]; then

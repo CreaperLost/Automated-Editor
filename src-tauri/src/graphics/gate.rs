@@ -1923,6 +1923,12 @@ mod tests {
                 report.seconds,
                 report.lines().join("\n  ")
             );
+            // `GATE_SHEETS=<dir>` keeps each contact sheet as `<template>.png` (CI uploads them).
+            if let Some(keep) = std::env::var_os("GATE_SHEETS") {
+                std::fs::create_dir_all(&keep).unwrap();
+                let to = Path::new(&keep).join(format!("{}.png", template.name));
+                std::fs::copy(report.sheet.as_deref().unwrap(), to).unwrap();
+            }
             assert!(report.passed, "{} fails the gate", template.name);
             assert!(Path::new(report.sheet.as_deref().unwrap()).is_file());
             if template.name == "title" {

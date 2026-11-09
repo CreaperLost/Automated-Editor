@@ -112,6 +112,9 @@ show that a pipeline change works; describe what the frames show in the PR.
   huggingface.co / NVIDIA on first use and are behind the `parakeet` / `local-llm` features; the
   cloud network allowlist normally blocks those hosts. `cargo check --features parakeet` works.
 - The graphics runtime (Node + HyperFrames + chrome-headless-shell) downloads from nodejs.org,
-  registry.npmjs.org and storage.googleapis.com; `graphics_gate_real` needs it.
+  registry.npmjs.org and storage.googleapis.com; `graphics_gate_real` needs it (install:
+  `cargo test --lib graphics_runtime_installs -- --ignored`; `GATE_SHEETS=<dir>` keeps the sheets).
+  If npm fails with "error sending request", run with `NO_PROXY=localhost` (the cloud proxy
+  list sends npm direct, which Rust's client can't reach). CI runs it in `graphics-gate.yml`.
 - Windows-only: installer (`scripts/build-windows.ps1`), MCP named pipe, WASAPI audio, CUDA
   pack, keychain. macOS-only: Swift bridges. Real recordings live only on George's old disk.

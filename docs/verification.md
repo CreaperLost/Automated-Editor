@@ -69,6 +69,11 @@ finds it, muting it leaves peak 0.013 there (room 0.022; 0.147 unmuted), and nor
 at 0.5 s and none at 3.0 s. Viewed frames: white outlined caption text low in the frame over
 the test pattern, “HELLO” then “HELLO WORLD”, none after.
 
+9 Nov (CL-9), cloud VM: the graphics runtime installs on Linux once Chrome's zip is unpacked
+with `unzip`, and `graphics_gate_real` passes all 17 bundled templates plus the one-off in 313 s.
+Viewed the headline sheet: clean at 16:9 and 9:16 with long text; in the split part the source
+line touches the subtitle's second line (the gate passes it).
+
 ## Faceless and publish acceptance
 
 Implementation present is not production acceptance. No live calls were made in this pass.
