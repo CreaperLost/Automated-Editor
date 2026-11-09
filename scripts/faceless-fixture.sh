@@ -7,8 +7,12 @@
 #       renders them again), the voice's raw takes and the fetched pages (other publishers'
 #       articles; the quoted facts stay). WAVs are kept as Opus (about 20x smaller). Projects
 #       keep absolute media paths, so the folder it was made in is kept in origin.txt.
+#       A WAV identical to one already kept is stored as `<file>.same`, naming that one.
 #   scripts/faceless-fixture.sh restore <name>
 #       Copies it back to that folder (so its paths resolve) and prints the folder.
+#   scripts/faceless-fixture.sh check
+#       Fails past 3 productions or 10 MB (CI runs it): git keeps every byte ever committed,
+#       so a new production replaces the oldest one instead of adding a fourth.
 #
 # Make productions under a short fixed HOME (e.g. HOME=/tmp/aeroedits-home) so the same path
 # exists on a CI runner.
@@ -33,10 +37,17 @@ save)
         rm -f assets/graphics/*/*.webm assets/graphics/*/*.mov assets/graphics/*/*.png
         rm -rf ./*" frames" renders cache checkpoints
     )
-    find "$dest/project" -name '*.wav' -print0 | while IFS= read -r -d '' wav; do
-        ffmpeg -nostdin -v error -y -i "$wav" -c:a libopus -b:a 96k "$wav.opus"
+    declare -A kept=()
+    while IFS= read -r -d '' wav; do
+        sum="$(sha256sum "$wav" | cut -d' ' -f1)"
+        if [[ -n "${kept[$sum]:-}" ]]; then
+            printf '%s\n' "${kept[$sum]}" >"$wav.same"
+        else
+            ffmpeg -nostdin -v error -y -i "$wav" -c:a libopus -b:a 96k "$wav.opus"
+            kept[$sum]="${wav#"$dest/project/"}"
+        fi
         rm "$wav"
-    done
+    done < <(find "$dest/project" -name '*.wav' -print0 | sort -z)
     printf '%s\n' "$src" >"$dest/origin.txt"
     du -sh "$dest"
     ;;
@@ -49,10 +60,23 @@ restore)
         ffmpeg -nostdin -v error -y -i "$opus" -ar 48000 "${opus%.opus}"
         rm "$opus"
     done
+    find "$origin" -name '*.wav.same' -print0 | while IFS= read -r -d '' same; do
+        cp "$origin/$(cat "$same")" "${same%.same}"
+        rm "$same"
+    done
     printf '%s\n' "$origin"
     ;;
+check)
+    count="$(find "$store" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+    kb="$(du -sk "$store" | cut -f1)"
+    echo "test/productions: $count production(s), $((kb / 1024)) MB"
+    if ((count > 3 || kb > 10240)); then
+        echo "Keep at most 3 productions and 10 MB: replace the oldest instead of adding one." >&2
+        exit 1
+    fi
+    ;;
 *)
-    echo "Usage: $0 save <production folder> <name> | restore <name>" >&2
+    echo "Usage: $0 save <production folder> <name> | restore <name> | check" >&2
     exit 2
     ;;
 esac

@@ -58,7 +58,7 @@ bash scripts/test-all.sh         # everything below; --quick skips the GPU set a
 | Smoke test | `cd src-tauri && AEROEDITS_SMOKE_OUT=/tmp/smoke.mp4 AEROEDITS_SMOKE_DIR=/tmp/smoke cargo test --lib smoke -- --nocapture` (the other smoke exports go to the folder) |
 | Look at an output | `bash scripts/snapshot-frames.sh /tmp/smoke.mp4 6` then Read the PNGs / `contact-sheet.png` |
 | Drive the app with no window | `cd src-tauri && NO_PROXY=localhost,127.0.0.1 cargo run --bin aeroedits -- serve &` then `target/debug/aeroedits do <tool>` |
-| Faceless renders | `test/productions/<name>/` (saved with `scripts/faceless-fixture.sh save`); `faceless-render.yml` renders each to 1080×1920 and uploads `faceless-shorts` |
+| Faceless renders | `test/productions/<name>/` (saved with `scripts/faceless-fixture.sh save`); `faceless-render.yml` renders each to 1080×1920 and uploads `faceless-shorts`. At most 3 and 10 MB (`faceless-fixture.sh check`): a new one replaces the oldest |
 | Render a project, no app | `cd src-tauri && cargo run --bin aeroedits -- render <project> --out /tmp/x.mp4 --frames 6` (prints the MP4, stills and contact sheet) |
 | Front-end | `cd front-end && npx tsc --noEmit && npm run test:cleanup && npm run build` (no ESLint configured; tests are node scripts, not vitest) |
 | Look at the UI | `cd front-end && npm run build:preview && npm run screenshots` then Read `preview-screenshots/*.png` (canned backend; a new command needs an answer: `cargo test --lib preview_mock -- --ignored` rewrites `src/mock/backend.json`, odd ones go in `src/mock/backend.ts`) |

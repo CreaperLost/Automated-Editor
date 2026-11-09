@@ -39,6 +39,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      # At most 3 productions and 10 MB: git keeps every byte ever committed.
+      - name: Saved productions stay small
+        run: bash scripts/faceless-fixture.sh check
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri

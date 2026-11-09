@@ -612,7 +612,6 @@ fn spelled_numbers(tokens: Vec<String>) -> Vec<String> {
         };
         if !fits(&w, last) {
             flush(&mut out, &mut total, &mut current, &mut words);
-            last = Last::None;
         }
         match w {
             Word::Unit(n) => (current, last) = (current + n, Last::Unit),
