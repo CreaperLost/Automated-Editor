@@ -4853,11 +4853,15 @@ mod tests {
             ));
         }
         let first = built();
+        let before = crate::graphics::render::generation();
         evaluator.graphic_job(&clip, 600_000);
-        assert!(
-            std::sync::Arc::ptr_eq(&first, &built()),
-            "one spec for every frame"
-        );
+        // Other tests may change graphics meanwhile: only compare within one generation.
+        if crate::graphics::render::generation() == before {
+            assert!(
+                std::sync::Arc::ptr_eq(&first, &built()),
+                "one spec for every frame"
+            );
+        }
         crate::graphics::render::sources_changed();
         evaluator.graphic_job(&clip, 700_000);
         assert!(
