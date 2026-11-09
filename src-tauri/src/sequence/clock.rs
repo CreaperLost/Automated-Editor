@@ -16,6 +16,23 @@ pub const GAP: &str = "gap";
 /// The clock through the clips `pick` chooses, as entries in timeline order: each clip as a
 /// range of the asset's time, the time between as gaps.
 pub fn entries(sequence: &Sequence, pick: impl Fn(&Track, &Clip) -> bool) -> Vec<RetainedInterval> {
+    layers(sequence, pick)
+        .into_iter()
+        .next()
+        .unwrap_or_default()
+}
+
+/// At most this many plays of one moment get a clock of their own.
+const MAX_LAYERS: usize = 8;
+
+/// Clocks through the clips `pick` chooses that, together, place every play of each moment:
+/// the first is [`entries`] (the first time a moment plays), the next holds the moments played
+/// a second time, and so on. Captions read each, so a repeated line is captioned each time it
+/// plays (GAP-023).
+pub fn layers(
+    sequence: &Sequence,
+    pick: impl Fn(&Track, &Clip) -> bool,
+) -> Vec<Vec<RetainedInterval>> {
     let mut clips: Vec<(usize, &Clip)> = sequence
         .tracks
         .iter()
@@ -25,43 +42,86 @@ pub fn entries(sequence: &Sequence, pick: impl Fn(&Track, &Clip) -> bool) -> Vec
         .map(|(i, _, c)| (i, c))
         .collect();
     clips.sort_by_key(|(track, c)| (c.start_us, *track));
-    let mut out = Vec::new();
-    // The asset's time placed so far, merged and in order.
-    let mut used: Vec<(u64, u64)> = Vec::new();
-    let mut cursor = 0u64;
+    struct Layer {
+        out: Vec<RetainedInterval>,
+        /// The asset's time placed so far, merged and in order.
+        used: Vec<(u64, u64)>,
+        cursor: u64,
+    }
+    let mut layers: Vec<Layer> = Vec::new();
     for (_, clip) in clips {
-        // What the clip adds: its part after the timeline already used, less the moments
-        // already placed (the first time a moment plays counts).
-        let skip = clip.source_offset(cursor.saturating_sub(clip.start_us).min(clip.duration_us));
         let out_us = clip.out_us();
-        for (a, b) in unplaced(&used, (clip.in_us + skip).min(out_us), out_us) {
-            place(&mut used, (a, b));
-            // Where it plays, at the clip's speed (rounding never steps back over the last).
-            let start = clip.timeline_at(a).max(cursor);
-            let end = if b == out_us {
-                clip.end_us()
-            } else {
-                clip.timeline_at(b)
-            };
-            if end <= start {
-                continue;
+        // The parts of the clip still to place; those already placed in a layer try the next.
+        let mut pending = vec![(clip.in_us, out_us)];
+        for index in 0..MAX_LAYERS {
+            if pending.is_empty() {
+                break;
             }
-            if start > cursor {
-                out.push(RetainedInterval {
-                    start_us: 0,
-                    end_us: start - cursor,
-                    media: Some(GAP.into()),
-                    ..Default::default()
+            if index == layers.len() {
+                layers.push(Layer {
+                    out: Vec::new(),
+                    used: Vec::new(),
+                    cursor: 0,
                 });
             }
-            out.push(RetainedInterval {
-                edited_len_us: (end - start != b - a).then_some(end - start),
-                ..RetainedInterval::recording(a, b)
-            });
-            cursor = end;
+            let layer = &mut layers[index];
+            // What the clip adds here: its part after the timeline already used, less the
+            // moments already placed (the first time a moment plays counts).
+            let skip = clip.source_offset(
+                layer
+                    .cursor
+                    .saturating_sub(clip.start_us)
+                    .min(clip.duration_us),
+            );
+            let from_us = (clip.in_us + skip).min(out_us);
+            let mut repeats = Vec::new();
+            for (from, to) in pending {
+                let from = from.max(from_us);
+                if from >= to {
+                    continue;
+                }
+                let fresh = unplaced(&layer.used, from, to);
+                let mut at = from;
+                for &(a, b) in &fresh {
+                    if a > at {
+                        repeats.push((at, a));
+                    }
+                    at = b;
+                }
+                if at < to {
+                    repeats.push((at, to));
+                }
+                for (a, b) in fresh {
+                    place(&mut layer.used, (a, b));
+                    // Where it plays, at the clip's speed (rounding never steps back over the last).
+                    let start = clip.timeline_at(a).max(layer.cursor);
+                    let end = if b == out_us {
+                        clip.end_us()
+                    } else {
+                        clip.timeline_at(b)
+                    };
+                    if end <= start {
+                        continue;
+                    }
+                    if start > layer.cursor {
+                        layer.out.push(RetainedInterval {
+                            start_us: 0,
+                            end_us: start - layer.cursor,
+                            media: Some(GAP.into()),
+                            ..Default::default()
+                        });
+                    }
+                    layer.out.push(RetainedInterval {
+                        edited_len_us: (end - start != b - a).then_some(end - start),
+                        ..RetainedInterval::recording(a, b)
+                    });
+                    layer.cursor = end;
+                }
+            }
+            pending = repeats;
         }
     }
-    out
+    layers.into_iter().map(|layer| layer.out).collect()
 }
 
 /// `[from, to)` less the ranges in `used` (merged and in order). Starts at the first range

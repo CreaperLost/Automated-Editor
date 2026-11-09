@@ -1915,8 +1915,14 @@ impl SceneEvaluator {
     }
 }
 
-/// The sounds captions may read, best first: speech on the timeline (top audio track first,
-/// earliest clip first), then the rest of the project's speech.
+/// Whether `track` is heard in the output: not muted and not turned all the way down, as the
+/// mixer plays it. Automatic captions read only what is heard (GAP-022).
+fn audible(document: &EditDocument, track: &crate::sequence::Track) -> bool {
+    !track.muted && document.audio.track_gain(&track.id) > 0.0
+}
+
+/// The sounds captions may read, best first: speech heard on the timeline (top audio track
+/// first, earliest clip first), then the rest of the project's speech.
 pub fn caption_candidates(document: &EditDocument) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut push = |key: String| {
@@ -1924,7 +1930,11 @@ pub fn caption_candidates(document: &EditDocument) -> Vec<String> {
             out.push(key);
         }
     };
-    for track in document.sequence.audio_tracks() {
+    for track in document
+        .sequence
+        .audio_tracks()
+        .filter(|t| audible(document, t))
+    {
         for clip in &track.clips {
             if crate::sequence::clip_role(&document.assets, track, clip) == Some(Role::Mic) {
                 push(clip.source().key());
@@ -1941,7 +1951,9 @@ pub fn caption_candidates(document: &EditDocument) -> Vec<String> {
 
 /// The captions of `document`, each with the transcript it reads, in edited time: the chosen
 /// sound's, else the first transcribed speech of each recording or file, so every recording
-/// on the timeline is captioned. Where two speak at once the earlier caption gives way.
+/// on the timeline is captioned. Automatic captions follow only the clips that are heard; a
+/// chosen sound is captioned even on a muted track (a guide track). A line that plays twice is
+/// captioned each time. Where two speak at once the earlier caption gives way.
 /// `None` when nothing is transcribed.
 pub fn caption_track_cues(
     document: &EditDocument,
@@ -1970,15 +1982,24 @@ pub fn caption_track_cues(
         return None;
     }
     let mut cues: Vec<(String, crate::captions::CaptionCue)> = Vec::new();
+    let chosen = settings.track_id.is_some();
     for transcript in &transcripts {
-        let Ok(clock) = document.transcript_clock(&transcript.track_id) else {
+        let Ok(source) = document.stream_ref(&transcript.track_id) else {
             continue;
         };
-        cues.extend(
-            crate::captions::build_cues(transcript, &clock, settings)
-                .into_iter()
-                .map(|cue| (transcript.track_id.clone(), cue)),
-        );
+        let plays = crate::sequence::clock::layers(&document.sequence, |track, clip| {
+            clip.asset == source.asset
+                && clip.stream == source.stream
+                && (chosen || audible(document, track))
+        });
+        for entries in plays {
+            let clock = crate::sequence::clock::mapper(&entries);
+            cues.extend(
+                crate::captions::build_cues(transcript, &clock, settings)
+                    .into_iter()
+                    .map(|cue| (transcript.track_id.clone(), cue)),
+            );
+        }
     }
     cues.sort_by_key(|(_, cue)| cue.start_us);
     for i in 1..cues.len() {
@@ -4070,6 +4091,63 @@ mod tests {
         let cues = caption_track_cues(&document, &chosen, load).unwrap();
         assert_eq!(cues.len(), 1);
         assert!(caption_track_cues(&document, &document.captions, |_| None).is_none());
+    }
+
+    /// Captions follow what is heard: a muted speech track is not captioned unless chosen
+    /// (GAP-022), and a line that plays twice is captioned both times (GAP-023).
+    #[test]
+    fn captions_follow_the_speech_that_plays() {
+        use crate::project::revision::EditDocument;
+        use crate::sequence::tests::recording;
+        use crate::transcript::{test_word, ProviderKind, Transcript};
+
+        const S: u64 = 1_000_000;
+        let mut document = EditDocument::from_recording(recording("a", S, &[])).unwrap();
+        let load = |key: &str| {
+            (key == "a.mic").then(|| {
+                Transcript::new(
+                    key.into(),
+                    ProviderKind::ElevenLabs,
+                    "scribe_v2".into(),
+                    None,
+                    vec![test_word("again", 100, 400)],
+                )
+            })
+        };
+        let starts = |document: &EditDocument, settings: &crate::captions::CaptionSettings| {
+            caption_track_cues(document, settings, load)
+                .unwrap()
+                .iter()
+                .map(|(_, cue)| cue.start_us)
+                .collect::<Vec<_>>()
+        };
+        // The same second of speech again at 2 s.
+        let mic = document
+            .sequence
+            .tracks
+            .iter()
+            .position(|t| t.clips.iter().any(|c| c.stream == "mic"))
+            .unwrap();
+        let mut repeat = document.sequence.tracks[mic].clips[0].clone();
+        repeat.id = "repeat".into();
+        repeat.start_us = 2 * S;
+        repeat.link = None;
+        document.sequence.tracks[mic].clips.push(repeat);
+        assert_eq!(starts(&document, &document.captions), [100_000, 2_100_000]);
+        // Muted: nothing heard, nothing captioned; chosen, it is read as a guide track.
+        document.sequence.tracks[mic].muted = true;
+        assert!(starts(&document, &document.captions).is_empty());
+        let mut chosen = document.captions.clone();
+        chosen.track_id = Some("a.mic".into());
+        assert_eq!(starts(&document, &chosen), [100_000, 2_100_000]);
+        // The same sound on a muted track and a heard one: only the heard one counts.
+        let mut heard = document.sequence.tracks[mic].clone();
+        heard.id = "heard".into();
+        heard.muted = false;
+        heard.clips.retain(|c| c.id == "repeat");
+        heard.clips[0].id = "heard-repeat".into();
+        document.sequence.tracks.push(heard);
+        assert_eq!(starts(&document, &document.captions), [2_100_000]);
     }
 
     /// Captions come from the mic transcript, skip cut words and land in the frame.
