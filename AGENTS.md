@@ -24,7 +24,7 @@ here: no copies of graphics, drafts, plans or notes. Graphics go into the projec
 | Path | What |
 |---|---|
 | `src-tauri/src/lib.rs` | Tauri app setup and command registration (`tauri-app` feature) |
-| `src-tauri/src/main.rs` | Binary: GUI, `--mcp-stdio` bridge, `aeroedits do <tool>` CLI |
+| `src-tauri/src/main.rs` | Binary: GUI, `--mcp-stdio` bridge, `aeroedits do <tool>` CLI, `serve` (no window), `render` |
 | `src-tauri/src/commands/` | Every UI command as `*_impl(&AppState, …)`; MCP calls the same functions |
 | `src-tauri/src/project/` | Project folder, reader, revisions, undo history, silence analysis |
 | `src-tauri/src/sequence/` | Tracks/clips model, `SequenceEdit`, source↔timeline clocks |
@@ -57,6 +57,8 @@ bash scripts/test-all.sh         # everything below; --quick skips the GPU set a
 | GPU compositor/export tests | `cd src-tauri && cargo test --lib gpu -- --include-ignored` (software Vulkan via `mesa-vulkan-drivers`) |
 | Smoke test | `cd src-tauri && AEROEDITS_SMOKE_OUT=/tmp/smoke.mp4 AEROEDITS_SMOKE_DIR=/tmp/smoke cargo test --lib smoke -- --nocapture` (the other smoke exports go to the folder) |
 | Look at an output | `bash scripts/snapshot-frames.sh /tmp/smoke.mp4 6` then Read the PNGs / `contact-sheet.png` |
+| Drive the app with no window | `cd src-tauri && NO_PROXY=localhost,127.0.0.1 cargo run --bin aeroedits -- serve &` then `target/debug/aeroedits do <tool>` |
+| Faceless renders | `test/productions/<name>/` (saved with `scripts/faceless-fixture.sh save`); `faceless-render.yml` renders each to 1080×1920 and uploads `faceless-shorts` |
 | Render a project, no app | `cd src-tauri && cargo run --bin aeroedits -- render <project> --out /tmp/x.mp4 --frames 6` (prints the MP4, stills and contact sheet) |
 | Front-end | `cd front-end && npx tsc --noEmit && npm run test:cleanup && npm run build` (no ESLint configured; tests are node scripts, not vitest) |
 | Look at the UI | `cd front-end && npm run build:preview && npm run screenshots` then Read `preview-screenshots/*.png` (canned backend; a new command needs an answer: `cargo test --lib preview_mock -- --ignored` rewrites `src/mock/backend.json`, odd ones go in `src/mock/backend.ts`) |
