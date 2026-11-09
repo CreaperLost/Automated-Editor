@@ -564,17 +564,17 @@ impl<'a> Editor<'a> {
         right.id = self.clip_id();
         // Partners split at the same point share the right pieces' new link; a split elsewhere
         // (another cut of the same edit) gets one of its own.
-        right.link = match &clip.link {
-            Some(link) => Some(match links.get(&(link.clone(), at)) {
+        right.link = clip
+            .link
+            .as_ref()
+            .map(|link| match links.get(&(link.clone(), at)) {
                 Some(new) => new.clone(),
                 None => {
                     let new = self.link_id();
                     links.insert((link.clone(), at), new.clone());
                     new
                 }
-            }),
-            None => None,
-        };
+            });
         // Fades stay at the outer ends.
         right.mix.fade_in_us = 0;
         self.seq.tracks[t].clips[index].duration_us = at - clip.start_us;
@@ -1340,7 +1340,7 @@ impl<'a> Editor<'a> {
         };
         // The clip and the partners whose same edge is at the same place.
         let group: Vec<String> = self
-            .with_partners(&[clip.id.clone()])?
+            .with_partners(std::slice::from_ref(&clip.id))?
             .into_iter()
             .filter(|id| {
                 self.seq.clip(id).is_some_and(|(_, p)| match edge {

@@ -143,7 +143,7 @@ fn face_rect(
                 == Some(crate::sequence::Role::Webcam))
             .then_some(clip)
         })
-        .last()?;
+        .next_back()?;
     let local = clip.local_us(at)?;
     let track = crate::face::cached_track(root, &clip.asset, &clip.stream)?;
     let face = track

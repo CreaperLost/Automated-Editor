@@ -98,7 +98,7 @@ pub fn encode_bgra_mp4(path: &Path, frames: &[VideoFrame], fps: u32) -> Result<(
     let height = frames[0].height;
     let stride = frames[0].stride;
     super::validate_dim(width, height)?;
-    if width % 2 != 0 || height % 2 != 0 {
+    if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
         return Err("H.264 encoder requires even dimensions".into());
     }
     for frame in frames {

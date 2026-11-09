@@ -393,6 +393,7 @@ pub(crate) fn switch_started() {
 }
 
 /// Logs how long after the switch `stage` came; `last` ends the switch.
+#[allow(dead_code)] // Only the native preview paths call it.
 pub(crate) fn switch_stage(stage: &str, last: bool) {
     if !profiling() {
         return;

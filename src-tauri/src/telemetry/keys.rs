@@ -216,7 +216,7 @@ pub fn read_keys(root: &Path, diagnostics: &mut Vec<String>) -> Result<Option<Ke
                     return;
                 }
                 stream.shortcuts.push(Shortcut {
-                    t_us: t_us,
+                    t_us,
                     modifiers,
                     code: code.map(|c| c.chars().take(32).collect()),
                     label,

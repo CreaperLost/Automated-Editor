@@ -541,7 +541,7 @@ fn bucket_us_for(info: &WavInfo, segment: &SegmentSummary) -> u64 {
 
 fn bucket_count_for(segment: &SegmentSummary, bucket_us: u64) -> usize {
     let duration = segment.end_us.saturating_sub(segment.start_us);
-    ((duration + bucket_us - 1) / bucket_us).min(MAX_CACHE_BUCKETS as u64) as usize
+    duration.div_ceil(bucket_us).min(MAX_CACHE_BUCKETS as u64) as usize
 }
 
 fn cache_path(

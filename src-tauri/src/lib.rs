@@ -1,3 +1,13 @@
+// Allowed crate-wide: long argument lists mirror the Tauri commands, nested types are spelled
+// out where they are used, index loops read clearer in the DSP code, and the export's large
+// error type is built once per export.
+#![allow(
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::needless_range_loop,
+    clippy::result_large_err
+)]
+
 pub mod ai;
 pub mod bubble_hide;
 pub mod captions;

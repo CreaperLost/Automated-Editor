@@ -102,7 +102,7 @@ const MAX_EXAMPLE_CHARS: usize = 400;
 pub fn rules_with(rules: &str, rule: &str, example: &str) -> String {
     let mut out = rules.trim_end().to_string();
     if !out.is_empty() {
-        out.push_str("\n");
+        out.push('\n');
     }
     out.push_str(&format!("- {rule}"));
     if !example.is_empty() {

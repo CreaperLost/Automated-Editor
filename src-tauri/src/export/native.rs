@@ -84,7 +84,7 @@ impl NativeExport {
         rate: RateControl,
     ) -> Result<Self, String> {
         validate_dim(width, height)?;
-        if width % 2 != 0 || height % 2 != 0 {
+        if !width.is_multiple_of(2) || !height.is_multiple_of(2) {
             return Err("H.264 export requires even dimensions".into());
         }
         if width > MAX_FRAME_DIM || height > MAX_FRAME_DIM {

@@ -363,7 +363,7 @@ impl StreamingSilenceDetector {
         if interleaved.is_empty() {
             return Ok(());
         }
-        if interleaved.len() % self.channels != 0 {
+        if !interleaved.len().is_multiple_of(self.channels) {
             return Err("PCM chunk is not an integer number of sample frames".into());
         }
         if !self.is_contiguous(source_start_us) {

@@ -60,7 +60,7 @@ bash scripts/test-all.sh         # everything below; --quick skips the GPU set a
 | Render a project, no app | `cd src-tauri && cargo run --bin aeroedits -- render <project> --out /tmp/x.mp4 --frames 6` (prints the MP4, stills and contact sheet) |
 | Front-end | `cd front-end && npx tsc --noEmit && npm run test:cleanup && npm run build` (no ESLint configured; tests are node scripts, not vitest) |
 | Look at the UI | `cd front-end && npm run build:preview && npm run screenshots` then Read `preview-screenshots/*.png` (canned backend; a new command needs an answer: `cargo test --lib preview_mock -- --ignored` rewrites `src/mock/backend.json`, odd ones go in `src/mock/backend.ts`) |
-| Clippy | `cd src-tauri && cargo clippy --lib` — about 60 warnings today, so not a gate |
+| Clippy (gate) | `cd src-tauri && cargo clippy --lib -- -D warnings` (no warnings; four style lints are allowed crate-wide in `lib.rs`) |
 | Desktop shell compiles | `cd src-tauri && cargo check --features tauri-app` (needs `front-end/dist`, i.e. `npm run build`, and the WebKitGTK libs) |
 | Doc links | `python3 scripts/check_doc_links.py --all` |
 

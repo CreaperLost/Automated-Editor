@@ -32,7 +32,9 @@ impl AudioOutput {
         Err("Audio playback is not supported on this platform".into())
     }
     pub fn queue(&mut self, pcm: &[i16]) -> Result<(), String> {
-        if pcm.is_empty() || pcm.len() % 2 != 0 || pcm.len() / 2 > crate::media::audio::CHUNK_FRAMES
+        if pcm.is_empty()
+            || !pcm.len().is_multiple_of(2)
+            || pcm.len() / 2 > crate::media::audio::CHUNK_FRAMES
         {
             return Err("Invalid playback PCM chunk".into());
         }

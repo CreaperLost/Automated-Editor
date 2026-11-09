@@ -280,7 +280,7 @@ impl ExportOwner {
             .jobs
             .iter()
             .filter(|j| j.root == root && active(&j.status))
-            .map(|j| delivery_now(j))
+            .map(delivery_now)
             .collect()
     }
 

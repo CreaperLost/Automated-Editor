@@ -239,7 +239,7 @@ fn camera_layers(
         Corners::Circle => (ClipMode::Circle, 0.0),
         Corners::Squircle => (ClipMode::Squircle, 0.0),
     };
-    let shadow = (style.webcam_shadow && slot.shadow > 0.0).then(|| {
+    let shadow = (style.webcam_shadow && slot.shadow > 0.0).then_some({
         (
             WEBCAM_SHADOW_BLUR_PX * unit,
             WEBCAM_SHADOW_OPACITY * slot.shadow,
@@ -1045,8 +1045,10 @@ impl Compositor {
         }))
         .map_err(|e| format!("No GPU adapter for the F2 compositor: {e}"))?;
         let adapter_name = adapter.get_info().name;
-        let mut desc = wgpu::DeviceDescriptor::default();
-        desc.label = Some("aeroedits-compositor");
+        let desc = wgpu::DeviceDescriptor {
+            label: Some("aeroedits-compositor"),
+            ..Default::default()
+        };
         let (device, queue) = pollster::block_on(adapter.request_device(&desc))
             .map_err(|e| format!("Failed to open the compositor device: {e}"))?;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1330,7 +1332,7 @@ impl Compositor {
     /// The scene as NV12 in limited-range BT.709, as an H.264 encoder takes it: the GPU
     /// converts it, and reading it back moves 1.5 bytes a pixel instead of 4. Even sizes only.
     pub fn composite_nv12(&self, scene: &Scene) -> Result<VideoFrame, String> {
-        if scene.width % 2 != 0 || scene.height % 2 != 0 {
+        if !scene.width.is_multiple_of(2) || !scene.height.is_multiple_of(2) {
             return Err("NV12 needs an even width and height".into());
         }
         self.read_back(scene, true)
@@ -1406,9 +1408,9 @@ impl Compositor {
         }
         let padded = padded_bytes_per_row(scene.width);
         let mut target_cache = self.target.lock().unwrap_or_else(|e| e.into_inner());
-        if !target_cache
+        if target_cache
             .as_ref()
-            .is_some_and(|t| (t.width, t.height) == (scene.width, scene.height))
+            .is_none_or(|t| (t.width, t.height) != (scene.width, scene.height))
         {
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("aeroedits-target"),

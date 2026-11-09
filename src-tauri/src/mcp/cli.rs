@@ -222,7 +222,7 @@ pub fn arguments(
             out.extend(extra);
             continue;
         }
-        if !properties.get(key).is_some() {
+        if properties.get(key).is_none() {
             let known: Vec<String> = properties
                 .as_object()
                 .map(|p| p.keys().cloned().collect())

@@ -1232,13 +1232,13 @@ impl SceneEvaluator {
         let spec = &*spec;
         // Never past a render's last frame.
         let last_frame = 1_000_000 / spec.fps as u64;
-        if let Some(path) = self.pinned_graphics.get(&spec) {
+        if let Some(path) = self.pinned_graphics.get(spec) {
             return Some(PictureJob::Video(
                 path.clone(),
                 local_us.min(spec.length_us.saturating_sub(last_frame)),
             ));
         }
-        match render::lookup(&spec) {
+        match render::lookup(spec) {
             Lookup::Ready(path) => Some(PictureJob::Video(
                 path,
                 local_us.min(spec.length_us.saturating_sub(last_frame)),
@@ -2180,7 +2180,7 @@ pub fn validate_settings(settings: &ExportSettings) -> Result<(), ExportFailure>
             message: format!("Unsupported video codec: {}", settings.video_codec),
         });
     }
-    if settings.audio_codec.to_ascii_lowercase() != "aac" {
+    if !settings.audio_codec.eq_ignore_ascii_case("aac") {
         return Err(ExportFailure::InvalidSettings {
             message: format!("Unsupported audio codec: {}", settings.audio_codec),
         });
@@ -2205,8 +2205,8 @@ pub fn validate_settings(settings: &ExportSettings) -> Result<(), ExportFailure>
         || settings.height < 16
         || settings.width > MAX_FRAME_DIM
         || settings.height > MAX_FRAME_DIM
-        || settings.width % 2 != 0
-        || settings.height % 2 != 0
+        || !settings.width.is_multiple_of(2)
+        || !settings.height.is_multiple_of(2)
     {
         return Err(ExportFailure::InvalidSettings {
             message: "Export canvas must be even, 16..=4096".into(),

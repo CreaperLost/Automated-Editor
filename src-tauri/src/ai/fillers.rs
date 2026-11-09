@@ -55,10 +55,7 @@ fn greek_note(language: Language) -> &'static str {
     }
 }
 
-const ANSWER: &str = concat!(
-    "Answer with a JSON object only: {\"cuts\":[{\"type\":\"filler\"|\"retake\",\"from\":<first index>,\"to\":<last index>,\"why\":\"<a few words>\"}]}. \
-Indexes are inclusive. Use {\"cuts\":[]} when nothing should be cut. Be conservative: a wrong cut is worse than a missed one."
-);
+const ANSWER: &str = "Answer with a JSON object only: {\"cuts\":[{\"type\":\"filler\"|\"retake\",\"from\":<first index>,\"to\":<last index>,\"why\":\"<a few words>\"}]}. Indexes are inclusive. Use {\"cuts\":[]} when nothing should be cut. Be conservative: a wrong cut is worse than a missed one.";
 
 /// The user message for words `words[range]`, numbered by their position in `words`.
 pub fn chunk_prompt(words: &[&TranscriptWord], range: std::ops::Range<usize>) -> String {
