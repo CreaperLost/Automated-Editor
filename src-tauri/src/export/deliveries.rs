@@ -60,14 +60,32 @@ pub struct Delivery {
     pub fingerprint: Option<String>,
 }
 
-/// What an export of `document` would show and play, whatever its revision number: two
-/// documents with the same fingerprint export the same video.
-pub fn fingerprint(document: &crate::project::revision::EditDocument) -> String {
+/// What an export of `document` would show, play and say, whatever its revision number: the
+/// edit, its graphics' sources and, with `words`, the transcripts it reads (GAP-009). Two
+/// exports with the same fingerprint make the same output.
+pub fn fingerprint(
+    document: &crate::project::revision::EditDocument,
+    inputs: &super::ExportInputs,
+    words: bool,
+) -> String {
     use sha2::{Digest, Sha256};
     let mut document = document.clone();
     document.revision = 0;
-    let text = serde_json::to_string(&document).unwrap_or_default();
-    format!("{:x}", Sha256::digest(text.as_bytes()))[..16].to_string()
+    let mut hasher = Sha256::new();
+    hasher.update(serde_json::to_string(&document).unwrap_or_default());
+    hasher.update(b"\0graphics ");
+    hasher.update(&inputs.graphics);
+    if words {
+        hasher.update(b"\0words ");
+        hasher.update(inputs.words_digest());
+    }
+    format!("{:x}", hasher.finalize())[..16].to_string()
+}
+
+/// Whether an export for `request` of `document` shows the transcript's words: a file
+/// (subtitles, transcript) always does, a video when its captions are on.
+pub fn reads_words(request: &Request, document: &crate::project::revision::EditDocument) -> bool {
+    request.file.is_some() || document.captions.enabled
 }
 
 struct Job {
@@ -140,6 +158,7 @@ impl ExportOwner {
             ExportState::Queued,
             None,
         );
+        let words = reads_words(&request, &captured.document);
         let delivery = Delivery {
             job_id: captured.job_id.clone(),
             label: label.to_string(),
@@ -152,7 +171,7 @@ impl ExportOwner {
             output_path: None,
             failure: None,
             finished_at: None,
-            fingerprint: Some(fingerprint(&captured.document)),
+            fingerprint: Some(fingerprint(&captured.document, &captured.inputs, words)),
         };
         let job = Job {
             delivery,
@@ -337,7 +356,15 @@ fn work(shared: &Mutex<Shared>, gate: &EncoderGate) {
         };
         if let Some((root, mut delivery)) = ended {
             delivery.finished_at = Some(chrono::Local::now().format("%Y-%m-%d %H:%M").to_string());
-            let _ = record(&root, delivery);
+            // The file is made either way; a list that can't be written is said in its log
+            // rather than lost without a word (GAP-012).
+            if let Err(e) = record(&root, delivery) {
+                status.lock().log(
+                    std::time::Instant::now(),
+                    super::ExportLogLevel::Error,
+                    format!("The export is done, but the list of exports could not be saved: {e}"),
+                );
+            }
         }
     }
 }
@@ -370,14 +397,16 @@ pub fn records(root: &Path) -> Vec<Delivery> {
 
 fn write(root: &Path, records: &[Delivery]) -> Result<(), String> {
     let text = serde_json::to_string_pretty(records).map_err(|e| e.to_string())?;
-    let path = root.join(FILE);
-    let temp = root.join(format!("{FILE}.tmp"));
-    std::fs::write(&temp, text).map_err(|e| e.to_string())?;
-    std::fs::rename(&temp, &path).map_err(|e| e.to_string())
+    crate::files::write_atomic(&root.join(FILE), text.as_bytes())
 }
+
+/// Held for every change to a project's record: the worker and the commands change it from
+/// different threads, and each change reads, edits and writes the whole file (GAP-012).
+static HISTORY: Mutex<()> = parking_lot::const_mutex(());
 
 /// Adds an output that ended to the project's record, newest first.
 pub fn record(root: &Path, delivery: Delivery) -> Result<(), String> {
+    let _held = HISTORY.lock();
     let mut all = records(root);
     all.retain(|d| d.job_id != delivery.job_id);
     all.insert(0, delivery);
@@ -387,6 +416,7 @@ pub fn record(root: &Path, delivery: Delivery) -> Result<(), String> {
 
 /// Takes `job_id` out of the project's record (its file stays).
 pub fn forget(root: &Path, job_id: &str) -> Result<(), String> {
+    let _held = HISTORY.lock();
     let mut all = records(root);
     all.retain(|d| d.job_id != job_id);
     write(root, &all)
@@ -419,15 +449,28 @@ pub fn list(
         .into_iter()
         .filter(|d| !active.iter().any(|a| a.job_id == d.job_id))
         .collect();
+    // What each kind of request would be made from now, worked out once per list and only
+    // for outputs that ended (GAP-007).
+    let mut known: Vec<((Option<String>, bool), Option<String>)> = Vec::new();
+    let mut now_for = |request: &Request| {
+        let key = (request.short_id.clone(), request.file.is_some());
+        if let Some((_, found)) = known.iter().find(|(k, _)| *k == key) {
+            return found.clone();
+        }
+        let found = now(request);
+        known.push((key, found.clone()));
+        found
+    };
     active
         .into_iter()
         .chain(done)
         .map(|delivery| {
             let finished = delivery.state == ExportState::Completed;
-            let older = match &delivery.fingerprint {
-                Some(made) => now(&delivery.request).as_ref() != Some(made),
-                None => delivery.revision < revision,
-            };
+            let older = finished
+                && match &delivery.fingerprint {
+                    Some(made) => now_for(&delivery.request).as_ref() != Some(made),
+                    None => delivery.revision < revision,
+                };
             DeliveryView {
                 older: finished && older,
                 missing: finished
@@ -481,6 +524,7 @@ mod tests {
             temp: root.join(format!(".{id}.part")),
             settings: ExportSettings::default(),
             lease: Arc::new(std::fs::File::open(&dest).unwrap()),
+            inputs: Default::default(),
         };
         let request = || Request {
             short_id: None,
@@ -571,12 +615,41 @@ mod tests {
         assert!(!listed[0].older && listed[0].missing, "no file");
         // Made from what the edit still makes: not older, whatever the revision says.
         let mut edit = crate::project::revision::EditDocument::default();
-        let made = fingerprint(&edit);
+        let inputs = crate::export::ExportInputs::default();
+        let made = fingerprint(&edit, &inputs, true);
         edit.revision = 9;
         assert_eq!(
-            fingerprint(&edit),
+            fingerprint(&edit, &inputs, true),
             made,
             "the revision number alone changes nothing"
+        );
+        // A corrected word or a changed graphic makes a different output (GAP-009).
+        let worded = crate::export::ExportInputs {
+            transcripts: [(
+                "mic".to_string(),
+                serde_json::from_value(serde_json::json!({
+                    "schemaVersion": 1, "trackId": "mic", "provider": "parakeet",
+                    "model": "m", "createdAt": "now", "words": []
+                }))
+                .unwrap(),
+            )]
+            .into(),
+            ..Default::default()
+        };
+        assert_ne!(fingerprint(&edit, &worded, true), made, "words count");
+        assert_eq!(
+            fingerprint(&edit, &worded, false),
+            fingerprint(&edit, &inputs, false),
+            "unless nothing shows them"
+        );
+        let drawn = crate::export::ExportInputs {
+            graphics: "changed".into(),
+            ..Default::default()
+        };
+        assert_ne!(
+            fingerprint(&edit, &drawn, false),
+            fingerprint(&edit, &inputs, false),
+            "graphics count"
         );
         record(
             dir.path(),

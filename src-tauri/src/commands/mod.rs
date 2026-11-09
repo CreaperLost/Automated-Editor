@@ -2855,6 +2855,21 @@ pub fn export_status_impl(
 
 /// The open project's exports (DLV-2): what waits or runs, then what went out, newest first,
 /// each marked when it is older than the edit or its file is gone.
+/// What a delivery's fingerprint now depends on, for keeping it between polls of the list.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct DeliveryKey {
+    root: std::path::PathBuf,
+    revision: u64,
+    short_id: Option<String>,
+    file: bool,
+    transcripts: u64,
+    graphics: u64,
+}
+
+static DELIVERY_FINGERPRINTS: parking_lot::Mutex<
+    Option<std::collections::HashMap<DeliveryKey, Option<String>>>,
+> = parking_lot::const_mutex(None);
+
 pub fn export_deliveries_impl(
     state: &AppState,
     project_handle: String,
@@ -2864,14 +2879,45 @@ pub fn export_deliveries_impl(
     require_handle(reader, &project_handle)?;
     let base = &reader.history().current;
     let transcribed = has_speech_transcript(reader);
-    // What each output would be made from now, to tell the ones the edit has moved past.
-    let now = |request: &crate::export::deliveries::Request| match &request.short_id {
-        None => Some(crate::export::deliveries::fingerprint(base)),
-        Some(id) => {
-            let short = base.shorts.iter().find(|s| &s.id == id)?;
-            let document = crate::shorts::short_document(base, short, transcribed).ok()?;
-            Some(crate::export::deliveries::fingerprint(&document))
+    let root = reader.root().to_path_buf();
+    // What each output would be made from now, to tell the ones the edit has moved past. Kept
+    // between polls while the edit, the transcripts and the graphics stay as they were.
+    let now = |request: &crate::export::deliveries::Request| {
+        let key = DeliveryKey {
+            root: root.clone(),
+            revision: base.revision,
+            short_id: request.short_id.clone(),
+            file: request.file.is_some(),
+            transcripts: crate::transcript::store::changes(),
+            graphics: crate::graphics::render::generation(),
+        };
+        if let Some(found) = DELIVERY_FINGERPRINTS
+            .lock()
+            .as_ref()
+            .and_then(|cache| cache.get(&key))
+        {
+            return found.clone();
         }
+        let document = match &request.short_id {
+            None => Some(base.clone()),
+            Some(id) => base
+                .shorts
+                .iter()
+                .find(|s| &s.id == id)
+                .and_then(|short| crate::shorts::short_document(base, short, transcribed).ok()),
+        };
+        let found = document.map(|document| {
+            let inputs = crate::export::ExportInputs::capture(&root, &document);
+            let words = crate::export::deliveries::reads_words(request, &document);
+            crate::export::deliveries::fingerprint(&document, &inputs, words)
+        });
+        let mut guard = DELIVERY_FINGERPRINTS.lock();
+        let cache = guard.get_or_insert_with(std::collections::HashMap::new);
+        if cache.len() > 64 {
+            cache.clear();
+        }
+        cache.insert(key, found.clone());
+        found
     };
     let mut owner = state.export.lock();
     Ok(crate::export::deliveries::list(
@@ -2990,7 +3036,7 @@ pub fn export_file_impl(
     on_progress: &mut dyn FnMut(f64),
 ) -> Result<PathBuf, String> {
     use crate::export::files;
-    let (root, stem, assets, contents, sound, label, revision) = {
+    let (root, stem, assets, contents, sound, label, revision, fingerprint) = {
         let _guard = state.command_lock.lock();
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
@@ -3050,6 +3096,17 @@ pub fn export_file_impl(
             Some(short) => format!("{}: {what}", short.title),
             None => what.to_string(),
         };
+        // What the list of exports compares against to mark this file out of date (GAP-009).
+        let made_from = match short {
+            Some(short) => {
+                crate::shorts::short_document(base, short, has_speech_transcript(reader)).ok()
+            }
+            None => Some(base.clone()),
+        };
+        let fingerprint = made_from.map(|document| {
+            let inputs = crate::export::ExportInputs::capture(reader.root(), &document);
+            crate::export::deliveries::fingerprint(&document, &inputs, true)
+        });
         (
             reader.root().to_path_buf(),
             stem,
@@ -3058,6 +3115,7 @@ pub fn export_file_impl(
             sound,
             label,
             base.revision,
+            fingerprint,
         )
     };
     let requested = match destination {
@@ -3103,7 +3161,7 @@ pub fn export_file_impl(
             output_path: Some(output),
             failure: None,
             finished_at: Some(chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()),
-            fingerprint: None,
+            fingerprint,
         },
     );
     Ok(path)

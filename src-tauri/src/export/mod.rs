@@ -189,7 +189,7 @@ impl ExportStatus {
     }
 
     /// Adds a line to the log, `started` being when the export began.
-    fn log(&mut self, started: std::time::Instant, level: ExportLogLevel, text: String) {
+    pub(crate) fn log(&mut self, started: std::time::Instant, level: ExportLogLevel, text: String) {
         if self.log.len() >= MAX_LOG_LINES {
             self.log.remove(0);
         }
@@ -210,6 +210,48 @@ pub struct CapturedExport {
     pub temp: PathBuf,
     pub settings: ExportSettings,
     pub lease: Arc<File>,
+    /// What else it draws, as it was when Export was clicked (GAP-018): the transcripts its
+    /// captions read, and a digest of its graphics' sources, checked again before rendering.
+    pub inputs: ExportInputs,
+}
+
+/// The inputs of an export besides the edit document, captured with it.
+#[derive(Clone, Debug, Default)]
+pub struct ExportInputs {
+    /// By sound key: the transcripts captions read.
+    pub transcripts: std::collections::BTreeMap<String, crate::transcript::Transcript>,
+    /// [`crate::graphics::render::sources_digest`] when captured.
+    pub graphics: String,
+}
+
+impl ExportInputs {
+    /// `document`'s inputs in the project at `root`, as they are now.
+    pub fn capture(root: &Path, document: &EditDocument) -> Self {
+        let keys: Vec<String> = match &document.captions.track_id {
+            Some(id) => vec![id.clone()],
+            None => caption_candidates(document),
+        };
+        let transcripts = keys
+            .into_iter()
+            .filter_map(|key| {
+                let transcript = crate::transcript::store::load_transcript(root, &key)
+                    .ok()
+                    .flatten()?;
+                Some((key, transcript))
+            })
+            .collect();
+        Self {
+            transcripts,
+            graphics: crate::graphics::render::sources_digest(root, document),
+        }
+    }
+
+    /// A digest of the transcripts, for telling whether the words drawn changed.
+    pub fn words_digest(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let text = serde_json::to_string(&self.transcripts).unwrap_or_default();
+        format!("{:x}", Sha256::digest(text.as_bytes()))[..16].to_string()
+    }
 }
 
 type Zooms = std::sync::Arc<Vec<crate::zoom::ZoomSuggestion>>;
@@ -248,6 +290,8 @@ pub struct SceneEvaluator {
     screen_styles: std::cell::OnceCell<(EditLayout, std::collections::HashMap<String, EditLayout>)>,
     /// Caption cues from the captioned sound's transcript; empty when captions are off.
     caption_cues: std::cell::OnceCell<Vec<crate::captions::CaptionCue>>,
+    /// Captured transcripts for captions; `None` reads the project's files.
+    transcripts: Option<std::collections::BTreeMap<String, crate::transcript::Transcript>>,
     /// The captions' typeface and accent, from the style and the look.
     caption_look: std::cell::OnceCell<crate::captions::CaptionLook>,
     /// Where graphics fill the frame: no captions there.
@@ -538,6 +582,7 @@ impl SceneEvaluator {
             pinned_graphics: Default::default(),
             screen_styles: std::cell::OnceCell::new(),
             caption_cues: std::cell::OnceCell::new(),
+            transcripts: None,
             caption_look: std::cell::OnceCell::new(),
             caption_free: std::cell::OnceCell::new(),
             caption_cache: std::cell::RefCell::new(CaptionCache::default()),
@@ -596,6 +641,15 @@ impl SceneEvaluator {
     }
 
     /// Plays graphics from the renders `quality` names (an export's final ones).
+    /// Captions read these transcripts (captured with an export) instead of the live files.
+    pub fn with_transcripts(
+        mut self,
+        transcripts: std::collections::BTreeMap<String, crate::transcript::Transcript>,
+    ) -> Self {
+        self.transcripts = Some(transcripts);
+        self
+    }
+
     pub fn with_graphics_quality(mut self, quality: crate::graphics::render::Quality) -> Self {
         self.graphics_quality = quality;
         self
@@ -1806,10 +1860,11 @@ impl SceneEvaluator {
             return None;
         }
         let cues = self.caption_cues.get_or_init(|| {
-            let load = |key: &str| {
-                crate::transcript::store::load_transcript(&self.root, key)
+            let load = |key: &str| match &self.transcripts {
+                Some(captured) => captured.get(key).cloned(),
+                None => crate::transcript::store::load_transcript(&self.root, key)
                     .ok()
-                    .flatten()
+                    .flatten(),
             };
             caption_track_cues(&self.document, settings, load)
                 .unwrap_or_default()
@@ -2408,6 +2463,7 @@ pub fn prepare_job(
         lease: Arc::new(lease),
         job_id,
         root: root.to_path_buf(),
+        inputs: ExportInputs::capture(root, &document),
         document,
         dest,
         temp,
@@ -2569,6 +2625,16 @@ fn export_to_temp(
             format!("{finding}: done"),
         ));
     }
+    // The export draws the project as it was when Export was clicked: a graphic changed
+    // since would not be that (GAP-018).
+    if crate::graphics::render::sources_digest(&captured.root, &captured.document)
+        != captured.inputs.graphics
+    {
+        return Err(ExportFailure::Native {
+            message: "A graphic changed after Export was clicked: export again to include it"
+                .into(),
+        });
+    }
     // Every graphic's final render must be there before the first frame: at the export's
     // frame rate, and sharper than the preview's draft when the export is larger.
     let graphics_quality = crate::graphics::render::Quality::Final {
@@ -2666,6 +2732,7 @@ fn export_to_temp(
     ))
     .with_graphics_quality(graphics_quality)
     .with_pinned_graphics(pinned.renders.clone())
+    .with_transcripts(captured.inputs.transcripts.clone())
     // The GPU converts frames to the encoder's YUV: a third of the bytes to read back and
     // pipe, and no conversion on the CPU.
     .with_nv12_output(ExportWriter::takes_nv12());

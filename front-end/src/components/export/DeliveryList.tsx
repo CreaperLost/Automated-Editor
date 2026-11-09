@@ -1,4 +1,4 @@
-import React, { Suspense, useCallback, useEffect, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, Clock, FolderOpen, Loader2, RotateCw, Trash2, Upload, XCircle } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { FILE_MANAGER } from "../../lib/projectActions";
@@ -28,11 +28,42 @@ export const DeliveryList: React.FC<{ projectHandle: string; revision: number; r
     setAccountsOpen(false);
   }, [projectHandle]);
 
+  // One request at a time, and only the latest one's answer is shown (GAP-007): a slow list
+  // never piles up polls, a load asked for meanwhile runs once after it, and an answer for an
+  // earlier project is dropped.
+  const asked = useRef(0);
+  const busy = useRef(false);
+  const again = useRef(false);
   const load = useCallback(() => {
+    if (busy.current) {
+      again.current = true;
+      return;
+    }
+    busy.current = true;
+    const mine = ++asked.current;
+    const latest = () => mine === asked.current;
     void api
       .exportDeliveries(projectHandle)
-      .then(setRows)
-      .catch((err) => setError(String(err)));
+      .then((found) => {
+        if (latest()) setRows(found);
+      })
+      .catch((err) => {
+        if (latest()) setError(String(err));
+      })
+      .finally(() => {
+        if (!latest()) return;
+        busy.current = false;
+        if (again.current) {
+          again.current = false;
+          load();
+        }
+      });
+  }, [projectHandle]);
+  useEffect(() => {
+    asked.current++;
+    busy.current = false;
+    again.current = false;
+    setRows([]);
   }, [projectHandle]);
   useEffect(load, [load, revision, refreshKey]);
   const active = rows.some((r) => r.state === "queued" || r.state === "running");
