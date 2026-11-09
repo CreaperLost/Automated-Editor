@@ -46,7 +46,11 @@ export function useEngineFrames(
     if (!active) return;
     let cancelled = false;
     let lastSeq = 0;
-    let latest: Blob | null = null;
+    let latest: { blob: Blob; generation: number } | null = null;
+    // Whether a frame of `generation` may still be shown: checked when it arrives and again
+    // after decoding, since a seek can make it obsolete meanwhile (GAP-025).
+    const current = (generation: number) =>
+      (generation === 0 || generation >= useProjectStore.getState().playbackGeneration) && (!accept || accept());
     let drawing = false;
     let drawn = 0;
     let windowStart = performance.now();
@@ -56,12 +60,12 @@ export function useEngineFrames(
       drawing = true;
       try {
         while (latest && !cancelled) {
-          const blob = latest;
+          const { blob, generation } = latest;
           latest = null;
           const picture = await decodeFrame(blob).catch(() => null);
           const canvas = canvasRef.current;
           const context = canvas?.getContext("2d");
-          if (!picture || cancelled || !canvas || !context) {
+          if (!picture || cancelled || !canvas || !context || !current(generation)) {
             closePicture(picture);
             continue;
           }
@@ -115,7 +119,7 @@ export function useEngineFrames(
         held = { buffer, generation };
         return;
       }
-      latest = new Blob([buffer.slice(PREVIEW_FRAME_HEADER)], { type: "image/jpeg" });
+      latest = { blob: new Blob([buffer.slice(PREVIEW_FRAME_HEADER)], { type: "image/jpeg" }), generation };
       void draw();
     };
     const stopHeld = useProjectStore.subscribe(() => {

@@ -632,7 +632,9 @@ export const TranscriptPanel: React.FC = () => {
       e.preventDefault();
       startEditing();
     } else if ((e.key === "Delete" || e.key === "Backspace") && selectedIds.length > 0) {
+      // The words are cut, not the selected clips as well (GAP-019).
       e.preventDefault();
+      e.stopPropagation();
       void cutWords(selectedIds, `Cut ${selectedIds.length} word${selectedIds.length === 1 ? "" : "s"}`);
     } else if (e.key === "Escape") {
       setSelection(null);

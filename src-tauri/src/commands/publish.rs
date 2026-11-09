@@ -10,13 +10,42 @@ fn config() -> PathBuf {
     crate::transcript::settings::config_dir()
 }
 
-fn project_root(state: &AppState) -> Result<PathBuf, String> {
+/// The handle of the project open now, for a caller acting on whatever is open (the agent's
+/// `publish` tool). The dialog passes the handle of the project it was opened for instead.
+pub fn open_handle(state: &AppState) -> Result<String, String> {
     let guard = state.opened_project.lock();
     Ok(guard
         .as_ref()
         .ok_or(crate::mcp::tools::NO_PROJECT_MESSAGE)?
-        .root()
-        .to_path_buf())
+        .summary
+        .project_handle
+        .clone())
+}
+
+const OTHER_PROJECT: &str =
+    "Another project was opened since: this video's publish settings are no longer open";
+
+/// The folder of project `handle`, while it is the open one. A call made for a project that is
+/// no longer open is refused rather than applied to the one open now.
+fn project_root(state: &AppState, handle: &str) -> Result<PathBuf, String> {
+    with_root(state, handle, |root| Ok(root.to_path_buf()))
+}
+
+/// Runs `write` on project `handle`'s folder with the project held open, so it cannot change
+/// between the check and the write.
+fn with_root<T>(
+    state: &AppState,
+    handle: &str,
+    write: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<T, String> {
+    let guard = state.opened_project.lock();
+    let reader = guard
+        .as_ref()
+        .ok_or(crate::mcp::tools::NO_PROJECT_MESSAGE)?;
+    if reader.summary.project_handle != handle {
+        return Err(OTHER_PROJECT.into());
+    }
+    write(reader.root())
 }
 
 /// The Zernio connection: whether a key is set, and the YouTube channels it reaches.
@@ -109,19 +138,23 @@ pub struct PackageView {
     pub chapters: Option<String>,
 }
 
-fn chapters_text(state: &AppState, target: &str) -> Option<String> {
+fn chapters_text(state: &AppState, handle: &str, target: &str) -> Option<String> {
     if target != "video" {
         return None;
     }
     let guard = state.opened_project.lock();
-    let document = guard.as_ref()?.document();
+    let reader = guard.as_ref()?;
+    if reader.summary.project_handle != handle {
+        return None;
+    }
+    let document = reader.document();
     let timeline = crate::chapters::timeline(&document.chapters, document);
     publish::youtube_chapters(&timeline, document.sequence.duration_us())
 }
 
-fn view_with_chapters(state: &AppState, root: &Path, target: &str) -> PackageView {
+fn view_with_chapters(state: &AppState, handle: &str, root: &Path, target: &str) -> PackageView {
     let mut v = view(root, target);
-    v.chapters = chapters_text(state, target);
+    v.chapters = chapters_text(state, handle, target);
     v
 }
 
@@ -148,9 +181,13 @@ fn view(root: &Path, target: &str) -> PackageView {
         .filter(|u| u.target == target)
         .collect();
     uploads.reverse();
+    // A damaged package or journal is said, not shown as empty.
+    let damaged = publish::read_packages(root)
+        .and(publish::read_uploads(root))
+        .err();
     PackageView {
         target: target.into(),
-        problem: publish::package_problem(&package),
+        problem: damaged.or_else(|| publish::package_problem(&package)),
         thumbnail_size: thumbnail.as_deref().and_then(publish::image_size),
         thumbnail_data,
         package,
@@ -159,74 +196,98 @@ fn view(root: &Path, target: &str) -> PackageView {
     }
 }
 
-pub fn publish_package_impl(state: &AppState, target: String) -> Result<PackageView, String> {
-    Ok(view_with_chapters(state, &project_root(state)?, &target))
+pub fn publish_package_impl(
+    state: &AppState,
+    project_handle: &str,
+    target: String,
+) -> Result<PackageView, String> {
+    let root = project_root(state, project_handle)?;
+    Ok(view_with_chapters(state, project_handle, &root, &target))
 }
 
 pub fn publish_package_save_impl(
     state: &AppState,
+    project_handle: &str,
     target: String,
     package: Package,
 ) -> Result<PackageView, String> {
-    let root = project_root(state)?;
-    publish::save_package(&root, &target, package)?;
-    crate::faceless::sync_package(&root)?;
-    Ok(view_with_chapters(state, &root, &target))
+    let root = with_root(state, project_handle, |root| {
+        publish::save_package(root, &target, package)?;
+        crate::faceless::sync_package(root)?;
+        Ok(root.to_path_buf())
+    })?;
+    Ok(view_with_chapters(state, project_handle, &root, &target))
+}
+
+/// Saves `bytes` as project `handle`'s thumbnail for `target`, if it is still the open project.
+fn save_thumbnail(
+    state: &AppState,
+    handle: &str,
+    target: &str,
+    bytes: &[u8],
+) -> Result<PackageView, String> {
+    let root = with_root(state, handle, |root| {
+        publish::set_thumbnail(root, target, bytes)?;
+        crate::faceless::sync_package(root)?;
+        Ok(root.to_path_buf())
+    })?;
+    Ok(view_with_chapters(state, handle, &root, target))
 }
 
 /// The thumbnail from an image file.
 pub fn publish_thumbnail_file_impl(
     state: &AppState,
+    project_handle: &str,
     target: String,
     path: String,
 ) -> Result<PackageView, String> {
-    let root = project_root(state)?;
+    project_root(state, project_handle)?;
     let bytes = std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?;
-    publish::set_thumbnail(&root, &target, &bytes)?;
-    crate::faceless::sync_package(&root)?;
-    Ok(view_with_chapters(state, &root, &target))
+    save_thumbnail(state, project_handle, &target, &bytes)
 }
 
 /// The thumbnail from a frame of the exported video.
 pub fn publish_thumbnail_frame_impl(
     state: &AppState,
+    project_handle: &str,
     target: String,
     file: String,
     at_us: u64,
 ) -> Result<PackageView, String> {
-    let root = project_root(state)?;
+    project_root(state, project_handle)?;
     let bytes = crate::media::ffmpeg::frame_jpeg(Path::new(&file), at_us, 1920)?;
-    publish::set_thumbnail(&root, &target, &bytes)?;
-    crate::faceless::sync_package(&root)?;
-    Ok(view_with_chapters(state, &root, &target))
+    save_thumbnail(state, project_handle, &target, &bytes)
 }
 
 /// The thumbnail from a frame of the edit as it is now (graphics drawn), no export needed:
 /// the video's timeline, or short `target`'s own.
 pub fn publish_thumbnail_edit_impl(
     state: &AppState,
+    project_handle: &str,
     target: String,
     at_us: u64,
 ) -> Result<PackageView, String> {
-    let root = project_root(state)?;
+    project_root(state, project_handle)?;
     let short = (target != "video").then_some(target.as_str());
     crate::mcp::frames::wait_for_graphics(state, short, at_us, at_us)?;
     let (frame, _) = crate::mcp::frames::render(state, short, at_us, 1920)?;
     let bytes = crate::mcp::frames::png(&frame)?;
-    publish::set_thumbnail(&root, &target, &bytes)?;
-    crate::faceless::sync_package(&root)?;
-    Ok(view_with_chapters(state, &root, &target))
+    // The frame was drawn from whatever was open: only keep it if that is still this project.
+    save_thumbnail(state, project_handle, &target, &bytes)
 }
 
 /// Uploads a finished export with its package to the chosen channel.
+/// The project is fixed when the upload starts: it finishes for that project even if another
+/// is opened meanwhile.
 pub fn publish_upload_impl(
     state: &AppState,
+    project_handle: &str,
     target: String,
     file: String,
     release: Release,
     progress: &dyn Fn(&str),
 ) -> Result<Upload, String> {
-    let root = project_root(state)?;
+    let root = project_root(state, project_handle)?;
     let (key, _) = key().ok_or("Connect Zernio first: File → Accounts")?;
     let settings = publish::settings(&config());
     let channel = settings
@@ -270,12 +331,59 @@ pub fn publish_upload_impl(
     Ok(upload)
 }
 
-pub fn publish_refresh_impl(state: &AppState, id: String) -> Result<Upload, String> {
-    let root = project_root(state)?;
+pub fn publish_refresh_impl(
+    state: &AppState,
+    project_handle: &str,
+    id: String,
+) -> Result<Upload, String> {
+    let root = project_root(state, project_handle)?;
     let (key, _) = key().ok_or("Connect Zernio first: File → Accounts")?;
     let web = zernio::Web::new(key)?;
     let upload = publish::refresh(&root, &zernio::Client { http: &web }, &id)?;
     // YouTube's id can arrive after the upload.
     crate::faceless::record_upload(&root, &upload)?;
     Ok(upload)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::faceless::{self, Format};
+
+    /// GAP-011: a publish call made for project A while B is open is refused and writes
+    /// nothing to either; the same call for B goes through.
+    #[test]
+    fn publish_calls_for_another_project_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = faceless::create(dir.path(), "Project A", Format::Short, &[]).unwrap();
+        let b = faceless::create(dir.path(), "Project B", Format::Short, &[]).unwrap();
+        let host = crate::mcp::tests_support::BareHost::default();
+        let state = &host.state;
+        super::super::open_project_impl(state, a.to_string_lossy().into()).unwrap();
+        let handle_a = open_handle(state).unwrap();
+        super::super::open_project_impl(state, b.to_string_lossy().into()).unwrap();
+        let handle_b = open_handle(state).unwrap();
+        assert_ne!(handle_a, handle_b);
+        let package = Package {
+            title: "Meant for A".into(),
+            ..Default::default()
+        };
+        let image = concat!(env!("CARGO_MANIFEST_DIR"), "/icons/128x128.png").to_string();
+        let stale = [
+            publish_package_impl(state, &handle_a, "video".into()).err(),
+            publish_package_save_impl(state, &handle_a, "video".into(), package.clone()).err(),
+            publish_thumbnail_file_impl(state, &handle_a, "video".into(), image.clone()).err(),
+            publish_refresh_impl(state, &handle_a, "u1".into()).err(),
+        ];
+        for error in stale {
+            assert_eq!(error.as_deref(), Some(OTHER_PROJECT));
+        }
+        for root in [&a, &b] {
+            assert!(publish::packages(root).is_empty(), "{}", root.display());
+        }
+        let saved = publish_package_save_impl(state, &handle_b, "video".into(), package).unwrap();
+        assert_eq!(saved.package.title, "Meant for A");
+        assert!(publish::packages(&a).is_empty());
+        assert_eq!(publish::package(&b, "video").title, "Meant for A");
+    }
 }

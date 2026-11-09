@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { ExternalLink, Loader2, RefreshCw, Upload, X } from "lucide-react";
 import { api } from "../../lib/ipc";
+import { packageSaver } from "../../lib/packageSaver";
 import type { PublishAccounts, PublishPackageView, PublishRelease } from "../../lib/types";
 import { PackageEditor } from "./PackageEditor";
 import { Button, DialogBackdrop, IconButton, Segmented, cn } from "../ui";
@@ -28,16 +29,18 @@ function inAnHour() {
 /**
  * Publish one finished export (PUB-1, PUB-2): its title, description, tags and thumbnail, then
  * an upload to YouTube through Zernio: private, scheduled or a draft. Never public without the
- * user's click.
+ * user's click. Every call is for `projectHandle`, the project whose export this is; the back end
+ * refuses them once another project is open.
  */
 export const PublishDialog: React.FC<{
+  projectHandle: string;
   target: string;
   label: string;
   file: string;
   durationUs?: number;
   onClose: () => void;
   onOpenAccounts: () => void;
-}> = ({ target, label, file, durationUs, onClose, onOpenAccounts }) => {
+}> = ({ projectHandle, target, label, file, durationUs, onClose, onOpenAccounts }) => {
   useEscapeKey(onClose);
   const [view, setView] = useState<PublishPackageView | null>(null);
   const [accounts, setAccounts] = useState<PublishAccounts | null>(null);
@@ -65,24 +68,27 @@ export const PublishDialog: React.FC<{
 
   const upload = () =>
     run("upload", async () => {
-      // The editor saves a moment after typing stops: let the last keystroke land.
-      await new Promise((resolve) => window.setTimeout(resolve, 700));
+      // The fields are locked from here on. Send the last change and wait for every save to
+      // land; a failed save or a package that isn't ready stops the upload (GAP-016).
+      const saved = await packageSaver.flush(projectHandle, target);
+      setView(saved);
+      if (saved.problem) throw new Error(saved.problem);
       const r: PublishRelease =
         release === "scheduled" ? { kind: "scheduled", at: new Date(at).toISOString() } : { kind: release };
-      const result = await api.publishUpload(target, file, r);
+      const result = await api.publishUpload(projectHandle, target, file, r);
       setDone(
         result.youtubeId
           ? `Uploaded (${STATUS_TEXT[result.status] ?? result.status}${result.visibility ? `, YouTube says ${result.visibility}` : ""}).`
           : `Sent to Zernio: ${STATUS_TEXT[result.status] ?? result.status}.`,
       );
-      setView(await api.publishPackage(target));
+      setView(await api.publishPackage(projectHandle, target));
     });
 
   const channel = accounts?.channels.find((c) => c.id === accounts.channel);
   const field = "w-full rounded-control border border-studio-700 bg-studio-950 px-2 text-label text-studio-100 placeholder:text-studio-600 focus:outline-none focus:border-accent";
 
   return createPortal(
-    <DialogBackdrop onClose={onClose} selectable>
+    <DialogBackdrop onClose={onClose} selectable label="Publish">
       <div className="w-[760px] max-w-full max-h-[92vh] overflow-y-auto rounded-panel border border-studio-700 bg-studio-900 shadow-xl">
         <div className="flex items-center gap-2 px-5 py-4 border-b border-studio-800">
           <Upload className="w-5 h-5 text-studio-300" />
@@ -91,7 +97,15 @@ export const PublishDialog: React.FC<{
         </div>
 
         <div className="px-5 py-4">
-          <PackageEditor target={target} file={file} durationUs={durationUs} onChange={setView} refreshKey={done} />
+          <PackageEditor
+            projectHandle={projectHandle}
+            target={target}
+            file={file}
+            durationUs={durationUs}
+            onChange={setView}
+            refreshKey={done}
+            locked={busy === "upload"}
+          />
         </div>
 
         <div className="px-5 py-4 border-t border-studio-800 space-y-3">
@@ -148,8 +162,8 @@ export const PublishDialog: React.FC<{
                       label="Read the status again"
                       onClick={() =>
                         void run("refresh", async () => {
-                          await api.publishRefresh(u.id);
-                          setView(await api.publishPackage(target));
+                          await api.publishRefresh(projectHandle, u.id);
+                          setView(await api.publishPackage(projectHandle, target));
                         })
                       }
                     />

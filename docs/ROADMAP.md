@@ -9,18 +9,19 @@ Keep existing IDs. A task listed in two tables below is one task, not two implem
 <a id="cloud-sessions-start-here"></a>
 ## Cloud sessions: start here
 
-Suggested order: the five P1s, persistence/export correctness, then cloud tooling and features.
+Suggested order: persistence/export correctness (the P1s, CL-1..CL-4, are fixed), then cloud tooling
+and features.
 George's priority and branch-policy questions remain in [HANDOFF](HANDOFF.md#questions-for-george).
 For implementation PRs, run the touched checks and `scripts/test-all.sh` where supported;
 mock paid services.
 
 | ID | Task / canonical detail | Acceptance or dependency |
 |---|---|---|
-| <a id="cl-1"></a>CL-1 | Publish project binding: [GAP-011](gap.md#gap-011) | Reject A→B stale package/thumbnail/upload actions; no writes to B; coordinate with CL-2. |
-| <a id="cl-2"></a>CL-2 | Package close/autosave/upload: [GAP-015](gap.md#gap-015), [GAP-016](gap.md#gap-016) | Latest draft persists to its owner; Upload awaits successful validation/save; mounted parent/child tests via CL-15. |
-| <a id="cl-3"></a>CL-3 | Narration identity/input binding: [GAP-004](gap.md#gap-004), [GAP-008](gap.md#gap-008) | Changed fake take imports new audio/transcript and clears acceptance; stale script cannot certify old narration. |
-| <a id="cl-4"></a>CL-4 | Linked-cut restoration: [GAP-017](gap.md#gap-017) | Restore independently offset audio/video source clocks from either track without substituting source time. |
-| <a id="cl-5"></a>CL-5 | Remaining correctness follow-ups | GAP-005/006 checks are complete; do not repeat their old fixes. Split remaining GAP-002/003/010/012 into focused changes; all other open findings stay in gap.md. |
+| <a id="cl-1"></a>CL-1 | Publish project binding: [GAP-011](gap.md#gap-011) | Done 8 Nov. Reject A→B stale package/thumbnail/upload actions; no writes to B. |
+| <a id="cl-2"></a>CL-2 | Package close/autosave/upload: [GAP-015](gap.md#gap-015), [GAP-016](gap.md#gap-016) | Done 8 Nov (save queue tests; mounted dialog tests still wait on CL-15). Latest draft persists to its owner; Upload awaits successful validation/save. |
+| <a id="cl-3"></a>CL-3 | Narration identity/input binding: [GAP-004](gap.md#gap-004), [GAP-008](gap.md#gap-008) | Done 8 Nov, with GAP-037's one-job guard. Changed fake take imports new audio/transcript and clears acceptance; stale script cannot certify old narration. |
+| <a id="cl-4"></a>CL-4 | Linked-cut restoration: [GAP-017](gap.md#gap-017) | Done 8 Nov. Restore independently offset audio/video source clocks from either track without substituting source time. |
+| <a id="cl-5"></a>CL-5 | Remaining correctness follow-ups | Done 9 Nov: every remaining gap.md finding is fixed or decided (see each record). |
 | <a id="cl-6"></a>CL-6 | Remove lib clippy warnings, then gate | Mechanical changes only; `cargo clippy --lib -- -D warnings` and relevant tests pass. Historical ~60 is not a fresh warning count. |
 | <a id="cl-7"></a>CL-7 | Broaden `src-tauri/src/smoke.rs` | Done 9 Nov: silence cut; mouth-noise found and muted plus −14 LUFS ±1 normalize; 9:16 project exports 720×1280 with caption pixels. About 2 s each on lavapipe. |
 | <a id="cl-8"></a>CL-8 | Standalone headless render CLI | Done 9 Nov: `aeroedits render <project> [--out x.mp4] [--short ID] [--size WxH] [--fps N] [--frames N]` (`src-tauri/src/render_cli.rs`); the smoke test exports through it. |
@@ -30,7 +31,7 @@ mock paid services.
 | <a id="cl-12"></a>CL-12 | Execute FCL-9 | Same release/source-validation task below, mocked service first. |
 | <a id="cl-13"></a>CL-13 | Execute FCL-3's Script panel | Same UI task below; typecheck and mounted tests, screenshot when CL-10 exists. |
 | <a id="cl-14"></a>CL-14 | Execute PUB-1 thumbnail generation | Same task below; mocked image reply, size/preview checks. |
-| <a id="cl-15"></a>CL-15 | Real React regression coverage: [GAP-024](gap.md#gap-024) | Small mounted suite in CI with mocked IPC; start with package lifecycle and project switching, then keyboard isolation. Dependency review applies. |
+| <a id="cl-15"></a>CL-15 | Real React regression coverage: [GAP-024](gap.md#gap-024) | Started 9 Nov: `front-end/tests/dom.ts` (jsdom + real React renderer, StrictMode) with keyboard isolation tests. Next suites: package autosave with Upload/Close, project switching. |
 
 Other open findings are not deprioritized by their absence from a CL row. Use gap.md's issue
 index for export consistency, captions, outbound requests, stage integrity and UI races.
@@ -70,14 +71,14 @@ The Python explainer repository is a historical design input, not a runtime depe
 |---|---|---|
 | FCL-1 | Improve event grouping and calibrate fit/attention only from labelled examples or our own outcomes | Preserve manual join/separate/triage and visible score parts; low-shared-word event splits remain a tuning limitation, not a failed new test. Needs labelled groups/outcome data. |
 | FCL-3 | Script panel: scenes, cited facts, duration estimate, review findings and accepted revision | `front-end/src/components/faceless/` plus existing `faceless/script.rs` IPC; mounted rendering test and screenshot. Agent writes/reviews, no in-app script-writing model. CL-13. |
-| FCL-4 | Real-script voice acceptance after CL-3 and stage-integrity fixes | No new TTS implementation needed. Follow the voice run in Verification; George listens and approves. GAP-004/008/027 remain blockers. |
+| FCL-4 | Real-script voice acceptance after CL-3 and stage-integrity fixes | No new TTS implementation needed. Follow the voice run in Verification; George listens and approves. GAP-004/008/027 are fixed. |
 | FCL-5 | Finish the dedicated Broadsheet parts and a built-in image-library browser | Style and four templates (`headline`, `quote`, `verdict`, `bars`) exist; do not rebuild them. Inventory reuse vs dedicated timeline/flow/artifact/gates/tiles/anchor/objects/flip3d parts. Gate each at 16:9, 9:16 and actual split boxes; phone-size contact sheet. Imported-image filter already exists; it is not a browser for the built-in catalogue. STY-2 reference approval and runtime compatibility constrain visual work. |
 | FCL-6 | Agent-run real-film visual acceptance; generated-image and screenshot intake workflow | `faceless/visuals.rs` and action-word cues already exist. General image import exists; missing work is faceless generation/intake integration, provenance and beat placement. Verify gap fill, word/action cues, reading time and visual variety on a complete production. Requires accepted voice and source assets. |
 | FCL-7 | Faceless openings/bed in library, enabled by these presets and ducked | `preset/mod.rs`, `sound_library.rs`, `media/audio.rs`; fixture export −14 LUFS ±1 with bed ≥15 dB under speech. Check licences and listen before keeping defaults; no paid generation in implementation tests. CL-11. |
 | FCL-9 | Release-time wording/source recheck, made-list/status acceptance | `commands/publish.rs`, `faceless/script.rs`, `faceless/evidence.rs`: reject stale “today/just” at scheduled release and recheck sources; mocked retry/status paths, then an approved private upload. Made-list and stage hooks exist; test outcomes instead of adding duplicate wiring. Depends PUB-2 and GAP-002/011/016/027. CL-12. |
 | FCL-10 | Complete Preset Run integration for app-owned steps, then EVAL-1 for long and short | Faceless MCP operations/methods already exist behind `more`; extend `mcp/first_steps.rs` only where steps are still manual. Stop at agent/user decisions and explicit paid-step consent. Both formats reach approved private upload with correction/time/cost evidence. Requires preceding FCL/PUB acceptance. |
 
-FCL-0 is built foundation; FCL-2's remaining validator/network defects are GAP-013/026;
+FCL-0 is built foundation; FCL-2's validator/network defects GAP-013/026 are fixed;
 FCL-8's remaining thumbnail generation is PUB-1. These IDs stay reserved; their completed
 implementation narratives and duplicate tasks were removed.
 

@@ -623,7 +623,7 @@ pub fn load_review(root: &std::path::Path) -> Option<Review> {
     crate::files::load_json(&review_path(root))
 }
 
-fn script_hash(script: &Script) -> String {
+pub fn script_hash(script: &Script) -> String {
     use sha2::Digest;
     let bytes = serde_json::to_vec(script).unwrap_or_default();
     sha2::Sha256::digest(&bytes)

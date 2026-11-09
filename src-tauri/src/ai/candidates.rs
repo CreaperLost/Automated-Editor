@@ -29,6 +29,16 @@ const MAX_REPEAT_GAP_US: u64 = 4_000_000;
 const MIN_RESTART_WORDS: usize = 2;
 const MAX_RESTART_WORDS: usize = 16;
 const MAX_RESTART_US: u64 = 12_000_000;
+/// A reworded restart (GAP-031): a phrase of this many words broken off on a word that can't
+/// end it ("…click on the"), a pause, then a new clause in other words ("when you click…").
+const MIN_REWORDED_WORDS: usize = 3;
+const MAX_REWORDED_WORDS: usize = 8;
+/// Words a phrase can't stop on: it was broken off.
+const DANGLING: &str = "the a an to of on in at for with by from into your my our their its";
+/// Words a new clause opens with but that don't carry on a broken-off phrase: "…on the | when
+/// you click" is begun again; "…go to | the settings" just paused.
+const CLAUSE_OPENERS: &str = "you we i they it he she so when if now first let's then here there";
+
 /// A first attempt that ended its sentence counts only if it is at most this many words
 /// longer than what was said again: two whole sentences that open alike are no retake.
 const MAX_FINISHED_EXTRA_WORDS: usize = 4;
@@ -195,8 +205,13 @@ pub fn find(words: &[&TranscriptWord]) -> Vec<Candidate> {
         .into_iter()
         .filter(|c| !retaken.iter().any(|r| c.from <= r.to && r.from <= c.to))
         .collect();
+    let reworded: Vec<Candidate> = reworded(words, &spoken)
+        .into_iter()
+        .filter(|c| !retaken.iter().any(|r| c.from <= r.to && r.from <= c.to))
+        .collect();
     out.extend(retaken);
     out.extend(slipped);
+    out.extend(reworded);
     out.sort_by_key(|c| (c.from, c.to));
     out
 }
@@ -369,6 +384,45 @@ fn retakes(words: &[&TranscriptWord], s: &[Spoken]) -> Vec<Candidate> {
             }
             None => b += 1,
         }
+    }
+    out
+}
+
+/// A phrase broken off and begun again in other words, which [`retakes`] can't match by its
+/// words: "if you click on the | when you click the button". Only a short phrase that stops on
+/// a word nothing ends on, then a pause and a new clause, so a speaker pausing to think inside a
+/// sentence ("go to the | settings") is not flagged. Only flags: the review decides.
+fn reworded(words: &[&TranscriptWord], s: &[Spoken]) -> Vec<Candidate> {
+    let mut out = Vec::new();
+    for b in 1..s.len() {
+        if !s[b].after_halt || s[b].after_stop || !among(CLAUSE_OPENERS, &s[b].norm) {
+            continue;
+        }
+        // The pause is real, not a dash or punctuation the attempt finished on.
+        let gap = words[s[b].at]
+            .source_start_us
+            .saturating_sub(words[s[b - 1].at].source_end_us);
+        if gap < HALT_PAUSE_US || !among(DANGLING, &s[b - 1].norm) {
+            continue;
+        }
+        let Some(a) = (b.saturating_sub(MAX_REWORDED_WORDS)..b)
+            .rev()
+            .find(|&k| k == 0 || s[k].after_break)
+        else {
+            continue;
+        };
+        if b - a < MIN_REWORDED_WORDS || s[a + 1..b].iter().any(|w| w.after_halt) {
+            continue;
+        }
+        out.push(Candidate {
+            flag: Flag::Retake,
+            from: s[a].at,
+            to: s[b].at - 1,
+            note: format!(
+                "\"{}\" broken off and said another way (retake?)",
+                said(words, s[a].at, s[b - 1].at)
+            ),
+        });
     }
     out
 }
@@ -731,6 +785,37 @@ mod tests {
              the video and |add a clip"
         )
         .is_empty());
+    }
+
+    /// A phrase broken off and begun again in other words is flagged; a pause inside one
+    /// sentence is not (GAP-031). Made up, as the labelled English recording isn't in the repo.
+    #[test]
+    fn a_reworded_restart_is_flagged_and_a_pause_to_think_is_not() {
+        for (text, to) in [
+            ("the first thing is to |we start by opening the panel", 4),
+            ("if you click on the |when you click the button it saves", 4),
+            ("now open the menu for |you need the export menu", 4),
+        ] {
+            assert_eq!(flags(text), vec![(Flag::Retake, 0, to)], "{text}");
+        }
+        for text in [
+            "now go to the |settings and pick a format",
+            "click on the |the export button",
+            "we open the panel and |we see the clips",
+            "it is |you who decides",
+            "the problem is |you forgot to save",
+            "we go to |the settings panel",
+            "open the panel. |We see the clips",
+        ] {
+            let owned = words(text);
+            let refs: Vec<&TranscriptWord> = owned.iter().collect();
+            let found: Vec<String> = find(&refs)
+                .into_iter()
+                .map(|c| c.note)
+                .filter(|n| n.contains("said another way"))
+                .collect();
+            assert!(found.is_empty(), "{text}: {found:?}");
+        }
     }
 
     /// Every slip the review windows used to skip, from the labelled recordings

@@ -640,7 +640,9 @@ fn faceless(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             }
             text(visuals_text(&result))
         }
-        FacelessOp::AcceptVoice => text(voice_text(&fc::faceless_voice_accept_impl(ctx.state)?)),
+        FacelessOp::AcceptVoice => text(voice_text(&fc::faceless_voice_accept_impl(
+            ctx.state, None,
+        )?)),
         FacelessOp::Status => match fc::faceless_status_impl(ctx.state) {
             Some(p) => text(line(&p)),
             None => text(

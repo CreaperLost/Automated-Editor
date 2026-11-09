@@ -13,13 +13,14 @@ Implementation: [Architecture](architecture.md). Work: [Roadmap](ROADMAP.md).
 - Faceless/publish code and assets are already committed in this ancestry. Old “not committed”
   labels were removed. The original handoff recorded `AI-Automation` and PR #57 as the base;
   their current remote status has not been queried.
-- [gap.md](gap.md) is the canonical issue report: five P1s (GAP-004/008/011/016/017), remaining
-  correctness/performance findings, and explicitly labelled investigations. GAP-005/006 now
-  pass focused tests; GAP-001/014 describe replaced implementations, not open missing wiring.
+- [gap.md](gap.md) is the canonical issue report: the P1s (GAP-004/008/011/016/017/037) were fixed
+  on 8 Nov (with GAP-015) and every other finding on 9 Nov. GAP-030/031 got a first fix (phone
+  text size check; reworded-restart flag tested on made-up sentences); GAP-032 was decided (keep). GAP-005/006 pass focused tests; GAP-001/014 describe
+  replaced implementations.
 - [Fresh focused results](verification.md#documentation-reconciliation-8-november-2026) and
   [remaining FCL/PUB acceptance](verification.md#faceless-and-publish-acceptance) are separate.
   No new full suite, native walkthrough, listening check, paid call or live upload was run.
-- Suggested work order starts with those P1s. STY-2 still needs George's portrait references
+- Suggested work order now starts with persistence/export correctness. STY-2 still needs George's portrait references
   and over-face verdict. The pending upload and voice checks are not completed by unit tests.
 
 ## Cloud setup and access
@@ -98,6 +99,10 @@ Carried over from the PC's memory notes. Treat as settled; don't re-ask.
   mode (it would need a token). HyperFrames only for graphics; GSAP vendored locally.
 - The app is free and open source; licences must allow commercial use by its users (no
   non-commercial models or assets). Music must never need credit (CC0/public-domain only).
+- Old graphic versions and folders are kept, even when nothing on the timeline uses them: no
+  automatic cleanup (9 Nov, GAP-032).
+- Graphic text must be at least 2.8% of the screen's short side, Apple's 11 pt minimum on a
+  phone (9 Nov, GAP-030; George asked for the published minimum).
 - Never migrate or stay compatible with old project files.
 - Four saved things, one rule: Style (looks), Preset (what the app/agent does for a kind of
   video, incl. method and rules), Layout (where things sit), Project (only this video's changes).

@@ -207,6 +207,10 @@ pub struct Voice {
     /// Measured length against the format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length_problem: Option<String>,
+    /// What the voice stage read when this narration was started (the reviewed script's
+    /// fingerprint). Acceptance and the stage hold only while it is still current.
+    #[serde(default)]
+    pub inputs: String,
     pub at: String,
 }
 
@@ -238,6 +242,33 @@ fn fingerprint(settings: &VoiceSettings, spoken: &str) -> String {
     hash(&format!("{}|{}|{spoken}", settings.model, settings.voice))
 }
 
+/// The productions being voiced now (their voice folders).
+static VOICING: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// Holds a production's voice folder while a job writes to it; a second job is refused
+/// (GAP-037) rather than mixing its takes with the first's.
+struct Job(PathBuf);
+
+impl Job {
+    fn start(dir: &Path) -> Result<Self, String> {
+        let mut voicing = VOICING.lock().unwrap_or_else(|e| e.into_inner());
+        if voicing.iter().any(|d| d == dir) {
+            return Err(
+                "This video's narration is already being made: wait for it to finish".into(),
+            );
+        }
+        voicing.push(dir.to_path_buf());
+        Ok(Self(dir.to_path_buf()))
+    }
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        let mut voicing = VOICING.lock().unwrap_or_else(|e| e.into_inner());
+        voicing.retain(|d| d != &self.0);
+    }
+}
+
 /// Voices the scenes not voiced yet (or changed, or listed in `redo`, 0-based), plays each at
 /// the channel's pace and joins them into one narration file. What was paid for is kept as
 /// soon as it arrives, so a failure part way loses nothing.
@@ -263,6 +294,8 @@ pub fn make(
         ));
     }
     let dir = folder(root);
+    // One voice job per production: the takes, the manifest and the paced files are shared.
+    let _job = Job::start(&dir)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let manifest_path = dir.join(MANIFEST);
     let mut manifest: BTreeMap<String, String> =
@@ -356,9 +389,22 @@ pub fn make(
         cursor += length + PADDING_US;
     }
     progress(0.92, "Joining the scenes");
+    // Named by the takes' own audio, not the words asked for: a take voiced again from the
+    // same words is a new narration, with its own asset, transcript and listen.
+    let mut takes = Sha256::new();
+    for i in 0..spoken.len() {
+        let bytes = std::fs::read(raw(i)).map_err(|e| format!("Reading scene {i}: {e}"))?;
+        takes.update(Sha256::digest(&bytes));
+    }
+    takes.update(format!("|{}|{LEAD_US}|{PADDING_US}", settings.speed).as_bytes());
     let name = format!(
         "narration-{}.wav",
-        hash(&format!("{}|{}", prints.join(","), settings.speed))
+        takes
+            .finalize()
+            .iter()
+            .take(10)
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
     );
     let joined = dir.join(&name);
     let assembled = crate::media::ffmpeg::assemble_audio_wav(&parts, cursor, &joined);
@@ -638,7 +684,93 @@ mod tests {
         assert!(long.contains("2.68 words a second"), "{long}");
     }
 
-    /// A tone for every scene, to test the rest without paying.
+    /// GAP-004: a scene voiced again from the same words but coming back as different audio
+    /// is a new narration, though nothing in the script changed.
+    #[test]
+    fn a_take_voiced_again_is_a_new_narration() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let script = Script {
+            scenes: vec![Scene {
+                narration: "The same words both times.".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let tone = Tone(Default::default());
+        let settings = VoiceSettings::default();
+        let first = make(root, &script, &settings, &tone, &[], &|_, _| {}).unwrap();
+        let again = make(root, &script, &settings, &tone, &[0], &|_, _| {}).unwrap();
+        assert_eq!(again.generated, 1);
+        assert_ne!(again.narration, first.narration, "new audio, new narration");
+        assert!(
+            root.join("faceless").join(&first.narration).is_file(),
+            "kept for undo"
+        );
+        let kept = make(root, &script, &settings, &tone, &[], &|_, _| {}).unwrap();
+        assert_eq!((kept.generated, kept.narration), (0, again.narration));
+    }
+
+    /// GAP-037: while one job voices a production, another for the same production is refused
+    /// before it pays for anything; once the first ends, voicing works again.
+    #[test]
+    fn one_voice_job_at_a_time_per_production() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        struct Slow {
+            tone: Tone,
+            started: std::sync::mpsc::Sender<()>,
+            go: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+        }
+        impl Speak for Slow {
+            fn speak(&self, model: &str, voice: &str, text: &str) -> Result<Vec<u8>, String> {
+                let _ = self.started.send(());
+                let _ = self.go.lock().unwrap().recv();
+                self.tone.speak(model, voice, text)
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let script = |text: &str| Script {
+            scenes: vec![Scene {
+                narration: text.into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let settings = VoiceSettings::default();
+        let (started_tx, started) = std::sync::mpsc::channel();
+        let (go, go_rx) = std::sync::mpsc::channel();
+        let slow = Slow {
+            tone: Tone(Default::default()),
+            started: started_tx,
+            go: std::sync::Mutex::new(go_rx),
+        };
+        let other = Tone(Default::default());
+        std::thread::scope(|scope| {
+            let first =
+                scope.spawn(|| make(root, &script("Job A."), &settings, &slow, &[], &|_, _| {}));
+            started.recv().unwrap();
+            let second = make(root, &script("Job B."), &settings, &other, &[], &|_, _| {});
+            assert!(second.unwrap_err().contains("already being made"));
+            assert_eq!(
+                other.0.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "B paid for nothing"
+            );
+            go.send(()).unwrap();
+            first.join().unwrap().unwrap();
+        });
+        let after = make(root, &script("Job B."), &settings, &other, &[], &|_, _| {}).unwrap();
+        assert_eq!(after.generated, 1);
+    }
+
+    /// A tone for every scene, to test the rest without paying. Each call is pitched a little
+    /// higher than the last: a provider's new take of the same words is other audio.
     struct Tone(std::sync::atomic::AtomicUsize);
 
     impl Speak for Tone {
@@ -646,10 +778,11 @@ mod tests {
             self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
             let file = dir.path().join("t.mp3");
+            let pitch = 440 + 20 * self.0.load(std::sync::atomic::Ordering::SeqCst);
             let seconds = (text.split_whitespace().count() as f64 / 2.4).max(0.5);
             let status = std::process::Command::new(crate::media::ffmpeg::ffmpeg_path()?)
                 .args(["-v", "error", "-f", "lavfi", "-i"])
-                .arg(format!("sine=frequency=440:duration={seconds}"))
+                .arg(format!("sine=frequency={pitch}:duration={seconds}"))
                 .arg(&file)
                 .status()
                 .map_err(|e| e.to_string())?;
@@ -706,6 +839,7 @@ mod tests {
         assert_ne!(changed.narration, first.narration);
         let fourth = make(root, &script, &settings, &tone, &[], &|_, _| {}).unwrap();
         assert_eq!(fourth.generated, 0);
+        assert_eq!(fourth.narration, changed.narration);
         assert!(make(root, &script, &settings, &tone, &[5], &|_, _| {}).is_err());
     }
 }

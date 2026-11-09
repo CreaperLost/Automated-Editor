@@ -1369,6 +1369,14 @@ fn checkpoint(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 let _guard = ctx.state.command_lock.lock();
                 let mut opened = ctx.state.opened_project.lock();
                 let reader = opened.as_mut().ok_or(super::tools::NO_PROJECT_MESSAGE)?;
+                // Checked again under the lock: a call for project A never saves B (GAP-029).
+                if ctx
+                    .project
+                    .as_ref()
+                    .is_some_and(|p| *p != reader.summary.project_handle)
+                {
+                    return Err(super::tools::OTHER_PROJECT_MESSAGE.into());
+                }
                 reader.save_checkpoint(&name)?
             };
             text(format!(
@@ -5897,6 +5905,35 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         })
+    }
+
+    /// GAP-029: a checkpoint call for a project that is no longer open (switched after the
+    /// first check) saves nothing; for the open project it saves.
+    #[test]
+    fn a_checkpoint_for_another_project_is_refused_under_the_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let mut ctx = Ctx::new(&host, "test", false);
+        let count = || {
+            host.state
+                .opened_project
+                .lock()
+                .as_ref()
+                .unwrap()
+                .history()
+                .steps()
+                .checkpoints()
+                .len()
+        };
+        let before = count();
+        ctx.project = Some("a-project-closed-since".into());
+        let args = json!({ "op": "save", "name": "clean cut" });
+        let error = checkpoint(&ctx, args.clone()).unwrap_err();
+        assert_eq!(error, crate::mcp::tools::OTHER_PROJECT_MESSAGE);
+        assert_eq!(count(), before);
+        ctx.project = None;
+        checkpoint(&ctx, args).unwrap();
+        assert_eq!(count(), before + 1);
     }
 
     fn length(ctx: &Ctx) -> u64 {

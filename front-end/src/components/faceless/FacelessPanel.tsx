@@ -113,6 +113,7 @@ export const FacelessPanel: React.FC = () => {
                 <VoiceView
                   refreshKey={`${revision}-${stage.state}-${tick}`}
                   ready={production.stages.find((s) => s.id === "review")?.state === "done"}
+                  stale={stage.state === "stale"}
                   onChange={() => void refresh(path ?? null)}
                 />
               )}

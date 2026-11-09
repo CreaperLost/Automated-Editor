@@ -271,6 +271,47 @@ impl Spec {
     }
 }
 
+/// A digest of the source files of every graphic `document` places on a visible track, as
+/// they are now: what an export of it draws besides the edit itself.
+pub fn sources_digest(root: &Path, document: &crate::project::revision::EditDocument) -> String {
+    let mut ids: Vec<&str> = document
+        .sequence
+        .video_tracks()
+        .filter(|t| !t.hidden)
+        .flat_map(|t| t.clips.iter())
+        .filter(|c| document.asset(&c.asset).is_some_and(|a| a.is_graphic()))
+        .map(|c| c.asset.as_str())
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut hasher = Sha256::new();
+    for id in ids {
+        hasher.update(id.as_bytes());
+        hasher.update([0]);
+        let dir = super::folder(root, id);
+        let mut files = Vec::new();
+        if list_files(&dir, &dir, &mut files).is_err() {
+            hasher.update(b"unreadable");
+            continue;
+        }
+        files.sort();
+        for (relative, path) in files {
+            hasher.update(relative.as_bytes());
+            hasher.update([0]);
+            match std::fs::read(&path) {
+                Ok(bytes) => hasher.update(Sha256::digest(&bytes)),
+                Err(_) => hasher.update(b"unreadable"),
+            }
+        }
+    }
+    hasher
+        .finalize()
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
 /// Every file under `dir` (not dot files) as (path relative to `base` with `/`, path).
 pub(crate) fn list_files(
     base: &Path,
