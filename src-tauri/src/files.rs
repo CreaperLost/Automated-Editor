@@ -33,6 +33,23 @@ pub fn save_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     write_atomic(path, &bytes)
 }
 
+/// The JSON in `path` for a store whose loss matters (the user's work, a journal): `None` only
+/// when the file is missing. A file that can't be read or parsed is an error, so a caller never
+/// mistakes it for an empty store and writes over it.
+pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{} can't be read: {e}", path.display())),
+    };
+    serde_json::from_slice(&bytes).map(Some).map_err(|e| {
+        format!(
+            "{} is damaged ({e}). It was left as it is: fix it or move it away",
+            path.display()
+        )
+    })
+}
+
 /// The JSON in `path`; `None` when it is missing or can't be read.
 pub fn load_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     std::fs::read(path)

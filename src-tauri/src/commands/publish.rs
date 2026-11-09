@@ -181,9 +181,13 @@ fn view(root: &Path, target: &str) -> PackageView {
         .filter(|u| u.target == target)
         .collect();
     uploads.reverse();
+    // A damaged package or journal is said, not shown as empty.
+    let damaged = publish::read_packages(root)
+        .and(publish::read_uploads(root))
+        .err();
     PackageView {
         target: target.into(),
-        problem: publish::package_problem(&package),
+        problem: damaged.or_else(|| publish::package_problem(&package)),
         thumbnail_size: thumbnail.as_deref().and_then(publish::image_size),
         thumbnail_data,
         package,
