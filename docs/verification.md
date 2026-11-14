@@ -90,6 +90,16 @@ Implementation present is not production acceptance. No live calls were made in 
 | PUB-2/FCL-9 | Mocked lost-reply upload test passes; package/upload stage hooks exist; old handoff recorded Zernio channel connection | Approved private upload by George, real visibility/status/Studio check; source/time-word checks at release and made-list behavior, including failed/uncertain replies. GAP-002/011/016/027 remain. |
 | FCL-10 | MCP methods/operations exist | Long and short idea→approved private upload EVAL-1 with corrections, app/provider/agent costs and elapsed time. Do not report the old Python pipeline as required runtime. |
 
+**First full short in a cloud session (9 Nov).** `aeroedits serve` ran the app with no window and
+an agent drove it with `aeroedits do`: discover (Treg $0.019), a new story (Apple's HALO robot
+paper), research (13 facts from the arXiv paper, Humanoids Daily and AppleInsider, `ready`),
+script, three independent reviews (one fairness blocker fixed), voice (OpenRouter, 7 scenes,
+54.4 s, about $0.04; the heard check passed once GAP-042 was fixed), 9 Broadsheet graphics,
+`op: visuals` clean, then `aeroedits render` at 1080×1920: 54.43 s, −14.2 LUFS, 3.3 MB. The
+saved production (`test/productions/apple-halo-robot`) restored into a fresh folder rendered
+frame-identical (SSIM 1.000). Nobody listened to it; George has the MP4 in the project files.
+Found: GAP-039..043. Not done: package, thumbnail, upload.
+
 Historical Treg measurements from 8 Nov (not rerun): discovery with X/Reddit $0.0099 in one
 run; later filtered search $0.015, demand for ten stories including first channel refresh
 $0.040, X suggestions $0.0036. These are example invoices, not a price promise or a total-video

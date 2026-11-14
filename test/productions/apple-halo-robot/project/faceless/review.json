@@ -1,0 +1,113 @@
+{
+  "script": "7862e18aaa1791ed",
+  "findings": [
+    {
+      "review": "fairness",
+      "claim": "trained only in fake rooms",
+      "problem": "overstated",
+      "severity": "blocker",
+      "why": "First frame. Part of training used a public human motion-capture dataset.",
+      "change": "never saw a real home in training",
+      "resolved": true
+    },
+    {
+      "review": "fairness",
+      "claim": "Apple put a Mac mini on a humanoid robot, and it works",
+      "problem": "overstated",
+      "severity": "minor",
+      "why": "'It works' ignores single-skill tests and 70% chained.",
+      "change": "name the result instead",
+      "resolved": true
+    },
+    {
+      "review": "fairness",
+      "claim": "In 360 real trials, across six places nobody had mapped, it succeeded 91% of the time.",
+      "problem": "lostLimit",
+      "severity": "minor",
+      "why": "Single skills, Apple's own tests.",
+      "change": "In Apple's own tests of single skills",
+      "resolved": true
+    },
+    {
+      "review": "fairness",
+      "claim": "So Apple generated the data instead",
+      "problem": "lostLimit",
+      "severity": "minor",
+      "why": "Some human motion-capture data remains.",
+      "change": "Apple generated most of the motion data",
+      "resolved": true
+    },
+    {
+      "review": "fairness",
+      "claim": "success falls to 70%",
+      "problem": "lostLimit",
+      "severity": "minor",
+      "why": "Average over three sequences in one room.",
+      "change": "a 70% average, tested in one room",
+      "resolved": true
+    },
+    {
+      "review": "fairness",
+      "claim": "the paper compares itself with no other system",
+      "problem": "overstated",
+      "severity": "minor",
+      "why": "Only no comparisons against other published systems.",
+      "change": "no comparison with other published systems",
+      "resolved": true
+    },
+    {
+      "review": "fairness",
+      "claim": "robot training stops waiting on people's hours, and starts waiting on computers",
+      "problem": "overstated",
+      "severity": "minor",
+      "why": "People still write prompts; inference too firm.",
+      "change": "could wait less on people and more on computers",
+      "resolved": true
+    },
+    {
+      "review": "attention",
+      "claim": "it walks into rooms it has never seen",
+      "problem": "",
+      "severity": "minor",
+      "why": "Soft promise; the stronger hook 'never saw a real home' arrives in scene 3.",
+      "change": "move 'never saw a real home' into the first line",
+      "resolved": true
+    },
+    {
+      "review": "attention",
+      "claim": "With teleoperation, an hour of robot data costs at least an hour of a person's time.",
+      "problem": "",
+      "severity": "minor",
+      "why": "Unexplained jargon, likely drop point.",
+      "change": "Normally a person steers the robot by hand: one hour of data, one hour of a person.",
+      "resolved": true
+    },
+    {
+      "review": "attention",
+      "claim": "And the planning runs on the robot.",
+      "problem": "",
+      "severity": "minor",
+      "why": "Announces instead of saying.",
+      "change": "It plans on the Mac mini, with no internet.",
+      "resolved": true
+    },
+    {
+      "review": "coldReader",
+      "claim": "By default",
+      "problem": "",
+      "severity": "minor",
+      "why": "Cold reader: the alternative is left open; 'Qwen model' unexplained.",
+      "change": "say what Qwen is in a few words",
+      "resolved": true
+    }
+  ],
+  "coldReader": {
+    "confusing": "teleoperation is not defined; Qwen model is not explained; 'By default' leaves the alternative open; the last line is vague.",
+    "how_sure": "Established: the 91% over 360 real trials in six new places, the 70% when chained, a person writes each new task's prompt, no comparison with other systems. Hedge: 'If this holds up'.",
+    "the_point": "Apple trained a humanoid robot on computer-generated rooms and it succeeded 91% of the time in real places it had never seen, planned on a Mac mini; chained tasks drop to 70% and a person still writes the prompts.",
+    "unknown": "Comparison with other systems; whether it works beyond the six places; what tasks the 91% covers.",
+    "what_happened": "Apple researchers put a Mac mini (M4 Pro, 64 GB) on a humanoid robot, and in 360 real trials across six unmapped places it succeeded 91% of the time. It was trained on about 300 hours of generated movement data in 1,000 computer-made rooms instead of real homes, and a Qwen model on the Mac mini plans each step with no internet.",
+    "who_is_affected": "Robot researchers and companies, who could stop depending on people's hours to collect training data.",
+    "who_is_not": "not said"
+  }
+}

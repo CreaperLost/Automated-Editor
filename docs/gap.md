@@ -5,9 +5,10 @@ The working tree was clean, including untracked files, before this documentation
 That pass made no application fixes. This is the canonical detailed issue report;
 [Roadmap](ROADMAP.md) owns feature work and scheduling, not a second bug list.
 
-**No findings remain open.** GAP-001/014 are superseded; GAP-005/006 are closed after focused
-checks; GAP-032 was decided (keep old graphics); every other finding was fixed on 8–9 Nov on
-branch `claude/project-thread-sc2z5d`. Records stay in place for their anchors.
+**Two findings are open (GAP-039, GAP-040)**, both found making the first full faceless short
+in a cloud session on 9 Nov. GAP-001/014 are superseded; GAP-005/006 are closed after focused
+checks; GAP-032 was decided (keep old graphics); every other finding was fixed on 8–9 Nov.
+Records stay in place for their anchors.
 
 P1 means serious correctness, data loss or security risk; P2 means a normal-priority bug,
 material performance issue or validation gap; P3 means lower impact. **Code-traced** means
@@ -19,7 +20,55 @@ Performance work counts are not measured desktop latency. Test scope and fresh r
 
 ## Open findings
 
-None.
+<a id="gap-039"></a>
+### GAP-039 — P2: A template's example source tag stays on screen when the agent sets no `source`
+
+**Location:** `src-tauri/graphics/templates/quote/index.html` (default `"Source: Anthropic"`), and
+the `source` defaults of `bars` and `verdict`.
+
+**Evidence:** In the 9 Nov HALO short the agent added a `quote` from Apple's paper without a
+`source`; the rendered frame read "Source: Anthropic". `faceless` `op: visuals` passed it. Fixed in
+that production by setting `source`.
+
+**Impact:** A faceless video can credit the wrong publisher, the one mistake the channel exists
+to avoid.
+
+**Possible solution:** Empty `source` defaults (the gate then shows the tag's empty state), or
+have `op: visuals` flag any graphic whose `source` is still its template default.
+
+<a id="gap-040"></a>
+### GAP-040 — P3: Discover's GitHub sources fail in the cloud VM
+
+**Evidence:** With the network open, `faceless` `op: discover` read every other source but
+`github_releases` and most of `github_viral` answered "could not connect" for `api.github.com`
+(9 Nov). `curl` reaches it through the same proxy. Not seen on George's PC.
+
+**Possible solution:** Find whether the proxy re-signs `api.github.com` with its own CA, which
+the app's rustls client does not trust; if so, load the system roots (`rustls-native-certs`) or
+`SSL_CERT_FILE` when set.
+
+<a id="gap-041"></a>
+### GAP-041 — Fixed: Research pages could not be read behind a proxy with no local DNS
+
+**Fixed (9 Nov, branch `claude/project-thread-51xq7g`):** `evidence::resolve_public` looked every
+host up before fetching, so in the cloud VM every page failed "cannot resolve". When the lookup
+fails and a proxy is set, the proxy looks the name up; an address written in the URL is still
+checked. Test: the existing `check_public` cases.
+
+<a id="gap-042"></a>
+### GAP-042 — Fixed: Spelled-out numbers were reported as misheard after voicing
+
+**Fixed (9 Nov, branch `claude/project-thread-51xq7g`):** The transcript writes "ninety-one
+percent" and "three hundred and sixty"; the heard check only knew single digits, so every number
+in the script was flagged. `voice::tokens` now joins spelled numbers. Test:
+`heard_words_are_compared_loosely`.
+
+<a id="gap-043"></a>
+### GAP-043 — Fixed: `op: create` from an idea failed when the idea was a long post
+
+**Fixed (9 Nov, branch `claude/project-thread-51xq7g`):** An idea titled by a long X post failed
+with "Keep the topic under 200 characters", which does not tell the agent it may pass `topic`.
+The error now says to give a short `topic` with the `idea`.
 
 <a id="gap-002"></a>
 ### GAP-002 — Fixed: Release changes are silently treated as retries of the old upload

@@ -1,0 +1,10 @@
+{
+  "name": "Steps, linked",
+  "template": "steps-link",
+  "variables": {
+    "cue": 3.2,
+    "label": "On the robot",
+    "steps": "A request\nQwen plans on the Mac mini\nThe robot moves",
+    "title": "No internet"
+  }
+}

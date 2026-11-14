@@ -818,6 +818,13 @@ fn faceless(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                         .into_iter()
                         .find(|i| i.id == id || i.ids.contains(&id))
                         .ok_or_else(|| format!("No idea #{id}; read `op: ideas` again"))?;
+                    if args.topic.is_none()
+                        && idea.title.chars().count() > crate::faceless::MAX_TOPIC_CHARS
+                    {
+                        return Err(format!(
+                            "Idea #{id}'s title is a long post: give a short `topic` with the `idea`"
+                        ));
+                    }
                     (args.topic.unwrap_or(idea.title), idea.urls)
                 }
                 None => (

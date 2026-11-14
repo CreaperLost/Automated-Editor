@@ -1,0 +1,270 @@
+{
+  "topic": "Apple researchers drive a humanoid robot from a Mac mini running Qwen",
+  "sources": [
+    {
+      "url": "https://news.google.com/rss/articles/CBMikgFBVV95cUxOZVdXajk0a19Ra3Y5aWFwLWFuYzBPdzAxOV9mLUdLcnk5UjBDYWhsSXFybnNMVnp6Yk9qOHdtWnFMSmtaYTBpQmlqWDB6aFNNSnM1cUVjYUJKRkphaElWal9YWFF0VUlqdlM3LXdwYzhfMXFsSnhZaDBLUmVOVHVCTDJiRlktVi1lSWJrbVhaSXVkQQ?oc=5",
+      "status": "unreadable",
+      "reason": "cannot resolve news.google.com",
+      "fetchedAt": "2026-11-09T15:50:15.462471590Z",
+      "chars": 0
+    },
+    {
+      "url": "https://appleinsider.com/articles/26/11/09/how-a-mac-mini-powers-a-staggeringly-capable-robot-without-human-training",
+      "status": "fetched",
+      "fetchedAt": "2026-11-09T15:52:54.582112974Z",
+      "chars": 7307
+    },
+    {
+      "url": "https://arxiv.org/html/2611.06908",
+      "status": "fetched",
+      "fetchedAt": "2026-11-09T15:52:54.582112974Z",
+      "chars": 96456
+    },
+    {
+      "url": "https://github.com/apple-aiml-research/ml-halo",
+      "status": "unreadable",
+      "reason": "could not connect",
+      "fetchedAt": "2026-11-09T15:52:54.582112974Z",
+      "chars": 0
+    },
+    {
+      "url": "https://www.humanoidsdaily.com/news/apple-halo-humanoid-synthetic-data-unitree-g1",
+      "status": "fetched",
+      "fetchedAt": "2026-11-09T15:52:54.582112974Z",
+      "publishedOn": "2026-11-05",
+      "chars": 9249
+    }
+  ],
+  "facts": [
+    {
+      "id": "f1",
+      "statement": "Apple's HALO system succeeded in 91% of 360 trials in six real-world places it had never mapped.",
+      "quote": "achieving a 91% success rate across 360 trials in six unmapped real-world environments",
+      "url": "https://arxiv.org/html/2611.06908",
+      "kind": "number",
+      "scope": "Six single skills, tested 10 times each in each of six real environments, in Apple's own tests",
+      "uncertainty": null,
+      "counterpoint": "The authors ran the tests themselves; no independent replication yet.",
+      "numberContext": "percent of 360 single-task trials that succeeded",
+      "domain": "arxiv.org",
+      "primary": false
+    },
+    {
+      "id": "f2",
+      "statement": "HALO never saw a real home during training and went straight to the physical world.",
+      "quote": "Without ever seeing a real home during training, HALO transfers zero-shot to the physical world",
+      "url": "https://arxiv.org/html/2611.06908",
+      "kind": "claim",
+      "scope": "Training data for the motion generator",
+      "uncertainty": null,
+      "counterpoint": "Some human motion-capture data was still used for parts of training.",
+      "numberContext": null,
+      "domain": "arxiv.org",
+      "primary": false
+    },
+    {
+      "id": "f3",
+      "statement": "By default, the model that plans the robot's steps runs on the Mac mini it carries, using a Qwen model, so it works without internet.",
+      "quote": "By default, the orchestrator runs onboard on the Mac mini using Qwen3.6-35B-A3B (4-bit, MLX), sharing a serving engine with the motion generator (Section -D), to enable operation without internet connectivity",
+      "url": "https://arxiv.org/html/2611.06908",
+      "kind": "fact",
+      "scope": "The default setup; it can optionally call cloud models",
+      "uncertainty": null,
+      "counterpoint": null,
+      "numberContext": null,
+      "domain": "arxiv.org",
+      "primary": false
+    },
+    {
+      "id": "f4",
+      "statement": "The robot carries a Mac mini with an M4 Pro chip and 64 GB of memory on its back.",
+      "quote": "a Mac mini with an M4 Pro chip and 64 GB of memory in an enclosure on the robot's back",
+      "url": "https://www.humanoidsdaily.com/news/apple-halo-humanoid-synthetic-data-unitree-g1",
+      "kind": "fact",
+      "scope": null,
+      "uncertainty": null,
+      "counterpoint": null,
+      "numberContext": null,
+      "domain": "humanoidsdaily.com",
+      "primary": false,
+      "sourceDate": "2026-11-05"
+    },
+    {
+      "id": "f5",
+      "statement": "The fast motion tracker runs on the G1's own NVIDIA Jetson chip, not on the Mac mini.",
+      "quote": "The Mac mini runs the orchestrator and generator, while the tracker runs on the G1's built-in NVIDIA Jetson Orin NX.",
+      "url": "https://www.humanoidsdaily.com/news/apple-halo-humanoid-synthetic-data-unitree-g1",
+      "kind": "fact",
+      "scope": null,
+      "uncertainty": null,
+      "counterpoint": null,
+      "numberContext": null,
+      "domain": "humanoidsdaily.com",
+      "primary": false,
+      "sourceDate": "2026-11-05"
+    },
+    {
+      "id": "f6",
+      "statement": "Its motion model was trained on about 300 hours of synthetic data in 1,000 generated rooms.",
+      "quote": "Its motion generator was trained on about 300 hours of synthetic data: generated human-like motions placed in 1,000 procedurally generated rooms and rendered in Isaac Sim.",
+      "url": "https://www.humanoidsdaily.com/news/apple-halo-humanoid-synthetic-data-unitree-g1",
+      "kind": "number",
+      "scope": null,
+      "uncertainty": null,
+      "counterpoint": null,
+      "numberContext": "hours of generated motion video; count of procedurally generated rooms",
+      "domain": "humanoidsdaily.com",
+      "primary": false,
+      "sourceDate": "2026-11-05"
+    },
+    {
+      "id": "f7",
+      "statement": "With teleoperation, an hour of robot training data costs at least an hour of a person's time.",
+      "quote": "Because a person must manually act out every episode, an hour of data costs at least an hour of human time.",
+      "url": "https://arxiv.org/html/2611.06908",
+      "kind": "claim",
+      "scope": "Teleoperation and wearable capture, the methods HALO replaces",
+      "uncertainty": null,
+      "counterpoint": null,
+      "numberContext": null,
+      "domain": "arxiv.org",
+      "primary": false
+    },
+    {
+      "id": "f8",
+      "statement": "Chained tasks were harder: 70% average success across three sequences.",
+      "quote": "Chained tasks were harder, with a 70% average across three sequences.",
+      "url": "https://www.humanoidsdaily.com/news/apple-halo-humanoid-synthetic-data-unitree-g1",
+      "kind": "number",
+      "scope": "Chained tests used a single real environment",
+      "uncertainty": null,
+      "counterpoint": null,
+      "numberContext": "average success rate of three chained task sequences",
+      "domain": "humanoidsdaily.com",
+      "primary": false,
+      "sourceDate": "2026-11-05"
+    },
+    {
+      "id": "f9",
+      "statement": "Some human data remains: part of training uses a public human motion-capture dataset.",
+      "quote": "Some human data remains: the tracker's first training stage uses clips from LAFAN1, a public human motion-capture dataset",
+      "url": "https://www.humanoidsdaily.com/news/apple-halo-humanoid-synthetic-data-unitree-g1",
+      "kind": "fact",
+      "scope": null,
+      "uncertainty": null,
+      "counterpoint": null,
+      "numberContext": null,
+      "domain": "humanoidsdaily.com",
+      "primary": false,
+      "sourceDate": "2026-11-05"
+    },
+    {
+      "id": "f10",
+      "statement": "Adding a new task still needs a person to write its prompt.",
+      "quote": "adding a new physical task still requires a human to write its prompt",
+      "url": "https://arxiv.org/html/2611.06908",
+      "kind": "fact",
+      "scope": "The authors' own stated limitation",
+      "uncertainty": null,
+      "counterpoint": null,
+      "numberContext": null,
+      "domain": "arxiv.org",
+      "primary": false
+    },
+    {
+      "id": "f11",
+      "statement": "The paper reports no comparisons against other published systems.",
+      "quote": "the paper reports no comparisons against other published systems",
+      "url": "https://www.humanoidsdaily.com/news/apple-halo-humanoid-synthetic-data-unitree-g1",
+      "kind": "fact",
+      "scope": null,
+      "uncertainty": null,
+      "counterpoint": null,
+      "numberContext": null,
+      "domain": "humanoidsdaily.com",
+      "primary": false,
+      "sourceDate": "2026-11-05"
+    },
+    {
+      "id": "f12",
+      "statement": "Its weakest real-world skill was sitting on a chair, at 85% success.",
+      "quote": "The poorest score it got in the real world was 85% success over sitting on a chair.",
+      "url": "https://appleinsider.com/articles/26/11/09/how-a-mac-mini-powers-a-staggeringly-capable-robot-without-human-training",
+      "kind": "number",
+      "scope": null,
+      "uncertainty": null,
+      "counterpoint": null,
+      "numberContext": "success rate for the sit-on-a-chair skill in real environments",
+      "domain": "appleinsider.com",
+      "primary": false
+    },
+    {
+      "id": "f13",
+      "statement": "All eight authors work at Apple, and the code is on GitHub.",
+      "quote": "All eight authors work at Apple, and the code is on GitHub.",
+      "url": "https://appleinsider.com/articles/26/11/09/how-a-mac-mini-powers-a-staggeringly-capable-robot-without-human-training",
+      "kind": "fact",
+      "scope": null,
+      "uncertainty": null,
+      "counterpoint": null,
+      "numberContext": null,
+      "domain": "appleinsider.com",
+      "primary": false
+    }
+  ],
+  "rejected": [],
+  "brief": {
+    "viewerQuestion": "Can a humanoid robot really learn to move around a home without ever seeing one, and what runs it?",
+    "whyItMatters": "Robot training has been limited by human time: someone has to act out every move. HALO swaps that for simulation, and runs on a Mac mini on the robot.",
+    "beats": [
+      "Hook: Apple put a Mac mini on a humanoid robot, and it walks into rooms it has never seen [f4][f1]",
+      "Proof: 91% of 360 real trials in six unmapped places [f1], never saw a real home in training [f2]",
+      "How: 300 hours of synthetic motion in 1,000 generated rooms [f5] instead of a person acting out every move [f6]; planner runs on the Mac mini with Qwen, no internet [f3]; tracker on the robot's Jetson [f5]",
+      "Limit: chained tasks 70% [f8]; a person still writes each new task [f10]; no comparison with other systems [f11]; some human data remains [f9]",
+      "Turn: robot data now scales with compute, not people [f7] (analysis)"
+    ],
+    "counterpoints": [
+      "Apple's own tests; no independent replication",
+      "Chained tasks drop to 70% in one environment",
+      "No head-to-head comparison"
+    ],
+    "openQuestions": [
+      "Whether Apple plans any product from this"
+    ],
+    "visualIdeas": [
+      "Headline: Mac mini + humanoid",
+      "Count-up 91% of 360 trials",
+      "Bars: single 91% vs chained 70%",
+      "Before-after: a person acts out every move vs generated rooms"
+    ],
+    "formatFit": "One surprising idea: a robot trained only in fake rooms works in real ones, run from a Mac mini."
+  },
+  "origins": [
+    [
+      "https://arxiv.org/html/2611.06908"
+    ],
+    [
+      "https://www.humanoidsdaily.com/news/apple-halo-humanoid-synthetic-data-unitree-g1"
+    ],
+    [
+      "https://appleinsider.com/articles/26/11/09/how-a-mac-mini-powers-a-staggeringly-capable-robot-without-human-training"
+    ]
+  ],
+  "corroboration": {
+    "f1": 2,
+    "f10": 2,
+    "f11": 1,
+    "f12": 2,
+    "f13": 2,
+    "f2": 2,
+    "f3": 1,
+    "f4": 2,
+    "f5": 2,
+    "f6": 2,
+    "f7": 1,
+    "f8": 0,
+    "f9": 1
+  },
+  "grade": "ready",
+  "nextFact": 13
+}

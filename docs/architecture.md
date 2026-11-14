@@ -178,7 +178,8 @@ can tell a later agent what already ran.
   pipe so a dev copy runs beside the installed app.
 - **Two doors, one set of tools.** `aeroedits do <tool>` (`cli.rs`) speaks MCP over the same pipe;
   `tools/list` drives both. Hidden tools run as `do more --tool X --args '{…}'`.
-  Both need the running app. The third, `aeroedits render <project>` (`render_cli.rs`), exports a
+  Both need the running app, or `aeroedits serve` (`mcp/headless.rs`: the same server with no
+  window, for cloud sessions and scripts). The third, `aeroedits render <project>` (`render_cli.rs`), exports a
   saved project with no app running.
 - **Proposals** (`proposals.rs`, `mcp/propose.rs`): batches of `Cuts` (word spans or edited ranges)
   or `Edits` (`SequenceEdit`s), checked on a copy when proposed, stored in

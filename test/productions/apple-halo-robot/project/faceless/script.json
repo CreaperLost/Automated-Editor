@@ -1,0 +1,102 @@
+{
+  "title": "Apple put a Mac mini on a robot: 91% in rooms it never saw",
+  "titleOptions": [
+    "Apple's humanoid robot runs on a Mac mini",
+    "Apple trained a robot in 1,000 fake rooms. It works in real ones",
+    "Apple's robot never saw a real home, then walked into six",
+    "A Mac mini now drives Apple's humanoid robot research",
+    "Apple's HALO robot learned to sit in rooms it never saw",
+    "Apple taught a humanoid robot with zero real homes",
+    "Apple's humanoid robot hit 91% in rooms it never saw",
+    "Apple's Mac mini robot: 91% in real homes, 70% chained",
+    "Apple built a humanoid robot brain that runs offline",
+    "Apple put a Mac mini on a humanoid robot, and it works"
+  ],
+  "titleFactIds": [
+    "f4",
+    "f1"
+  ],
+  "hooks": [
+    "Flat fact: Apple researchers strapped a Mac mini to a humanoid robot, and it walks into rooms it has never seen.",
+    "Collision: This robot never saw a real home in training. Then it got 91% right in six of them.",
+    "One-two: About 300 hours of fake rooms, and a real robot sits on a real chair.",
+    "Odd detail: The robot's brain is a Mac mini in a backpack.",
+    "What you'd assume: You'd think a robot needs people acting out every move. Apple's didn't."
+  ],
+  "spine": "A robot trained only in generated rooms works in real ones, run from a Mac mini, but it still needs a person to write each task.",
+  "firstFrame": "A Mac mini on a humanoid robot's back, with the line: never saw a real home in training.",
+  "scenes": [
+    {
+      "narration": "A humanoid robot from Apple's researchers never saw a real home while it learned. Then it walked into six real places nobody had mapped.",
+      "factIds": [
+        "f2",
+        "f1"
+      ],
+      "analysis": false,
+      "onScreen": "Never saw a real home in training",
+      "source": ""
+    },
+    {
+      "narration": "In Apple's own tests of single skills, it succeeded in 91% of 360 tries, with an M4 Pro Mac mini on its back doing the planning.",
+      "factIds": [
+        "f1",
+        "f4",
+        "f3"
+      ],
+      "analysis": false,
+      "onScreen": "91% of 360 real tries",
+      "source": "Source: Apple's paper"
+    },
+    {
+      "narration": "Normally a person acts out every move by hand, so an hour of robot data costs at least an hour of a person's time.",
+      "factIds": [
+        "f7"
+      ],
+      "analysis": false,
+      "onScreen": "1 hour of data = 1 hour of a person",
+      "source": "Source: Apple's paper"
+    },
+    {
+      "narration": "Apple generated most of the motion data instead: about 300 hours of movement, in 1,000 computer-made rooms.",
+      "factIds": [
+        "f6",
+        "f9"
+      ],
+      "analysis": false,
+      "onScreen": "300 hours, 1,000 generated rooms",
+      "source": "Source: Humanoids Daily"
+    },
+    {
+      "narration": "The plan comes from the Mac mini itself, through an A.I. model called Qwen, with no internet needed.",
+      "factIds": [
+        "f3"
+      ],
+      "analysis": false,
+      "onScreen": "Qwen, running on the Mac mini",
+      "source": "Source: Apple's paper"
+    },
+    {
+      "narration": "But chain tasks together, and success drops to a 70% average, tested in one room. A person still writes the prompt for every new task. And the paper reports no comparison with other published systems.",
+      "factIds": [
+        "f8",
+        "f10",
+        "f11"
+      ],
+      "analysis": false,
+      "onScreen": "Chained tasks: 70%",
+      "source": "Source: Humanoids Daily"
+    },
+    {
+      "narration": "If this holds up, robot training could wait less on people's hours, and more on computers.",
+      "factIds": [],
+      "analysis": true,
+      "onScreen": "",
+      "source": ""
+    }
+  ],
+  "leftOut": [
+    "f5 Jetson tracker: side detail",
+    "f12 sit 85%: covered by the average",
+    "f13 authors: not needed"
+  ]
+}

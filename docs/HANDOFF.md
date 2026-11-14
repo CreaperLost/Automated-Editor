@@ -28,8 +28,11 @@ Implementation: [Architecture](architecture.md). Work: [Roadmap](ROADMAP.md).
 Run `bash scripts/cloud-setup.sh`, then `bash scripts/check-env.sh`, then the touched checks
 or `bash scripts/test-all.sh`. The scripts and CI workflows are authoritative. A GUI is not
 available in a headless session; use the library smoke export and frame snapshots.
-`aeroedits do`/`--mcp-stdio` connect to a running app; `aeroedits render <project> --out x.mp4
---frames 6` exports a saved project with no app running (CL-8).
+`aeroedits do`/`--mcp-stdio` connect to a running app, or to `aeroedits serve` (the same tools
+with no window, for a cloud session driving a whole edit or faceless production); `aeroedits
+render <project> --out x.mp4 --frames 6` exports a saved project with no app running (CL-8).
+Run both with `NO_PROXY=localhost,127.0.0.1` in the cloud VM (see AGENTS.md). Finished renders
+for George go to the project files folder, not to GitHub: the repository is public.
 
 No API key is needed to build/test; unit tests keep using mocks. **Keys for cloud sessions
 (George, 8 Nov):** `OPENROUTER_API_KEY` (the main one), `TREG_API_KEY` and `ZERNIO_API_KEY` are

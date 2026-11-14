@@ -1,0 +1,12 @@
+{
+  "name": "Claim and verdict",
+  "template": "verdict",
+  "variables": {
+    "claim": "Learns without people",
+    "cue": 3.92,
+    "evidence": "Every new task needs a person|No comparison with others|Apple’s own tests",
+    "label": "Still open",
+    "source": "Source: Apple's paper",
+    "verdict": "Unproven"
+  }
+}

@@ -1,0 +1,105 @@
+{
+  "beats": [
+    {
+      "assetId": "m-0d1817cecc92",
+      "clipId": "c2",
+      "name": "News headline",
+      "template": "headline",
+      "startUs": 340000,
+      "endUs": 8440000,
+      "cueUs": 2460000,
+      "words": 20,
+      "said": "A humanoid robot from Apple's researchers never saw a real"
+    },
+    {
+      "assetId": "m-b2d6c7e8ac70",
+      "clipId": "c3",
+      "name": "Number count-up",
+      "template": "count-up",
+      "startUs": 8440000,
+      "endUs": 14040000,
+      "cueUs": 11240000,
+      "words": 11,
+      "said": "In Apple's own tests of single skills, it succeeded in"
+    },
+    {
+      "assetId": "m-f0809fd4d0dc",
+      "clipId": "c4",
+      "name": "Key point",
+      "template": "key-point",
+      "startUs": 14040000,
+      "endUs": 17380000,
+      "words": 9,
+      "said": "with an M4 Pro Mac mini on its back doing"
+    },
+    {
+      "assetId": "m-4227805acf76",
+      "clipId": "c5",
+      "name": "Quote from a source",
+      "template": "quote",
+      "startUs": 17380000,
+      "endUs": 24260000,
+      "cueUs": 21559999,
+      "words": 15,
+      "said": "Normally, a person acts out every move by hand, so"
+    },
+    {
+      "assetId": "m-04bff4583d06",
+      "clipId": "c6",
+      "name": "Number count-up",
+      "template": "count-up",
+      "startUs": 24260000,
+      "endUs": 31380000,
+      "cueUs": 28960000,
+      "words": 10,
+      "said": "Apple generated most of the motion data instead, about three"
+    },
+    {
+      "assetId": "m-097236ed908a",
+      "clipId": "c7",
+      "name": "Steps, linked",
+      "template": "steps-link",
+      "startUs": 31380000,
+      "endUs": 37000000,
+      "cueUs": 34580000,
+      "words": 16,
+      "said": "The plan comes from the Mac mini itself through an"
+    },
+    {
+      "assetId": "m-e8335fed5dca",
+      "clipId": "c8",
+      "name": "Comparison bars",
+      "template": "bars",
+      "startUs": 37000000,
+      "endUs": 42600000,
+      "cueUs": 39660000,
+      "words": 8,
+      "said": "But chain tasks together and success drops to a seventy"
+    },
+    {
+      "assetId": "m-d7a78b055b62",
+      "clipId": "c9",
+      "name": "Claim and verdict",
+      "template": "verdict",
+      "startUs": 42600000,
+      "endUs": 49220000,
+      "cueUs": 46520000,
+      "words": 19,
+      "said": "A person still writes the prompt for every new task,"
+    },
+    {
+      "assetId": "m-d81cce92d114",
+      "clipId": "c10",
+      "name": "Key point",
+      "template": "key-point",
+      "startUs": 49220000,
+      "endUs": 54420000,
+      "words": 15,
+      "said": "If this holds up, robot training could wait less on"
+    }
+  ],
+  "durationUs": 54420000,
+  "errors": [],
+  "notes": [],
+  "at": "2026-11-09T16:00:36.381442951+00:00"
+}

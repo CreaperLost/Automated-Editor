@@ -1,0 +1,319 @@
+{
+  "assets": [
+    {
+      "durationUs": 54394188,
+      "height": 0,
+      "id": "m-848a7d6514a3",
+      "kind": "audio",
+      "name": "Narration",
+      "path": "/tmp/aeroedits-home/Documents/AeroEdits/Faceless/Apple researchers drive a humanoid robot from a Mac mini running Qwen/faceless/voice/narration-6b65a1b97c6699af6b21.wav",
+      "streams": [
+        {
+          "audioPath": "assets/media/m-848a7d6514a3.sound0.wav",
+          "id": "sound0",
+          "kind": "sound",
+          "name": "Narration",
+          "role": "mic"
+        }
+      ],
+      "width": 0
+    },
+    {
+      "durationUs": 3600000000,
+      "height": 1080,
+      "id": "m-0d1817cecc92",
+      "kind": "graphic",
+      "name": "News headline",
+      "path": "/tmp/aeroedits-home/Documents/AeroEdits/Faceless/Apple researchers drive a humanoid robot from a Mac mini running Qwen/graphics/m-0d1817cecc92",
+      "streams": [
+        {
+          "id": "picture",
+          "kind": "picture",
+          "name": "Picture",
+          "role": "overlay"
+        }
+      ],
+      "width": 1920
+    },
+    {
+      "durationUs": 3600000000,
+      "height": 1080,
+      "id": "m-b2d6c7e8ac70",
+      "kind": "graphic",
+      "name": "Number count-up",
+      "path": "/tmp/aeroedits-home/Documents/AeroEdits/Faceless/Apple researchers drive a humanoid robot from a Mac mini running Qwen/graphics/m-b2d6c7e8ac70",
+      "streams": [
+        {
+          "id": "picture",
+          "kind": "picture",
+          "name": "Picture",
+          "role": "overlay"
+        }
+      ],
+      "width": 1920
+    },
+    {
+      "durationUs": 3600000000,
+      "height": 1080,
+      "id": "m-f0809fd4d0dc",
+      "kind": "graphic",
+      "name": "Key point",
+      "path": "/tmp/aeroedits-home/Documents/AeroEdits/Faceless/Apple researchers drive a humanoid robot from a Mac mini running Qwen/graphics/m-f0809fd4d0dc",
+      "streams": [
+        {
+          "id": "picture",
+          "kind": "picture",
+          "name": "Picture",
+          "role": "overlay"
+        }
+      ],
+      "width": 1920
+    },
+    {
+      "durationUs": 3600000000,
+      "height": 1080,
+      "id": "m-4227805acf76",
+      "kind": "graphic",
+      "name": "Quote from a source",
+      "path": "/tmp/aeroedits-home/Documents/AeroEdits/Faceless/Apple researchers drive a humanoid robot from a Mac mini running Qwen/graphics/m-4227805acf76",
+      "streams": [
+        {
+          "id": "picture",
+          "kind": "picture",
+          "name": "Picture",
+          "role": "overlay"
+        }
+      ],
+      "width": 1920
+    },
+    {
+      "durationUs": 3600000000,
+      "height": 1080,
+      "id": "m-04bff4583d06",
+      "kind": "graphic",
+      "name": "Number count-up",
+      "path": "/tmp/aeroedits-home/Documents/AeroEdits/Faceless/Apple researchers drive a humanoid robot from a Mac mini running Qwen/graphics/m-04bff4583d06",
+      "streams": [
+        {
+          "id": "picture",
+          "kind": "picture",
+          "name": "Picture",
+          "role": "overlay"
+        }
+      ],
+      "width": 1920
+    },
+    {
+      "durationUs": 3600000000,
+      "height": 1080,
+      "id": "m-097236ed908a",
+      "kind": "graphic",
+      "name": "Steps, linked",
+      "path": "/tmp/aeroedits-home/Documents/AeroEdits/Faceless/Apple researchers drive a humanoid robot from a Mac mini running Qwen/graphics/m-097236ed908a",
+      "streams": [
+        {
+          "id": "picture",
+          "kind": "picture",
+          "name": "Picture",
+          "role": "overlay"
+        }
+      ],
+      "width": 1920
+    },
+    {
+      "durationUs": 3600000000,
+      "height": 1080,
+      "id": "m-e8335fed5dca",
+      "kind": "graphic",
+      "name": "Comparison bars",
+      "path": "/tmp/aeroedits-home/Documents/AeroEdits/Faceless/Apple researchers drive a humanoid robot from a Mac mini running Qwen/graphics/m-e8335fed5dca",
+      "streams": [
+        {
+          "id": "picture",
+          "kind": "picture",
+          "name": "Picture",
+          "role": "overlay"
+        }
+      ],
+      "width": 1920
+    },
+    {
+      "durationUs": 3600000000,
+      "height": 1080,
+      "id": "m-d7a78b055b62",
+      "kind": "graphic",
+      "name": "Claim and verdict",
+      "path": "/tmp/aeroedits-home/Documents/AeroEdits/Faceless/Apple researchers drive a humanoid robot from a Mac mini running Qwen/graphics/m-d7a78b055b62",
+      "streams": [
+        {
+          "id": "picture",
+          "kind": "picture",
+          "name": "Picture",
+          "role": "overlay"
+        }
+      ],
+      "width": 1920
+    },
+    {
+      "durationUs": 3600000000,
+      "height": 1080,
+      "id": "m-d81cce92d114",
+      "kind": "graphic",
+      "name": "Key point",
+      "path": "/tmp/aeroedits-home/Documents/AeroEdits/Faceless/Apple researchers drive a humanoid robot from a Mac mini running Qwen/graphics/m-d81cce92d114",
+      "streams": [
+        {
+          "id": "picture",
+          "kind": "picture",
+          "name": "Picture",
+          "role": "overlay"
+        }
+      ],
+      "width": 1920
+    }
+  ],
+  "clipsPreset": "Clips",
+  "dismissedZoomIds": [],
+  "graphicFiles": {
+    "m-04bff4583d06": {
+      "graphic.json": "678976468c731ac83c6c9d85252d6ff01eb3750d638e70f172770ef282b45c55",
+      "index.html": "e5063cc030e48f1eab6eac9af6437fa816feef564a520f8f3a5e884bf12a4de8"
+    },
+    "m-097236ed908a": {
+      "graphic.json": "bbef39d3e2e53407954480cbd1ead3193200560e608d0c738643fd055797431f",
+      "index.html": "c7884df0dadfd7ce467bb58af1c79e12907e0eae9df7fdd45650144b3e3d14ba"
+    },
+    "m-0d1817cecc92": {
+      "graphic.json": "33eb45e27fedf2a29dc24b8a28bb7bd06143c85fdc72a7a73beb6ebdc22cf627",
+      "index.html": "1d52aed33345ec354bf18821b12496281a085538316cb9117559739c4102e81b"
+    },
+    "m-4227805acf76": {
+      "graphic.json": "3604610bbe7c887e4ae1e81e67c9240d55dba905674f3325d5216cfc47fb5959",
+      "index.html": "ed78b539f245e5016ba152cd316dd2141aa3972e6fff52d84f92314253ccae54"
+    },
+    "m-b2d6c7e8ac70": {
+      "graphic.json": "6d6a203b38da54976ef852a3a55f245149b220073c55a9b99af7e0b89d4eb968",
+      "index.html": "e5063cc030e48f1eab6eac9af6437fa816feef564a520f8f3a5e884bf12a4de8"
+    },
+    "m-d7a78b055b62": {
+      "graphic.json": "3578e4c4cd4b71c7b0bab75bce4b86fb7260538d2396fed4e884670b7d120410",
+      "index.html": "4d3facc117d4092420314d3c0e1dee9acd9760debcfe2b41b01e80fe4fc040d4"
+    },
+    "m-d81cce92d114": {
+      "graphic.json": "5a49062547029bf2a7530b244315591047cc38b49bb01b08c8e388fd3a8a0a13",
+      "index.html": "393d36d23fca20c33df03629abcfbdc7b761086fb67adf5e3a38555d6d96dedb"
+    },
+    "m-e8335fed5dca": {
+      "graphic.json": "b95a6f7f93a94f868b15ae778f86cbaf5431e5311db0968bf3816b13cf98d666",
+      "index.html": "ca468b8ba0864e4a0dcdef74cb3679066b3acbb3b55e826078537b3ea3b1a43e"
+    },
+    "m-f0809fd4d0dc": {
+      "graphic.json": "f237ec351d7e075fa3e0518f3dbed99cc9f334e703286b4f94375ec4d2300758",
+      "index.html": "393d36d23fca20c33df03629abcfbdc7b761086fb67adf5e3a38555d6d96dedb"
+    }
+  },
+  "preset": "Faceless short",
+  "revision": 8,
+  "schemaVersion": 2,
+  "sequence": {
+    "magnetic": true,
+    "tracks": [
+      {
+        "clips": [
+          {
+            "asset": "m-0d1817cecc92",
+            "durationUs": 8100000,
+            "id": "c2",
+            "inUs": 0,
+            "startUs": 340000,
+            "stream": "picture"
+          },
+          {
+            "asset": "m-b2d6c7e8ac70",
+            "durationUs": 5600000,
+            "id": "c3",
+            "inUs": 0,
+            "startUs": 8440000,
+            "stream": "picture"
+          },
+          {
+            "asset": "m-f0809fd4d0dc",
+            "durationUs": 3340000,
+            "id": "c4",
+            "inUs": 0,
+            "startUs": 14040000,
+            "stream": "picture"
+          },
+          {
+            "asset": "m-4227805acf76",
+            "durationUs": 6880000,
+            "id": "c5",
+            "inUs": 0,
+            "startUs": 17380000,
+            "stream": "picture"
+          },
+          {
+            "asset": "m-04bff4583d06",
+            "durationUs": 7120000,
+            "id": "c6",
+            "inUs": 0,
+            "startUs": 24260000,
+            "stream": "picture"
+          },
+          {
+            "asset": "m-097236ed908a",
+            "durationUs": 5620000,
+            "id": "c7",
+            "inUs": 0,
+            "startUs": 31380000,
+            "stream": "picture"
+          },
+          {
+            "asset": "m-e8335fed5dca",
+            "durationUs": 5600000,
+            "id": "c8",
+            "inUs": 0,
+            "startUs": 37000000,
+            "stream": "picture"
+          },
+          {
+            "asset": "m-d7a78b055b62",
+            "durationUs": 6620000,
+            "id": "c9",
+            "inUs": 0,
+            "startUs": 42600000,
+            "stream": "picture"
+          },
+          {
+            "asset": "m-d81cce92d114",
+            "durationUs": 5200000,
+            "id": "c10",
+            "inUs": 0,
+            "startUs": 49220000,
+            "stream": "picture"
+          }
+        ],
+        "id": "t2",
+        "kind": "video",
+        "name": "Graphics"
+      },
+      {
+        "clips": [
+          {
+            "asset": "m-848a7d6514a3",
+            "durationUs": 54394188,
+            "id": "c1",
+            "inUs": 0,
+            "startUs": 0,
+            "stream": "sound0"
+          }
+        ],
+        "id": "t1",
+        "kind": "audio"
+      }
+    ]
+  },
+  "shortsPreset": "Shorts",
+  "style": "Broadsheet",
+  "zooms": []
+}

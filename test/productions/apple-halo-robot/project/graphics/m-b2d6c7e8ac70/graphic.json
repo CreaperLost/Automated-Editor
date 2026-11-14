@@ -1,0 +1,12 @@
+{
+  "name": "Number count-up",
+  "template": "count-up",
+  "variables": {
+    "cue": 2.8,
+    "detail": "360 real tries, in Apple's own tests",
+    "label": "Single-skill success",
+    "number": "91",
+    "prefix": "",
+    "suffix": "%"
+  }
+}

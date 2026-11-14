@@ -565,14 +565,31 @@ pub fn resolve_public(raw: &str) -> Result<(url::Url, Vec<std::net::SocketAddr>)
     let port = url.port_or_known_default().unwrap_or(443);
     // An IPv6 literal comes bracketed in the URL.
     let bare = host.trim_start_matches('[').trim_end_matches(']');
-    let addresses: Vec<_> = (bare, port)
-        .to_socket_addrs()
-        .map_err(|_| format!("cannot resolve {host}"))?
-        .collect();
+    let addresses: Vec<_> = match (bare, port).to_socket_addrs() {
+        Ok(found) => found.collect(),
+        // Behind a proxy with no DNS of its own (a cloud VM, some offices) the proxy looks the
+        // name up, and it is what keeps the request off the local network. An address
+        // written into the URL is still checked.
+        Err(_) if bare.parse::<std::net::IpAddr>().is_err() && proxy_set(url.scheme()) => {
+            return Ok((url, Vec::new()))
+        }
+        Err(_) => return Err(format!("cannot resolve {host}")),
+    };
     if addresses.is_empty() || addresses.iter().any(|a| !is_public(a.ip())) {
         return Err(format!("{host} is not on the public internet"));
     }
     Ok((url, addresses))
+}
+
+/// A proxy for `scheme` is set in the environment (reqwest uses the same variables).
+fn proxy_set(scheme: &str) -> bool {
+    let names: &[&str] = match scheme {
+        "https" => &["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"],
+        _ => &["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"],
+    };
+    names
+        .iter()
+        .any(|name| std::env::var(name).is_ok_and(|v| !v.trim().is_empty()))
 }
 
 /// A fetched page's text, or why it couldn't be read.
@@ -633,7 +650,9 @@ impl PageFetch for WebPages {
                 Err(e) => return Page::Unreadable(e),
             };
             let host = checked.host_str().unwrap_or_default().to_string();
-            let client = match Self::client(Some((&host, &addresses))) {
+            // No addresses: the proxy looks the host up (see `resolve_public`).
+            let pinned = (!addresses.is_empty()).then_some((host.as_str(), addresses.as_slice()));
+            let client = match Self::client(pinned) {
                 Ok(client) => client,
                 Err(e) => return Page::Unreadable(e),
             };

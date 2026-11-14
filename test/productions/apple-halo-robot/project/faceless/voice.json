@@ -1,0 +1,46 @@
+{
+  "model": "elevenlabs/eleven-v4-turbo",
+  "voice": "will",
+  "speed": 1.2,
+  "narration": "voice/narration-6b65a1b97c6699af6b21.wav",
+  "durationUs": 54394188,
+  "scenes": [
+    {
+      "startUs": 250000,
+      "endUs": 7928583
+    },
+    {
+      "startUs": 8378583,
+      "endUs": 16854333
+    },
+    {
+      "startUs": 17304333,
+      "endUs": 23705208
+    },
+    {
+      "startUs": 24155208,
+      "endUs": 30829646
+    },
+    {
+      "startUs": 31279646,
+      "endUs": 36488917
+    },
+    {
+      "startUs": 36938917,
+      "endUs": 48687875
+    },
+    {
+      "startUs": 49137875,
+      "endUs": 53944188
+    }
+  ],
+  "generated": 0,
+  "costUsd": 0.0,
+  "assetId": "m-848a7d6514a3",
+  "sound": "m-848a7d6514a3.sound0",
+  "heardWords": 167,
+  "issues": [],
+  "accepted": false,
+  "inputs": "0aa190fd5bb24e8fc06c67df",
+  "at": "2026-11-09T15:59:31.227536037+00:00"
+}

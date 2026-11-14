@@ -13,6 +13,10 @@ fn main() {
     if args.first().map(String::as_str) == Some("do") {
         std::process::exit(aeroedits_lib::mcp::cli::run(&args[1..]));
     }
+    // `aeroedits serve`: the agent server with no window, for cloud sessions and CI.
+    if args.first().map(String::as_str) == Some("serve") {
+        std::process::exit(aeroedits_lib::mcp::headless::run(&args[1..]));
+    }
     // `aeroedits render <project> --out x.mp4`: export a saved project with no app running.
     if args.first().map(String::as_str) == Some("render") {
         std::process::exit(aeroedits_lib::render_cli::run(&args[1..]));

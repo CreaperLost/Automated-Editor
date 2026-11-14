@@ -3,3 +3,5 @@
 # Test media is binary.
 *.mp4 binary
 *.wav binary
+# Saved faceless productions: byte for byte, so their hashes and history match.
+test/productions/** -text

@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 pub const DIR: &str = "faceless";
 const PRODUCTION: &str = "production.json";
 const MADE: &str = "made.json";
-const MAX_TOPIC_CHARS: usize = 200;
+pub const MAX_TOPIC_CHARS: usize = 200;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

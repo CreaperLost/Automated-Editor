@@ -16,6 +16,7 @@ mod faceless;
 pub mod first_steps;
 pub(crate) mod frames;
 pub(crate) mod graphic_checks;
+pub mod headless;
 pub mod ipc;
 mod layouts;
 mod library;

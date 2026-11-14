@@ -1,0 +1,12 @@
+{
+  "name": "Quote from a source",
+  "template": "quote",
+  "variables": {
+    "cue": 4.18,
+    "highlight": "at least an hour of human time",
+    "label": "Apple's paper",
+    "note": "Teleoperation",
+    "quote": "an hour of data costs at least an hour of human time.",
+    "source": "Source: Apple's paper"
+  }
+}
