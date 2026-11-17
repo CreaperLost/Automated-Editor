@@ -13,6 +13,7 @@ pub mod discover;
 pub mod evidence;
 pub mod ideas;
 pub mod profile;
+pub mod release;
 pub mod script;
 pub mod stories;
 pub mod treg;
