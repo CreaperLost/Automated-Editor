@@ -345,6 +345,15 @@ fn faceless_join(ids: Vec<u64>, to: u64) -> Result<(), String> {
     commands::faceless::faceless_join_impl(&ids, to)
 }
 
+/// The open production's script with its check, cited facts and review, or nothing yet.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn faceless_script_get(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<commands::faceless::ScriptView>, String> {
+    commands::faceless::faceless_script_get_impl(&state)
+}
+
 /// The open production's research, or nothing yet.
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
@@ -3702,6 +3711,7 @@ pub fn run() {
             faceless_voice_accept,
             faceless_visuals,
             faceless_visuals_get,
+            faceless_script_get,
             publish_accounts,
             publish_set_key,
             publish_set_channel,

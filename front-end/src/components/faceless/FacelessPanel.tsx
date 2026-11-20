@@ -8,6 +8,7 @@ import { StageRail } from "./StageRail";
 import { ResearchView } from "./ResearchView";
 import { VoiceView } from "./VoiceView";
 import { VisualsView } from "./VisualsView";
+import { ScriptView } from "./ScriptView";
 
 /** What each stage does, who does it, and the roadmap item that builds it. */
 const STAGE_TEXT: Record<FacelessStageId, { what: string; who: string; item: string }> = {
@@ -102,6 +103,7 @@ export const FacelessPanel: React.FC = () => {
                 <Bot className="w-3 h-3" aria-hidden /> {text.who}
               </p>
               {stage.id === "research" && <ResearchView refreshKey={`${revision}-${production.stages[0].state}-${tick}`} />}
+              {stage.id === "script" && <ScriptView refreshKey={`${revision}-${stage.state}-${production.stages[2].state}-${tick}`} />}
               {stage.id === "visuals" && (
                 <VisualsView
                   refreshKey={`${revision}-${stage.state}-${tick}`}
