@@ -5,8 +5,8 @@ The working tree was clean, including untracked files, before this documentation
 That pass made no application fixes. This is the canonical detailed issue report;
 [Roadmap](ROADMAP.md) owns feature work and scheduling, not a second bug list.
 
-**Two findings are open (GAP-039, GAP-040)**, both found making the first full faceless short
-in a cloud session on 9 Nov. GAP-001/014 are superseded; GAP-005/006 are closed after focused
+**No findings are open.** GAP-039 and GAP-040, found making the first full faceless short in a
+cloud session on 9 Nov, were fixed on 20 Nov. GAP-001/014 are superseded; GAP-005/006 are closed after focused
 checks; GAP-032 was decided (keep old graphics); every other finding was fixed on 8–9 Nov.
 Records stay in place for their anchors.
 
@@ -21,7 +21,9 @@ Performance work counts are not measured desktop latency. Test scope and fresh r
 ## Open findings
 
 <a id="gap-039"></a>
-### GAP-039 — P2: A template's example source tag stays on screen when the agent sets no `source`
+### GAP-039 — Fixed: A template's example source tag stays on screen when the agent sets no `source`
+
+**Fixed (20 Nov):** `faceless` `op: visuals` blocks on any graphic whose `source` is still its template's example (`Beat.example_source`), and says to set it or pass `""` for none. The template defaults stay, so gallery previews still show a tag. Tests: `an_example_source_tag_blocks`, and `visuals_close_their_gaps_and_record_the_stage` adds a quote with no `source`. The record below is the original finding.
 
 **Location:** `src-tauri/graphics/templates/quote/index.html` (default `"Source: Anthropic"`), and
 the `source` defaults of `bars` and `verdict`.
@@ -37,7 +39,9 @@ to avoid.
 have `op: visuals` flag any graphic whose `source` is still its template default.
 
 <a id="gap-040"></a>
-### GAP-040 — P3: Discover's GitHub sources fail in the cloud VM
+### GAP-040 — Fixed: Discover's GitHub sources fail in the cloud VM
+
+**Fixed (20 Nov):** the cloud proxy re-signs `github.com` and `api.github.com` with its own CA (OpenRouter it passes through), and reqwest trusted only its built-in roots: `invalid peer certificate: UnknownIssuer`. reqwest now also loads the system's roots (`rustls-tls-native-roots`, which also reads `SSL_CERT_FILE`), so the same request reaches GitHub and gets the answer `curl` gets. This also covers a company proxy on a user's PC. The record below is the original finding.
 
 **Evidence:** With the network open, `faceless` `op: discover` read every other source but
 `github_releases` and most of `github_viral` answered "could not connect" for `api.github.com`

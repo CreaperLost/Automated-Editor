@@ -42,6 +42,9 @@ pub struct Beat {
     /// The narration under it, its first words.
     #[serde(default)]
     pub said: String,
+    /// Its source tag is still the template's example, which credits someone else (GAP-039).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub example_source: bool,
 }
 
 /// `faceless/beats.json`: the visuals stage's file.
@@ -114,6 +117,14 @@ pub fn gather(document: &crate::project::revision::EditDocument, root: &Path) ->
                 .filter(|s| s.is_finite() && *s >= 0.0)
                 .map(|s| clip.start_us + (s * 1e6) as u64)
                 .filter(|&at| at < clip.end_us());
+            let example_source = declared.iter().find(|d| d.id == "source").is_some_and(|d| {
+                let shown = value("source");
+                shown.as_ref() == Some(&d.default)
+                    && shown
+                        .as_ref()
+                        .and_then(|v| v.as_str())
+                        .is_some_and(|s| !s.trim().is_empty())
+            });
             Some(Beat {
                 asset_id: asset.id.clone(),
                 clip_id: clip.id.clone(),
@@ -124,6 +135,7 @@ pub fn gather(document: &crate::project::revision::EditDocument, root: &Path) ->
                 cue_us,
                 words,
                 said: String::new(),
+                example_source,
             })
         })
         .collect();
@@ -222,6 +234,13 @@ pub fn judge(
         }
         last = at;
     }
+    for beat in beats.iter().filter(|b| b.example_source) {
+        errors.push(format!(
+            "\"{}\" at {} still shows its template's example source tag: set `source` to where this comes from, or \"\" for none.",
+            beat.name,
+            clock(beat.start_us)
+        ));
+    }
     for beat in beats {
         let shown = (beat.end_us - beat.start_us) as f64 / 1e6;
         let needed = beat.words as f64 / WORDS_PER_SECOND;
@@ -314,6 +333,15 @@ mod tests {
         let (_, notes) = judge(&beats, &words(&[0, 8, 30]), 44_000_000, Format::Short);
         assert!(!notes.join("\n").contains("for 22 s"), "{notes:?}");
         assert!(!notes.join("\n").contains("kinds"));
+    }
+
+    #[test]
+    fn an_example_source_tag_blocks() {
+        let mut beats = vec![beat("a", "quote", 0, 6)];
+        beats[0].example_source = true;
+        let (errors, _) = judge(&beats, &words(&[0]), 6_000_000, Format::Short);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("example source tag"), "{errors:?}");
     }
 
     #[test]
