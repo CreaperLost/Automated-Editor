@@ -10,6 +10,7 @@ import {
   PublishPackageView,
   PublishRelease,
   PublishUpload,
+  ThumbnailGenerated,
   FacelessCreated,
   FacelessDiscovered,
   FacelessDossier,
@@ -553,6 +554,9 @@ export const api = {
   /** The thumbnail from a frame of the edit as it is now (no export needed). */
   publishThumbnailEdit: (projectHandle: string, target: string, atUs: number) =>
     invokeTauri<PublishPackageView>("publish_thumbnail_edit", { projectHandle, target, atUs }),
+  /** A thumbnail drawn from `brief` in the project's style by an image model (paid, OpenRouter). */
+  publishThumbnailGenerate: (projectHandle: string, target: string, brief: string, model?: string) =>
+    invokeTauri<ThumbnailGenerated>("publish_thumbnail_generate", { projectHandle, target, brief, model: model ?? null }),
   /** Uploads a finished export to YouTube through Zernio. Never public without the user's click. */
   publishUpload: (projectHandle: string, target: string, file: string, release: PublishRelease) =>
     invokeTauri<PublishUpload>("publish_upload", { projectHandle, target, file, release }),

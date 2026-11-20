@@ -57,6 +57,10 @@ pub struct Style {
     /// What its graphics sound like.
     #[serde(skip_serializing_if = "StyleSound::is_empty")]
     pub sound: StyleSound,
+    /// How a generated thumbnail looks, in a few rules ("paper ground, one red word, at most
+    /// four words"). Its examples are the references marked `thumbnail` (PUB-1).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub thumbnail: Vec<String>,
 }
 
 impl StyleSound {
@@ -98,6 +102,9 @@ pub struct Reference {
     /// What it is and what the style takes from it.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub note: String,
+    /// A thumbnail in this style: shown to the image model when one is generated.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub thumbnail: bool,
 }
 
 /// The sounds a style's graphics make.
@@ -429,6 +436,7 @@ impl Default for Style {
             references: Vec::new(),
             breakdown: String::new(),
             sound: StyleSound::default(),
+            thumbnail: Vec::new(),
         }
     }
 }
@@ -568,6 +576,11 @@ fn broadsheet() -> Style {
                 .into(),
             cues: Vec::new(),
         },
+        thumbnail: lines(&[
+            "A front page: warm paper ground, ink-black serif headline, one word in vermilion.",
+            "At most four words, huge, filling the left half; one real subject (the product, the person, the object) on the right.",
+            "No gradients, glow, emoji, arrows or shocked faces; square edges, a thin ink rule at most.",
+        ]),
         ..Style::default()
     }
 }
@@ -1060,6 +1073,7 @@ mod tests {
         with_path.references = vec![Reference {
             file: r"C:\refs\a.png".into(),
             note: String::new(),
+            ..Default::default()
         }];
         assert!(with_path.validate_parts().is_ok() && with_path.validate().is_err());
     }

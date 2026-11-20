@@ -504,6 +504,7 @@ mod tests {
         first.style.references = vec![super::super::Reference {
             file: clip.display().to_string(),
             note: "the card reveal at 0:04".into(),
+            ..Default::default()
         }];
         let saved = save_in(&styles, &first).unwrap();
         assert_eq!(saved.references[0].file, "reference-1.mp4");
@@ -521,6 +522,7 @@ mod tests {
         text.style.references = vec![super::super::Reference {
             file: dir.path().join("notes.txt").display().to_string(),
             note: String::new(),
+            ..Default::default()
         }];
         std::fs::write(dir.path().join("notes.txt"), "x").unwrap();
         assert!(save_in(&styles, &text).unwrap_err().contains("reference-1"));
