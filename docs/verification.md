@@ -72,7 +72,9 @@ the test pattern, “HELLO” then “HELLO WORLD”, none after.
 9 Nov (CL-9), cloud VM: the graphics runtime installs on Linux once Chrome's zip is unpacked
 with `unzip`, and `graphics_gate_real` passes all 17 bundled templates plus the one-off in 313 s.
 Viewed the headline sheet: clean at 16:9 and 9:16 with long text; in the split part the source
-line touches the subtitle's second line (the gate passes it).
+line touches the subtitle's second line (the gate passes it). Fixed 20 Nov: in a split part the four Broadsheet
+templates put the source tag at the normal margin (the portrait lift clears platform buttons the
+split part doesn't have); the gate's sheets show it clear of the deck.
 
 ## Faceless and publish acceptance
 
