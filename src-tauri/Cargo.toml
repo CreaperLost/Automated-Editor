@@ -44,7 +44,7 @@ dunce = "1.0"
 jpeg-encoder = { version = "0.7", features = ["simd"] }
 tauri = { version = "2.0.0", optional = true , features = [] }
 rfd = { version = "0.15", optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "multipart", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "multipart", "json", "rustls-tls", "rustls-tls-native-roots"] }
 parakeet-rs = { version = "0.3.8", optional = true }
 # parakeet-rs 0.3.8 asks for ort ^2.0.0-rc.13, which also matches rc.14, and rc.14 changed
 # Session::builder. Cargo.lock is not committed, so pin ort here until parakeet-rs catches up.
