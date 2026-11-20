@@ -210,6 +210,10 @@
       .tag:empty {
         display: none;
       }
+      /* In a short's split part the camera is below, not the platform's buttons. */
+      [data-mode="split"] .tag {
+        bottom: calc(var(--look-margin) * 0.55);
+      }
       .kicker {
         font-family: var(--brand-data-font, var(--brand-body-font, var(--look-font)));
         font-size: var(--look-label);
