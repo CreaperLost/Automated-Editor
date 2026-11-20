@@ -18,7 +18,7 @@ mock paid services.
 | ID | Task / canonical detail | Acceptance or dependency |
 |---|---|---|
 | <a id="cl-1"></a>CL-1 | Publish project binding: [GAP-011](gap.md#gap-011) | Done 8 Nov. Reject A→B stale package/thumbnail/upload actions; no writes to B. |
-| <a id="cl-2"></a>CL-2 | Package close/autosave/upload: [GAP-015](gap.md#gap-015), [GAP-016](gap.md#gap-016) | Done 8 Nov (save queue tests; mounted dialog tests still wait on CL-15). Latest draft persists to its owner; Upload awaits successful validation/save. |
+| <a id="cl-2"></a>CL-2 | Package close/autosave/upload: [GAP-015](gap.md#gap-015), [GAP-016](gap.md#gap-016) | Done 8 Nov (save queue tests; mounted dialog tests added 20 Nov in CL-15). Latest draft persists to its owner; Upload awaits successful validation/save. |
 | <a id="cl-3"></a>CL-3 | Narration identity/input binding: [GAP-004](gap.md#gap-004), [GAP-008](gap.md#gap-008) | Done 8 Nov, with GAP-037's one-job guard. Changed fake take imports new audio/transcript and clears acceptance; stale script cannot certify old narration. |
 | <a id="cl-4"></a>CL-4 | Linked-cut restoration: [GAP-017](gap.md#gap-017) | Done 8 Nov. Restore independently offset audio/video source clocks from either track without substituting source time. |
 | <a id="cl-5"></a>CL-5 | Remaining correctness follow-ups | Done 9 Nov: every remaining gap.md finding is fixed or decided (see each record). |
@@ -31,7 +31,7 @@ mock paid services.
 | <a id="cl-12"></a>CL-12 | Execute FCL-9 | Done 17 Nov, mocked: Upload of a faceless video (private or scheduled) refuses time words past their window ("today", "just announced" 12 h; "this week" 72 h after the script) and reads every cited page again (unreadable, quote gone, new correction notice). Retries and drafts skip it. `faceless/release.rs`. The approved private upload stays PUB-2. |
 | <a id="cl-13"></a>CL-13 | Execute FCL-3's Script panel | Done 20 Nov: the faceless tab's Script stage shows length against the format, the check, each scene with its cited facts (exact quotes, folded), the current review's findings and when this revision was accepted (`faceless_script_get`). Mounted test `scriptView.test.ts`; phone screenshot checked. |
 | <a id="cl-14"></a>CL-14 | Execute PUB-1 thumbnail generation | Done 20 Nov: Export page "Draw it" and `publish op: thumbnail` with `brief` draw one in the project's style (colours, `thumbnail` rules, references marked `thumbnail`) with `google/gemini-3.1-flash-image` on OpenRouter (about 7 cents), cut to 16:9 at 1280×720 JPEG, flagged when flat at 160 px. Mocked tests; one live call. |
-| <a id="cl-15"></a>CL-15 | Real React regression coverage: [GAP-024](gap.md#gap-024) | Started 9 Nov: `front-end/tests/dom.ts` (jsdom + real React renderer, StrictMode) with keyboard isolation tests. Next suites: package autosave with Upload/Close, project switching. |
+| <a id="cl-15"></a>CL-15 | Real React regression coverage: [GAP-024](gap.md#gap-024) | Done 20 Nov: `front-end/tests/dom.ts` (jsdom + real React renderer, StrictMode) with keyboard isolation tests, and `publishDialog.test.ts` with mocked IPC: Close right after typing saves to its project, Upload waits for the save and a failed save stops it, switching projects keeps each draft with its own project. |
 
 Other open findings are not deprioritized by their absence from a CL row. Use gap.md's issue
 index for export consistency, captions, outbound requests, stage integrity and UI races.
