@@ -887,6 +887,95 @@ pub fn faceless_visuals_get_impl(
     Ok(faceless::visuals::load(&production_root(state)?))
 }
 
+/// One fact a scene cites, with the page words behind it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CitedFact {
+    pub id: String,
+    pub statement: String,
+    pub quote: String,
+    pub url: String,
+    pub primary: bool,
+}
+
+/// The open production's script as the Script panel shows it (FCL-3).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptView {
+    pub script: faceless::script::Script,
+    /// The script checked against the research now: what blocks, words and estimated length.
+    pub check: faceless::script::Check,
+    /// The format's length, in seconds.
+    pub target_seconds: (f64, f64),
+    /// Every fact the script cites, in the order first cited.
+    pub facts: Vec<CitedFact>,
+    /// Ids cited that the research no longer has.
+    pub missing_facts: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review: Option<faceless::script::Review>,
+    /// The review read this very script (not an earlier one).
+    pub review_current: bool,
+    /// When this revision was accepted: the review stage done with no open blocker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted_at: Option<String>,
+}
+
+/// The open production's script with its check, cited facts and review; none before one is
+/// written.
+pub fn faceless_script_get_impl(state: &AppState) -> Result<Option<ScriptView>, String> {
+    use faceless::script;
+    let root = production_root(state)?;
+    let production = faceless::load(&root).ok_or("Not a faceless video")?;
+    let Some(written) = script::load_script(&root) else {
+        return Ok(None);
+    };
+    let dossier = faceless::evidence::load(&root)
+        .unwrap_or_else(|| faceless::evidence::Dossier::new(&production.topic));
+    let check = script::check(&written, &dossier, production.format, script::DEFAULT_SPEED);
+    let mut facts = Vec::new();
+    let mut missing_facts = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for id in written
+        .title_fact_ids
+        .iter()
+        .chain(written.scenes.iter().flat_map(|s| s.fact_ids.iter()))
+    {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        match dossier.facts.iter().find(|f| &f.id == id) {
+            Some(f) => facts.push(CitedFact {
+                id: f.id.clone(),
+                statement: f.input.statement.clone(),
+                quote: f.input.quote.clone(),
+                url: f.input.url.clone(),
+                primary: f.primary,
+            }),
+            None => missing_facts.push(id.clone()),
+        }
+    }
+    let review = script::load_review(&root);
+    let review_current = review
+        .as_ref()
+        .is_some_and(|r| r.script == script::script_hash(&written));
+    let review_done = faceless::stage_states(&root, &production)
+        .iter()
+        .any(|s| s.id == "review" && s.state == faceless::StageState::Done);
+    let accepted_at = review_done
+        .then(|| production.stages.get("review").map(|r| r.at.clone()))
+        .flatten();
+    Ok(Some(ScriptView {
+        script: written,
+        check,
+        target_seconds: script::seconds(production.format),
+        facts,
+        missing_facts,
+        review,
+        review_current,
+        accepted_at,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1071,6 +1160,85 @@ mod tests {
         let accepted = faceless_voice_accept_impl(state, Some("voice/narration-a.wav")).unwrap();
         assert!(accepted.done && accepted.voice.accepted);
         assert_eq!(voice_state(), faceless::StageState::Done);
+    }
+
+    /// The Script panel's view: cited facts in order, a missing one named, and the revision
+    /// accepted only once a review of this very script has no open blocker.
+    #[test]
+    fn the_script_view_shows_cited_facts_and_the_accepted_revision() {
+        use faceless::script::{Finding, Scene, Script};
+        let dir = tempfile::tempdir().unwrap();
+        let root = faceless::create(dir.path(), "Robot", Format::Short, &[]).unwrap();
+        let host = crate::mcp::tests_support::BareHost::default();
+        let state = &host.state;
+        super::super::open_project_impl(state, root.to_string_lossy().into()).unwrap();
+        assert!(faceless_script_get_impl(state).unwrap().is_none());
+        let mut dossier = faceless::evidence::Dossier::new("Robot");
+        dossier.facts.push(faceless::evidence::Fact {
+            id: "f1".into(),
+            input: faceless::evidence::FactInput {
+                statement: "It walks at 4 km per hour".into(),
+                quote: "the robot walks at 4 km per hour".into(),
+                url: "https://example.com/a".into(),
+                kind: None,
+                scope: None,
+                uncertainty: None,
+                counterpoint: None,
+                number_context: None,
+            },
+            domain: "example.com".into(),
+            primary: true,
+            source_date: None,
+        });
+        crate::files::save_json(&faceless::evidence::dossier_path(&root), &dossier).unwrap();
+        faceless::record_stage(&root, "research").unwrap();
+        let script = Script {
+            title: "A robot that walks".into(),
+            scenes: vec![
+                Scene {
+                    narration: "It walks at 4 km per hour.".into(),
+                    fact_ids: vec!["f1".into()],
+                    ..Default::default()
+                },
+                Scene {
+                    narration: "Nobody has tested it outside.".into(),
+                    fact_ids: vec!["f1".into(), "f9".into()],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        crate::files::save_json(&faceless::script::script_path(&root), &script).unwrap();
+        faceless::record_stage(&root, "script").unwrap();
+        let view = faceless_script_get_impl(state).unwrap().unwrap();
+        assert_eq!(view.facts.len(), 1);
+        assert_eq!(view.facts[0].id, "f1");
+        assert_eq!(view.missing_facts, ["f9"]);
+        assert!(view.check.words > 0 && view.check.estimated_seconds > 0.0);
+        assert_eq!(view.target_seconds, (30.0, 58.0));
+        assert!(view.review.is_none() && !view.review_current && view.accepted_at.is_none());
+
+        let finding = |severity: &str| Finding {
+            review: "fairness".into(),
+            claim: "Nobody has tested it outside.".into(),
+            severity: severity.into(),
+            ..Default::default()
+        };
+        faceless::script::save_review(&root, vec![finding("blocker")], serde_json::Value::Null)
+            .unwrap();
+        let view = faceless_script_get_impl(state).unwrap().unwrap();
+        assert!(view.review_current, "the review read this script");
+        assert!(view.accepted_at.is_none(), "an open blocker holds it");
+        faceless::script::save_review(&root, vec![finding("minor")], serde_json::Value::Null)
+            .unwrap();
+        let view = faceless_script_get_impl(state).unwrap().unwrap();
+        assert!(view.accepted_at.is_some());
+        // A changed script is no longer the reviewed one.
+        let mut changed = script;
+        changed.scenes[1].narration = "It has not been tested outside.".into();
+        crate::files::save_json(&faceless::script::script_path(&root), &changed).unwrap();
+        let view = faceless_script_get_impl(state).unwrap().unwrap();
+        assert!(!view.review_current && view.accepted_at.is_none());
     }
 
     /// One short sentence through OpenRouter with the channel's voice, on the real key. Run by

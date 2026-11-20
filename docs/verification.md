@@ -81,7 +81,7 @@ Implementation present is not production acceptance. No live calls were made in 
 | Work | Evidence already recorded | Still required |
 |---|---|---|
 | FCL-0/1/2 | Prior dev-app production creation at 9:16; 7 Nov discovery 712 stories/25 s, 8/8 funnels; one real quote accepted and a planted number refused | Rebuild a complete research dossier on a new story; labelled grouping calibration. GAP-013/026 limit address/quantity assurances. |
-| FCL-3 | Script/review validation and MCP exist; no Script panel | Full new-story script/review by an agent; UI is CL-13. Hash integrity remains GAP-027. |
+| FCL-3 | Script/review validation and MCP exist; Script panel (CL-13, 20 Nov) with a backend test and a mounted test | Full new-story script/review by an agent, and the panel on a real production in the app. |
 | FCL-4 | One historical speech call checked model/voice, plus unit/fixture tests | After GAP-004/008/027, voice a real script, regenerate a changed take, check new asset/transcript/cues and have George listen. No current paid pricing guarantee. |
 | FCL-5 | Earlier notes report four Broadsheet templates passing 16:9, 9:16 and split gate; 509-image catalogue built in | Finish dedicated parts/browser and inspect a phone-size contact sheet. Full current Linux gate remains CL-9. Assets and licences remain in their catalogue/LICENSES notes. |
 | FCL-6 | Word/action cues and visuals gap-fill tests | One complete agent-built film: verify coverage, pacing, word starts, reading holds, variety and render frames. Phone clearance limits are GAP-030. |

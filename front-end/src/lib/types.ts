@@ -1639,6 +1639,51 @@ export interface FacelessDossier {
   grade: "ready" | "thin" | "empty";
 }
 
+/** One scene of a faceless script. */
+export interface FacelessScene {
+  narration: string;
+  factIds: string[];
+  analysis: boolean;
+  onScreen: string;
+  source: string;
+}
+
+export interface FacelessFinding {
+  /** attention, coldReader or fairness. */
+  review: string;
+  claim: string;
+  problem: string;
+  /** blocker or minor. */
+  severity: string;
+  why: string;
+  change: string;
+  resolved: boolean;
+}
+
+/** The open production's script as the Script panel shows it (FCL-3). */
+export interface FacelessScriptView {
+  script: {
+    title: string;
+    titleOptions: string[];
+    titleFactIds: string[];
+    hooks: string[];
+    spine: string;
+    firstFrame: string;
+    scenes: FacelessScene[];
+    leftOut: string[];
+  };
+  check: { errors: string[]; notes: string[]; words: number; estimatedSeconds: number };
+  /** The format's length in seconds: [shortest, longest]. */
+  targetSeconds: [number, number];
+  facts: { id: string; statement: string; quote: string; url: string; primary: boolean }[];
+  missingFacts: string[];
+  review?: { script: string; findings: FacelessFinding[] };
+  /** The review read this very script. */
+  reviewCurrent: boolean;
+  /** When this revision was accepted (reviewed with no open blocker). */
+  acceptedAt?: string;
+}
+
 /** A production's narration (`faceless/voice.json`). */
 export interface FacelessVoice {
   model: string;

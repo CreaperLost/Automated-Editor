@@ -13,6 +13,7 @@ import {
   FacelessCreated,
   FacelessDiscovered,
   FacelessDossier,
+  FacelessScriptView,
   FacelessVoice,
   FacelessVoiceResult,
   FacelessVisuals,
@@ -561,6 +562,8 @@ export const api = {
   openUrl: (url: string) => invokeTauri<void>("open_url", { url }),
   /** The open production's research, or null before any. */
   facelessDossier: () => invokeTauri<FacelessDossier | null>("faceless_dossier"),
+  /** The open production's script with its check, cited facts and review, or null before one. */
+  facelessScriptGet: () => invokeTauri<FacelessScriptView | null>("faceless_script_get"),
   /** Voices the reviewed script (OpenRouter), puts it on the timeline and transcribes it. */
   facelessVoice: (redo?: number[]) => invokeTauri<FacelessVoiceResult>("faceless_voice", { redo: redo ?? null }),
   facelessVoiceGet: () => invokeTauri<FacelessVoice | null>("faceless_voice_get"),
