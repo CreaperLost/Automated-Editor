@@ -51,13 +51,18 @@ tools are behind `more`: `faceless` (stories, productions), `faceless_research`,
    `onScreen` (a source tag only where a claim, number or quote is on screen). Then `faceless`
    `op: visuals` with `fill: true`: every graphic meets the next, and it says what blocks or
    is worth a look. Fix those, look at it with `storyboard`, and fix what reads badly.
-7. **Package.** `publish` `op: set` the title (the script's, the subject named the way people
+7. **Sound**, as the choices `music` and `opening` say. Music: `library` `kind: music`
+   `op: list` with its `query`, pick a bed that suits the story, then `op: use` with
+   `atUs: 0` (it fills the video; the preset keeps it well under the narration). Opening:
+   `kind: sound` `op: use` its `sound` at `atUs: 0`, before the first word. Name both to the
+   user to listen to.
+8. **Package.** `publish` `op: set` the title (the script's, the subject named the way people
    search it: `publish` `op: keywords`), a description (what happens, why it matters, what is
    still unknown, the sources as links from the facts, the chapters when there are three or
    more), tags (names and spelling variants) and `aiDisclosure: true`. A short needs no thumbnail; set one with `op: thumbnail` and
    `atUs` only if the user asks. The user sees and changes it on the
    Export page.
-8. **Export and publish.** Export when the user says go. Upload only when the user says so,
+9. **Export and publish.** Export when the user says go. Upload only when the user says so,
    with the release they name (private first).
 
 # Writing rules: every video

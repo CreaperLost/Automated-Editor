@@ -121,6 +121,24 @@ fn tutorial_choices() -> Map<String, Value> {
     .unwrap_or_default()
 }
 
+/// The choices a faceless video starts from: a calm bed under the narration and a short hit on
+/// the first frame (the narration leaves it [`crate::faceless::voice::LEAD_US`]).
+fn faceless_choices() -> Map<String, Value> {
+    object(serde_json::json!({
+        "music": { "apply": true, "query": "calm" },
+        "opening": { "apply": true, "sound": "hit-soft" },
+        "export": { "resolution": "1080p", "quality": "high" }
+    }))
+}
+
+/// A faceless video's sound: loudness-normalized, with music kept this far under the narration.
+fn faceless_audio() -> Value {
+    serde_json::json!({
+        "normalize": true,
+        "musicUnderSpeechDb": crate::music_library::DEFAULT_UNDER_SPEECH_DB
+    })
+}
+
 fn object(value: Value) -> Map<String, Value> {
     value.as_object().cloned().unwrap_or_default()
 }
@@ -189,11 +207,9 @@ pub fn builtin() -> Vec<Preset> {
                 checked research, a reviewed script, generated narration and graphics."
                 .into(),
             style: crate::style::BROADSHEET.into(),
-            values: object(serde_json::json!({ "audio": { "normalize": true } })),
+            values: object(serde_json::json!({ "audio": faceless_audio() })),
             short: Map::new(),
-            choices: object(serde_json::json!({
-                "export": { "resolution": "1080p", "quality": "high" }
-            })),
+            choices: faceless_choices(),
             method: include_str!("methods/faceless-long.md").replace("\r\n", "\n"),
             rules: String::new(),
             ..Preset::default()
@@ -207,12 +223,10 @@ pub fn builtin() -> Vec<Preset> {
             values: object(serde_json::json!({
                 "layout": { "aspectRatio": "9:16" },
                 "captions": { "enabled": true, "maxWords": 3 },
-                "audio": { "normalize": true }
+                "audio": faceless_audio()
             })),
             short: Map::new(),
-            choices: object(serde_json::json!({
-                "export": { "resolution": "1080p", "quality": "high" }
-            })),
+            choices: faceless_choices(),
             method: include_str!("methods/faceless-short.md").replace("\r\n", "\n"),
             rules: String::new(),
             ..Preset::default()

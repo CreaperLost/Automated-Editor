@@ -514,6 +514,10 @@ fn apply_post(upload: &mut Upload, post: &Value) {
     }
 }
 
+/// A check run just before a new post is sent (never for a retry of one already sent): an
+/// error stops the upload with nothing sent.
+pub type BeforeSend<'a> = &'a dyn Fn(&Package, &Release) -> Result<(), String>;
+
 /// Uploads `file` (a finished export) as `target` with its package. Refuses a title or
 /// description YouTube would reject before anything is sent. An earlier upload of the same file
 /// with the same title and channel is not posted again: its status is read instead.
@@ -527,6 +531,7 @@ pub fn upload(
     channel: &str,
     category: &str,
     now: DateTime<Utc>,
+    before_send: BeforeSend,
     progress: &dyn Fn(&str),
 ) -> Result<Upload, String> {
     check_target(target)?;
@@ -591,6 +596,7 @@ pub fn upload(
             return Err("Zernio has several posts with this title: remove the extra ones in the Zernio dashboard first".into());
         }
     }
+    before_send(&package, &release)?;
     progress("Uploading the video to Zernio");
     let video_url = client.upload_media(file)?;
     let thumb_url = match thumbnail_path(root, &package) {
@@ -790,6 +796,7 @@ mod tests {
             "ch1",
             "28",
             now,
+            &|_, _| Ok(()),
             &|_| {},
         )
         .unwrap_err();
@@ -806,6 +813,7 @@ mod tests {
             "ch1",
             "28",
             now,
+            &|_, _| Ok(()),
             &|_| {},
         )
         .unwrap();
@@ -819,6 +827,56 @@ mod tests {
             later.studio_link().as_deref(),
             Some("https://studio.youtube.com/video/abcdefghijk/edit")
         );
+    }
+
+    /// The check before sending stops a new post with nothing sent, and is never asked again
+    /// for a retry of a post already sent (FCL-9).
+    #[test]
+    fn the_check_before_sending_stops_a_new_post_but_not_a_retry() {
+        let (_dir, root, file) = project();
+        save_package(
+            &root,
+            "video",
+            Package {
+                title: "My video".into(),
+                description: "What it shows".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let fake = Fake::default();
+        let client = Client { http: &fake };
+        let asked = Mutex::new(0);
+        let send = |refuse: bool| {
+            upload(
+                &root,
+                &client,
+                "video",
+                &file,
+                Release::Private,
+                "ch1",
+                "28",
+                Utc::now(),
+                &|_, _| {
+                    *asked.lock() += 1;
+                    if refuse {
+                        Err("stale".into())
+                    } else {
+                        Ok(())
+                    }
+                },
+                &|_| {},
+            )
+        };
+        assert_eq!(send(true).unwrap_err(), "stale");
+        assert!(fake.calls.lock().is_empty(), "nothing was sent");
+        assert!(uploads(&root).is_empty());
+        send(false).unwrap();
+        assert_eq!(*fake.posts.lock(), 1);
+        // The same export again is a retry: its status is read, the check isn't asked.
+        send(true).unwrap();
+        assert_eq!(*asked.lock(), 2);
+        assert_eq!(*fake.posts.lock(), 1);
     }
 
     #[test]
@@ -869,6 +927,7 @@ mod tests {
             "ch",
             "28",
             Utc::now(),
+            &|_, _| Ok(()),
             &|_| {}
         )
         .unwrap_err()
@@ -1012,6 +1071,7 @@ mod tests {
                 "ch1",
                 "28",
                 now,
+                &|_, _| Ok(()),
                 &|_| {},
             )
         };

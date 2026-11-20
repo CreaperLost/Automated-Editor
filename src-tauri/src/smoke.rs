@@ -523,6 +523,143 @@ fn smoke_mouth_noise_is_muted_and_loudness_is_normalized() {
     );
 }
 
+/// How strong the `hz` tone is in `file` from `from` to `to` seconds (mono, Hann window), in
+/// dB of its amplitude: two tones' difference is how far one sits under the other.
+fn tone_db(file: &Path, from: f64, to: f64, hz: f64) -> f64 {
+    let (raw, _) = ffmpeg(&[
+        "-v",
+        "error",
+        "-i",
+        &file.to_string_lossy(),
+        "-ss",
+        &format!("{from:.3}"),
+        "-t",
+        &format!("{:.3}", to - from),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "48000",
+        "-f",
+        "f32le",
+        "-",
+    ]);
+    let samples: Vec<f64> = raw
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64)
+        .collect();
+    let n = samples.len() as f64;
+    let (mut re, mut im, mut window_sum) = (0.0, 0.0, 0.0);
+    for (i, sample) in samples.iter().enumerate() {
+        let window = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n).cos();
+        let phase = std::f64::consts::TAU * hz * i as f64 / 48_000.0;
+        re += sample * window * phase.cos();
+        im -= sample * window * phase.sin();
+        window_sum += window;
+    }
+    20.0 * (2.0 * (re * re + im * im).sqrt() / window_sum)
+        .max(1e-9)
+        .log10()
+}
+
+/// The faceless presets' sound (FCL-7): a music bed placed under narration (the 440 Hz tone of
+/// voice.wav, on the mic) exports at -14 LUFS with the bed (a 330 Hz tone) at least 15 dB under
+/// the speech, and still playing where nobody speaks.
+#[test]
+fn smoke_faceless_bed_sits_under_the_narration() {
+    use crate::music_library as library;
+    if let Some(reason) = missing_tools() {
+        eprintln!("SKIPPED smoke test: {reason}");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let recording = recording(dir.path());
+    let (state, opened, folder, _) = open(dir.path(), &recording);
+    let handle = opened.project_handle.clone();
+    let opened = crate::commands::preset::project_preset_set_impl(
+        &state,
+        handle.clone(),
+        opened.revision,
+        crate::preset::FACELESS_LONG.into(),
+        crate::commands::preset::PresetTarget::Video,
+    )
+    .unwrap();
+
+    // A 12 s bed (the library takes ten seconds or more) at about -21 dBFS.
+    let bed = dir.path().join("bed.wav");
+    ffmpeg(&[
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=330:duration=12:sample_rate=48000",
+        &bed.to_string_lossy(),
+    ]);
+    let library_dir = library::dir();
+    let track = library::add(
+        &library_dir,
+        &bed,
+        Some("Smoke bed".into()),
+        vec!["calm".into()],
+        crate::sequence::Licence {
+            kind: crate::sequence::LicenceKind::NoCredit,
+            source: None,
+        },
+    )
+    .unwrap();
+    let placed = crate::commands::music::project_music_place_impl(
+        &state,
+        handle,
+        opened.revision,
+        track.id.clone(),
+        0,
+        None,
+        None,
+    );
+    let placed = placed.unwrap();
+    assert_eq!(
+        placed.bed.under_speech_db, None,
+        "the preset already keeps music under the speech"
+    );
+    let under = state
+        .opened_project
+        .lock()
+        .as_ref()
+        .unwrap()
+        .document()
+        .audio
+        .music_under_speech_db;
+    assert_eq!(under, Some(library::DEFAULT_UNDER_SPEECH_DB));
+    drop(state);
+
+    // The project plays the library's file in place: it goes once the render is done.
+    let written = render(&folder, &output(dir.path(), "faceless-bed"), "320x180");
+    library::remove(&library_dir, &track.id).unwrap();
+    let lufs = loudness(&written);
+    assert!(
+        (lufs + 14.0).abs() <= 1.0,
+        "integrated loudness {lufs:.1} LUFS, wanted -14 ±1"
+    );
+    // Past the bed's 1 s fade-in, while the voice speaks; then in the voice's pause.
+    let speech = tone_db(&written, 1.2, 1.9, 440.0);
+    let music = tone_db(&written, 1.2, 1.9, 330.0);
+    let in_pause = tone_db(&written, 2.3, 3.2, 330.0);
+    assert!(
+        speech - music >= 15.0,
+        "bed {:.1} dB under the speech ({speech:.1} vs {music:.1} dB), wanted 15 or more",
+        speech - music
+    );
+    assert!(
+        in_pause > -50.0 && (in_pause - music).abs() <= 3.0,
+        "the bed plays on in the pause at the same level ({in_pause:.1} vs {music:.1} dB)"
+    );
+    eprintln!(
+        "smoke: faceless bed {:.1} dB under the narration, {in_pause:.1} dB in the pause; {lufs:.1} LUFS",
+        speech - music
+    );
+}
+
 /// A 9:16 project exports portrait (a landscape size asked for is turned) with its captions
 /// drawn from the transcript.
 #[test]

@@ -305,6 +305,7 @@ pub fn publish_upload_impl(
         &channel,
         settings.category_id.as_deref().unwrap_or("28"),
         chrono::Utc::now(),
+        &|package, release| release_check(&root, package, release),
         progress,
     )?;
     crate::faceless::record_upload(&root, &upload)?;
@@ -329,6 +330,46 @@ pub fn publish_upload_impl(
         );
     }
     Ok(upload)
+}
+
+/// A faceless video is checked again as it goes out (FCL-9): stale time words and changed
+/// sources stop it. A draft reaches nobody, so it isn't checked; a scheduled one is checked
+/// against its release time, its sources as they are now.
+fn release_check(root: &Path, package: &Package, release: &Release) -> Result<(), String> {
+    let release_at = match release {
+        Release::Draft => return Ok(()),
+        Release::Private => chrono::Utc::now(),
+        Release::Scheduled { at } => *at,
+    };
+    if crate::faceless::load(root).is_none() {
+        return Ok(());
+    }
+    let own = crate::faceless::evidence::WebPages::new()?;
+    let problems = match crate::faceless::treg::Web::from_keychain() {
+        Some(treg) => crate::faceless::release::check(
+            root,
+            &package.title,
+            &package.description,
+            release_at,
+            &crate::faceless::evidence::WithTreg { own, treg },
+        ),
+        None => crate::faceless::release::check(
+            root,
+            &package.title,
+            &package.description,
+            release_at,
+            &own,
+        ),
+    };
+    if problems.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "Not uploaded: this faceless video no longer holds at its release.\n- {}\nChange \
+         the wording, or fetch a changed source again and take out what it no longer backs \
+         (then voice and export again if the script changed).",
+        problems.join("\n- ")
+    ))
 }
 
 pub fn publish_refresh_impl(
