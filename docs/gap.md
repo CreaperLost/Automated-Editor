@@ -454,7 +454,7 @@ The error now says to give a short `topic` with the `idea`.
 <a id="gap-024"></a>
 ### GAP-024 — Fixed: Frontend checks do not exercise real React lifecycle, focus, or browser interaction
 
-**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** `front-end/tests/dom.ts` mounts the real React DOM renderer on a jsdom page, in StrictMode, with keys that bubble to the window. The first suite covers dialog focus and keys and choice-group arrows. More suites (package autosave with Upload, project switching) can now be added on it. Runs in `npm run test:cleanup` and so in CI. The record below is the original finding.
+**Fixed (9 Nov, branch `claude/project-thread-sc2z5d`):** `front-end/tests/dom.ts` mounts the real React DOM renderer on a jsdom page, in StrictMode, with keys that bubble to the window. The first suite covers dialog focus and keys and choice-group arrows. **20 Nov:** `front-end/tests/publishDialog.test.ts` mounts the publish dialog with mocked IPC and covers Close right after typing, Upload waiting for the save (and a failed save stopping it), and switching projects. Removing the unmount save makes two of them fail. Runs in `npm run test:cleanup` and so in CI. The record below is the original finding.
 
 **Category:** Test-quality improvement; this is a coverage limitation, not a claim that the existing unit tests are invalid.
 
