@@ -551,6 +551,28 @@ async fn publish_thumbnail_edit(
     .await
 }
 
+/// A thumbnail drawn from a brief in the project's style by an image model (paid, OpenRouter).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn publish_thumbnail_generate(
+    app: tauri::AppHandle,
+    project_handle: String,
+    target: String,
+    brief: String,
+    model: Option<String>,
+) -> Result<commands::publish::ThumbnailGenerated, String> {
+    blocking(move || {
+        commands::publish::publish_thumbnail_generate_impl(
+            &app.state::<AppState>(),
+            &project_handle,
+            target,
+            brief,
+            model,
+        )
+    })
+    .await
+}
+
 /// Uploads a finished export to YouTube through Zernio (takes as long as the upload).
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
@@ -3722,6 +3744,7 @@ pub fn run() {
             publish_thumbnail_file,
             publish_thumbnail_frame,
             publish_thumbnail_edit,
+            publish_thumbnail_generate,
             publish_upload,
             publish_refresh,
             open_url,

@@ -958,10 +958,13 @@ export interface Style {
   /** Rules about the look ("never an opaque card over the face"). */
   rules?: string[];
   /** Images and clips it was made from: files in its folder, or full paths to copy in. */
-  references?: { file: string; note?: string }[];
+  /** `thumbnail`: an example thumbnail, shown to the image model when one is generated. */
+  references?: { file: string; note?: string; thumbnail?: boolean }[];
   /** What was taken from the references and what was left out. */
   breakdown?: string;
   sound?: { policy?: string; cues?: { role: string; sound: string }[] };
+  /** How a generated thumbnail looks, in a few rules (PUB-1). */
+  thumbnail?: string[];
 }
 
 export interface StyleGraphicKind {
@@ -1388,6 +1391,15 @@ export interface PublishUpload {
   youtubeId?: string;
   visibility?: string;
   error?: string;
+}
+
+/** A thumbnail drawn by an image model and kept as the package's (PUB-1). */
+export interface ThumbnailGenerated {
+  view: PublishPackageView;
+  model: string;
+  costUsd?: number;
+  /** What to look at before using it. */
+  notes: string[];
 }
 
 export interface PublishPackageView {

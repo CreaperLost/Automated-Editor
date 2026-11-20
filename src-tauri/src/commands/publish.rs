@@ -246,6 +246,68 @@ pub fn publish_thumbnail_file_impl(
     save_thumbnail(state, project_handle, &target, &bytes)
 }
 
+/// A thumbnail drawn by an image model, kept as the package's.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailGenerated {
+    pub view: PackageView,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    /// What to look at before using it.
+    pub notes: Vec<String>,
+}
+
+/// The thumbnail drawn from `brief` in the project's style (its colours, thumbnail rules and
+/// thumbnail references) by an image model on the user's OpenRouter key (PUB-1). Paid: about
+/// 7 cents with the default model.
+pub fn publish_thumbnail_generate_impl(
+    state: &AppState,
+    project_handle: &str,
+    target: String,
+    brief: String,
+    model: Option<String>,
+) -> Result<ThumbnailGenerated, String> {
+    let draw = publish::generate::OpenRouter::from_keychain().ok_or(
+        "Generating a thumbnail needs an OpenRouter key: set it in transcription settings",
+    )?;
+    thumbnail_generate_with(state, project_handle, target, &brief, model, &draw)
+}
+
+fn thumbnail_generate_with(
+    state: &AppState,
+    project_handle: &str,
+    target: String,
+    brief: &str,
+    model: Option<String>,
+    draw: &dyn publish::generate::Draw,
+) -> Result<ThumbnailGenerated, String> {
+    // The style is read while the project is open; the drawing (seconds) runs without locks.
+    let style = {
+        let guard = state.opened_project.lock();
+        let reader = guard
+            .as_ref()
+            .ok_or(crate::mcp::tools::NO_PROJECT_MESSAGE)?;
+        if reader.summary.project_handle != project_handle {
+            return Err(OTHER_PROJECT.into());
+        }
+        crate::style::of(reader.document())
+    };
+    let model = model
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| publish::generate::DEFAULT_MODEL.into());
+    let folder = crate::style::store::folder_of(&style);
+    let made = publish::generate::generate(brief, &style, folder.as_deref(), &model, draw)?;
+    // Kept only if the project is still the one it was drawn for (GAP-011).
+    let view = save_thumbnail(state, project_handle, &target, &made.bytes)?;
+    Ok(ThumbnailGenerated {
+        view,
+        model,
+        cost_usd: made.cost_usd,
+        notes: made.notes,
+    })
+}
+
 /// The thumbnail from a frame of the exported video.
 pub fn publish_thumbnail_frame_impl(
     state: &AppState,
@@ -426,5 +488,82 @@ mod tests {
         assert_eq!(saved.package.title, "Meant for A");
         assert!(publish::packages(&a).is_empty());
         assert_eq!(publish::package(&b, "video").title, "Meant for A");
+    }
+
+    /// A drawn picture answering for the image model.
+    struct Drawer;
+
+    impl publish::generate::Draw for Drawer {
+        fn draw(
+            &self,
+            _model: &str,
+            prompt: &str,
+            _references: &[(String, Vec<u8>)],
+        ) -> Result<publish::generate::Drawn, String> {
+            assert!(
+                prompt.contains("vermilion"),
+                "a faceless project's style is Broadsheet"
+            );
+            let img = image::RgbImage::from_fn(1376, 768, |x, _| {
+                image::Rgb(if x < 600 {
+                    [28, 26, 22]
+                } else {
+                    [240, 233, 218]
+                })
+            });
+            let mut bytes = Vec::new();
+            image::DynamicImage::ImageRgb8(img)
+                .write_to(
+                    &mut std::io::Cursor::new(&mut bytes),
+                    image::ImageFormat::Png,
+                )
+                .unwrap();
+            Ok(publish::generate::Drawn {
+                bytes,
+                cost_usd: Some(0.07),
+            })
+        }
+    }
+
+    /// PUB-1: a generated thumbnail is drawn in the project's style and kept as the package's,
+    /// 1280×720; a call for another project is refused before anything is drawn.
+    #[test]
+    fn a_generated_thumbnail_becomes_the_package_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = faceless::create(dir.path(), "Robot", Format::Long, &[]).unwrap();
+        let host = crate::mcp::tests_support::BareHost::default();
+        let state = &host.state;
+        let opened = super::super::open_project_impl(state, root.to_string_lossy().into()).unwrap();
+        super::super::preset::project_preset_set_impl(
+            state,
+            opened.project_handle.clone(),
+            opened.revision,
+            crate::preset::FACELESS_LONG.into(),
+            super::super::preset::PresetTarget::Video,
+        )
+        .unwrap();
+        let handle = open_handle(state).unwrap();
+        let made = thumbnail_generate_with(
+            state,
+            &handle,
+            "video".into(),
+            "A robot mid-stride; WALKS FROM VIDEO",
+            None,
+            &Drawer,
+        )
+        .unwrap();
+        assert_eq!(made.view.thumbnail_size, Some((1280, 720)));
+        assert_eq!(made.model, publish::generate::DEFAULT_MODEL);
+        assert_eq!(made.cost_usd, Some(0.07));
+        assert!(publish::thumbnail_path(&root, &publish::package(&root, "video")).is_some());
+        let stale = thumbnail_generate_with(
+            state,
+            "other",
+            "video".into(),
+            "A robot and two words",
+            None,
+            &Drawer,
+        );
+        assert_eq!(stale.err().as_deref(), Some(OTHER_PROJECT));
     }
 }

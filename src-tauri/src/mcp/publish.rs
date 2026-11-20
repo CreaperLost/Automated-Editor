@@ -12,7 +12,8 @@ pub static TOOLS: [ToolDef; 1] = [ToolDef {
     description: "Any video's YouTube package (the user sees it on the Export page) and upload. \
         `target`: `video` (default) or a short's or clip's id. `op`: `read` (default); `set` \
         with `package`; `thumbnail` with `atUs` (a frame of the edit; with `file`, of that \
-        export) or `image`; `keywords` with `seed` (the subject): what people search around \
+        export), `image`, or `brief` (drawn in the project's style by an image model, about 7 \
+        cents on OpenRouter); `keywords` with `seed` (the subject): what people search around \
         it, monthly volume and trend (Treg, under a cent), for the title's wording and tags; \
         `upload` with `file` (a finished export) and `release`, only when the user says so, \
         with the release they named; `uploads` reads their status again.",
@@ -54,6 +55,9 @@ pub struct PublishArgs {
     /// thumbnail: an image file instead (JPG or PNG, 1280×720 or larger).
     #[serde(default)]
     pub image: Option<String>,
+    /// thumbnail: what to draw instead: the subject and its few words, exactly as spelled.
+    #[serde(default)]
+    pub brief: Option<String>,
     /// upload: private, scheduled (with `at`) or draft.
     #[serde(default)]
     pub release: Option<Release>,
@@ -114,6 +118,26 @@ fn publish(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             let package = args.package.ok_or("Give `package`")?;
             let view = pc::publish_package_save_impl(ctx.state, handle, target, package)?;
             text(format!("Saved. {}", describe(&view)))
+        }
+        PublishOp::Thumbnail if args.brief.is_some() => {
+            let made = pc::publish_thumbnail_generate_impl(
+                ctx.state,
+                handle,
+                target,
+                args.brief.unwrap_or_default(),
+                None,
+            )?;
+            let mut out = format!(
+                "Thumbnail drawn by {}{}. {}",
+                made.model,
+                made.cost_usd
+                    .map_or(String::new(), |c| format!(" (${c:.3})")),
+                describe(&made.view)
+            );
+            for note in &made.notes {
+                out.push_str(&format!("\nLook: {note}"));
+            }
+            text(out)
         }
         PublishOp::Thumbnail => {
             let view = match (args.image, args.file) {

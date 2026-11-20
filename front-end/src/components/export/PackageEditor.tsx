@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Film, ImagePlus, Loader2, Search } from "lucide-react";
+import { Film, ImagePlus, Loader2, Search, Sparkles } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { packageSaver } from "../../lib/packageSaver";
 import type { PublishPackage, PublishPackageView, TregKeyword } from "../../lib/types";
@@ -45,6 +45,8 @@ export const PackageEditor: React.FC<{
   const [seed, setSeed] = useState("");
   const [keywords, setKeywords] = useState<TregKeyword[] | null>(null);
   const [frameAt, setFrameAt] = useState(1);
+  const [brief, setBrief] = useState("");
+  const [drawn, setDrawn] = useState<string[] | null>(null);
   const editing = useRef(false);
 
   const show = (v: PublishPackageView, fields = true) => {
@@ -260,6 +262,39 @@ export const PackageEditor: React.FC<{
         >
           Choose an image…
         </Button>
+        <div className="space-y-1.5">
+          <textarea
+            value={brief}
+            onChange={(e) => setBrief(e.target.value)}
+            rows={2}
+            disabled={locked}
+            placeholder="Or describe one to draw: the subject and its few words, e.g. a small robot mid-stride, the words WALKS FROM VIDEO"
+            className={cn(field, "w-full py-1.5 resize-y")}
+            aria-label="Thumbnail to draw"
+          />
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={busy === "draw" ? Loader2 : Sparkles}
+            disabled={!!busy || locked || brief.trim().length < 10}
+            title="Drawn in the project's style by an image model on your OpenRouter key"
+            onClick={() =>
+              void run("draw", async () => {
+                const made = await api.publishThumbnailGenerate(projectHandle, target, brief.trim());
+                show(made.view, false);
+                const cost = made.costUsd != null ? `$${made.costUsd.toFixed(2)}` : "cost not reported";
+                setDrawn([`Drawn by ${made.model} (${cost}).`, ...made.notes]);
+              })
+            }
+          >
+            Draw it (about 7 cents)
+          </Button>
+          {drawn?.map((line) => (
+            <p key={line} className="text-meta text-studio-500">
+              {line}
+            </p>
+          ))}
+        </div>
         {file ? (
           <div className="flex items-center gap-2">
             <input

@@ -30,7 +30,7 @@ mock paid services.
 | <a id="cl-11"></a>CL-11 | Execute FCL-7 | Done 17 Nov: both faceless presets keep music 18 dB under the narration and choose a calm bed plus a `hit-soft` opening; the method has a Sound step. `smoke_faceless_bed_sits_under_the_narration` exports −14.1 LUFS with the bed 18.3 dB under speech. Listening is still George's. |
 | <a id="cl-12"></a>CL-12 | Execute FCL-9 | Done 17 Nov, mocked: Upload of a faceless video (private or scheduled) refuses time words past their window ("today", "just announced" 12 h; "this week" 72 h after the script) and reads every cited page again (unreadable, quote gone, new correction notice). Retries and drafts skip it. `faceless/release.rs`. The approved private upload stays PUB-2. |
 | <a id="cl-13"></a>CL-13 | Execute FCL-3's Script panel | Done 20 Nov: the faceless tab's Script stage shows length against the format, the check, each scene with its cited facts (exact quotes, folded), the current review's findings and when this revision was accepted (`faceless_script_get`). Mounted test `scriptView.test.ts`; phone screenshot checked. |
-| <a id="cl-14"></a>CL-14 | Execute PUB-1 thumbnail generation | Same task below; mocked image reply, size/preview checks. |
+| <a id="cl-14"></a>CL-14 | Execute PUB-1 thumbnail generation | Done 20 Nov: Export page "Draw it" and `publish op: thumbnail` with `brief` draw one in the project's style (colours, `thumbnail` rules, references marked `thumbnail`) with `google/gemini-3.1-flash-image` on OpenRouter (about 7 cents), cut to 16:9 at 1280×720 JPEG, flagged when flat at 160 px. Mocked tests; one live call. |
 | <a id="cl-15"></a>CL-15 | Real React regression coverage: [GAP-024](gap.md#gap-024) | Started 9 Nov: `front-end/tests/dom.ts` (jsdom + real React renderer, StrictMode) with keyboard isolation tests. Next suites: package autosave with Upload/Close, project switching. |
 
 Other open findings are not deprioritized by their absence from a CL row. Use gap.md's issue
@@ -85,13 +85,10 @@ implementation narratives and duplicate tasks were removed.
 <a id="pub-1"></a>
 ### PUB-1 — Generated thumbnails
 
-The shared package editor, chapter insertion, image/frame thumbnails and 160 px preview exist.
-Remaining: generate from a brief with the user's OpenRouter image key, style-owned templates
-and references. Relevant paths: `src-tauri/src/publish/`, `style/`, `commands/publish.rs`,
-`front-end/src/components/export/PackageEditor.tsx`. Test mocked replies: at least 1280×720,
-under 2 MB, preview readable at 160 px; request 1536×864. Decide the home/schema for style
-thumbnail references before adding another settings store. Coordinate lifecycle fixes CL-1/2.
-CL-14 is this task. Per-target metadata already covers videos, shorts and clips.
+Built 20 Nov (CL-14): `publish/generate.rs`. A style's thumbnail look is `Style.thumbnail` (rules)
+and its references marked `thumbnail` (examples sent with the brief), so no new settings store.
+Broadsheet has rules; no style has example thumbnails yet. Left: George judges real generated
+thumbnails, and a style gets example thumbnails once he has ones he likes.
 
 <a id="pub-2"></a>
 ### PUB-2 — Validate the existing upload workflow

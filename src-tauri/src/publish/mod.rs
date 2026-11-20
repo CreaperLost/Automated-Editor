@@ -3,6 +3,7 @@
 //! id) gets its own title, description, tags and thumbnail, saved in the project's `publish/`
 //! folder (outside undo). Uploads go through Zernio and are journaled before they are sent, so
 //! a retry after a lost reply never posts twice. Nothing is public without the user's click.
+pub mod generate;
 pub mod zernio;
 
 use chrono::{DateTime, Utc};
@@ -164,7 +165,7 @@ pub fn save_package(root: &Path, target: &str, mut package: Package) -> Result<P
     Ok(package)
 }
 
-fn image_kind(bytes: &[u8]) -> Option<&'static str> {
+pub(crate) fn image_kind(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
         Some("jpg")
     } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
