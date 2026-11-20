@@ -1061,20 +1061,27 @@ mod tests {
                 reader.summary.revision,
             )
         };
-        let graphic = |template: &str, at_us: u64| super::super::graphics::VideoGraphic {
-            from: super::super::graphics::ShortGraphicFrom::Template {
-                template: template.into(),
-            },
-            at_us,
-            length_us: Some(3_000_000),
-            name: None,
-            variables: serde_json::Map::new(),
+        let graphic = |template: &str, at_us: u64, source: Option<&str>| {
+            super::super::graphics::VideoGraphic {
+                from: super::super::graphics::ShortGraphicFrom::Template {
+                    template: template.into(),
+                },
+                at_us,
+                length_us: Some(3_000_000),
+                name: None,
+                variables: source
+                    .map(|s| serde_json::Map::from_iter([("source".into(), s.into())]))
+                    .unwrap_or_default(),
+            }
         };
         super::super::graphics::project_graphics_add_impl(
             state,
-            handle,
+            handle.clone(),
             revision,
-            vec![graphic("headline", 0), graphic("bars", 6_000_000)],
+            vec![
+                graphic("headline", 0, Some("Source: test page")),
+                graphic("bars", 6_000_000, Some("")),
+            ],
         )
         .unwrap();
         let checked = faceless_visuals_impl(state, false).unwrap();
@@ -1096,6 +1103,32 @@ mod tests {
         assert!(faceless::stage_states(&root, &production)
             .iter()
             .any(|s| s.id == "visuals" && s.state == faceless::StageState::Done));
+        // GAP-039: a quote with no `source` would credit the template's example publisher.
+        let revision = state
+            .opened_project
+            .lock()
+            .as_ref()
+            .unwrap()
+            .summary
+            .revision;
+        super::super::graphics::project_graphics_add_impl(
+            state,
+            handle,
+            revision,
+            vec![graphic("quote", 0, None)],
+        )
+        .unwrap();
+        let checked = faceless_visuals_impl(state, false).unwrap();
+        assert!(!checked.done);
+        assert!(
+            checked
+                .visuals
+                .errors
+                .iter()
+                .any(|e| e.contains("example source tag")),
+            "{:?}",
+            checked.visuals.errors
+        );
     }
 
     /// GAP-008: narration made from script A never certifies script B, whether accepted late
