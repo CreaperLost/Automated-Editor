@@ -414,17 +414,54 @@ pub fn sample_bgr(
     h: u32,
     each: &mut dyn FnMut(usize, &[u8]) -> bool,
 ) -> Result<(), String> {
+    sample_packed(
+        path,
+        &format!("1/{}", every_s.max(1)),
+        true,
+        "bgr24",
+        w,
+        h,
+        each,
+    )
+}
+
+/// `fps` pictures a second of the video from its start (every frame decoded), scaled to `w` x
+/// `h` (its shape not kept) and packed RGB, handed to `each` in order (with their index) until
+/// it returns false. One FFmpeg thread, for passes that run beside playback.
+pub fn sample_rgb_fps(
+    path: &Path,
+    fps: u32,
+    w: u32,
+    h: u32,
+    each: &mut dyn FnMut(usize, &[u8]) -> bool,
+) -> Result<(), String> {
+    sample_packed(path, &fps.max(1).to_string(), false, "rgb24", w, h, each)
+}
+
+fn sample_packed(
+    path: &Path,
+    rate: &str,
+    keyframes_only: bool,
+    pix_fmt: &str,
+    w: u32,
+    h: u32,
+    each: &mut dyn FnMut(usize, &[u8]) -> bool,
+) -> Result<(), String> {
     validate_dim(w, h)?;
     let (mut cmd, mut log) = command(ffmpeg_path()?)?;
-    cmd.args(["-nostdin", "-threads", "1", "-skip_frame", "nokey", "-i"])
+    cmd.args(["-nostdin", "-threads", "1"]);
+    if keyframes_only {
+        cmd.args(["-skip_frame", "nokey"]);
+    }
+    cmd.arg("-i")
         .arg(file_arg(path))
         .args([
             "-an",
             "-sn",
             "-vf",
-            &format!("fps=1/{},scale={w}:{h}:flags=bilinear", every_s.max(1)),
+            &format!("fps={rate},scale={w}:{h}:flags=bilinear"),
             "-pix_fmt",
-            "bgr24",
+            pix_fmt,
             "-f",
             "rawvideo",
             "pipe:1",
