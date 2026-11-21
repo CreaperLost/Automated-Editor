@@ -6256,6 +6256,91 @@ mod tests {
     }
 
     #[test]
+    fn broll_goes_over_the_video_as_pictures_only_from_a_noted_moment() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", true);
+        let screen = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test/fixtures/screen.mp4")
+            .canonicalize()
+            .unwrap();
+        let imported = call(
+            &ctx,
+            "media_import",
+            json!({ "paths": [screen.display().to_string()] }),
+        )
+        .unwrap();
+        let media = imported
+            .split(" as ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .unwrap()
+            .to_string();
+        call(
+            &ctx,
+            "media_import",
+            json!({ "notes": [{ "media": media, "description": "Settings",
+                "moments": [{ "atS": 2.0, "text": "Dark mode toggle" }] }] }),
+        )
+        .unwrap();
+        let (revision, length, mic_clips) = with_reader(ctx.state, |r| {
+            let d = r.document();
+            Ok((
+                d.revision,
+                d.duration_us(),
+                d.sequence
+                    .audio_tracks()
+                    .map(|t| t.clips.len())
+                    .sum::<usize>(),
+            ))
+        })
+        .unwrap();
+        let answer = call(
+            &ctx,
+            "propose_edit",
+            json!({ "expectedRevision": revision, "reason": "Show the toggle",
+                "broll": [{ "media": media, "select": "dark toggle", "lengthS": 1.5, "atS": 0.5 }] }),
+        )
+        .unwrap();
+        assert!(answer.contains("ccepted"), "{answer}");
+        let (placed, length_after, mic_after) = with_reader(ctx.state, |r| {
+            let d = r.document();
+            let placed: Vec<(u64, u64, u64, String)> = d
+                .sequence
+                .video_tracks()
+                .flat_map(|t| t.clips.iter())
+                .filter(|c| c.asset == media)
+                .map(|c| (c.start_us, c.in_us, c.duration_us, c.stream.clone()))
+                .collect();
+            Ok((
+                placed,
+                d.duration_us(),
+                d.sequence
+                    .audio_tracks()
+                    .map(|t| t.clips.len())
+                    .sum::<usize>(),
+            ))
+        })
+        .unwrap();
+        assert_eq!(placed.len(), 1, "{placed:?}");
+        assert_eq!(placed[0].0, 500_000);
+        assert_eq!(placed[0].1, 2_000_000, "from the noted moment");
+        assert_eq!(placed[0].2, 1_500_000);
+        assert_eq!(length_after, length, "nothing moved");
+        assert_eq!(mic_after, mic_clips, "no sound placed");
+        let missing = call(
+            &ctx,
+            "propose_edit",
+            json!({ "expectedRevision": revision + 1, "reason": "x",
+                "broll": [{ "media": media, "select": "nothing like it", "atS": 0.0 }] }),
+        );
+        assert!(missing.unwrap_err().contains("No moment"));
+    }
+
+    #[test]
     fn footage_is_described_once_from_its_board_and_found_by_its_notes() {
         if !crate::media::ffmpeg::available() {
             return;

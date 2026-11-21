@@ -416,6 +416,10 @@ segments, else the imported file), not its name or folder. `source_search` with 
 12-frame board from the timeline thumbnails' cache and shows the notes; with `query` it adds
 notes lines (description and tags, or a moment with the source's tags) matching every word by
 its start. `media_import` `notes` replaces a media's notes; nothing here is in the undo history.
+Those notes' moments are the saved selects: `propose_edit` `broll` (FTG-2) takes `select` (a
+moment's words) or `fromS`, and places the media's picture streams only at `atWord`/`atS` on
+the first free video track above the bottom one (or `OnNewTrack`), in the same batch as its
+`edits`, refusing anything that would lengthen the video.
 
 ## Check, storyboard, export
 

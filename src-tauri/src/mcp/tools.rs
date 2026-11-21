@@ -494,8 +494,8 @@ static TOOLS: [ToolDef; 14] = [
         description: "Proposes timeline edits, applied in order as one undo step once the user \
             accepts: addTrack, removeTrack, setTrack, moveTrack, placeAsset, moveClips, \
             trimClip, split, delete, deleteRange, rippleTrim, link, unlink, setMagnetic, \
-            setClip, setSpeed, restoreCuts (the schema lists each one's fields). For B-roll, \
-            give placeAsset `streams` so unwanted sound isn't placed. They are checked now on \
+            setClip, setSpeed, restoreCuts (the schema lists each one's fields). For B-roll over \
+            the video use `broll`; elsewhere give placeAsset `streams`. They are checked now on \
             a copy and the result's diff is returned; they hold only for this revision. For \
             removing speech prefer propose_cuts.",
         schema: schema::<super::propose::EditParams>,
