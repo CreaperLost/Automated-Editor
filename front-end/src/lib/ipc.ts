@@ -542,6 +542,8 @@ export const api = {
   /** Saves the Treg key (research); answers where the key now comes from. */
   tregSetKey: (key: string) => invokeTauri<string | null>("treg_set_key", { key }),
   tregKeySource: () => invokeTauri<string | null>("treg_key_source"),
+  pexelsSetKey: (key: string) => invokeTauri<string | null>("pexels_set_key", { key }),
+  pexelsKeySource: () => invokeTauri<string | null>("pexels_key_source"),
   // Each publish call names the project it is for; the back end refuses it once another
   // project is open (GAP-011).
   publishPackage: (projectHandle: string, target: string) =>

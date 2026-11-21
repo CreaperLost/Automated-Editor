@@ -17,7 +17,8 @@ pub static TOOLS: [ToolDef; 1] = [ToolDef {
         letter off. Use it to find a moment by what was said, or bring back a cut line \
         (`propose_edit` `restoreCuts`). It also finds footage by its notes (what it shows). \
         `media` alone: a board of 12 frames spread over it and its notes; footage without \
-        notes gets them once with `media_import` `notes`, kept by its bytes for every project.",
+        notes gets them once with `media_import` `notes`, kept by its bytes for every project. \
+        `stock`: Pexels previews to propose.",
     schema: schema::<SearchArgs>,
     read_only: true,
     run: source_search_tool,
@@ -38,6 +39,16 @@ pub struct SearchArgs {
     /// At most this many hits. Default 20, at most 100.
     #[serde(default)]
     pub limit: Option<usize>,
+    /// Instead: words for stock on Pexels (the user's key), shown as previews; nothing is
+    /// downloaded. `media_import` `stock` proposes the ones to import.
+    #[serde(default)]
+    pub stock: Option<String>,
+    /// Stock: video (default) or photo.
+    #[serde(default)]
+    pub stock_kind: crate::stock::StockKind,
+    /// Stock: landscape, portrait or square.
+    #[serde(default)]
+    pub orientation: Option<String>,
 }
 
 /// Frames on a media's board.
@@ -47,6 +58,10 @@ const TILE_HEIGHT: u32 = 180;
 
 fn source_search_tool(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: SearchArgs = params(args)?;
+    if let Some(words) = &args.stock {
+        let web = crate::stock::Web::from_keychain()?;
+        return stock_results(&web, words, &args);
+    }
     let notes_dir = crate::source_notes::dir(&ctx.host.config_dir());
     if let Some(media) = &args.media {
         return media_board(ctx, media, &notes_dir);
@@ -90,6 +105,89 @@ fn source_search_tool(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         ));
     }
     text(out)
+}
+
+/// Pexels' stock for `words`: a line each and a board of their previews.
+pub(crate) fn stock_results(
+    fetch: &dyn crate::stock::Fetch,
+    words: &str,
+    args: &SearchArgs,
+) -> Result<Vec<Output>, String> {
+    let found = crate::stock::search(
+        fetch,
+        words,
+        args.stock_kind,
+        args.orientation.as_deref(),
+        args.limit.unwrap_or(crate::stock::LIMIT_DEFAULT),
+    )?;
+    if found.is_empty() {
+        return text(format!("Pexels has nothing for \"{}\".", words.trim()));
+    }
+    let mut lines = vec![format!(
+        "{} on Pexels (free, no credit needed; nothing downloaded). Numbered as on the board. \
+         Propose the ones that fit with `media_import` `stock` (their ids): the user accepts \
+         and the app imports them.",
+        found.len()
+    )];
+    let mut tiles = Vec::new();
+    for (n, item) in found.iter().enumerate() {
+        lines.push(format!("{}. {}", n + 1, item.line()));
+        let picture = fetch
+            .preview(&item.preview_url)
+            .ok()
+            .and_then(|bytes| image::load_from_memory(&bytes).ok())
+            .map(|p| p.resize(TILE_HEIGHT * 16 / 9, TILE_HEIGHT, image::imageops::Triangle));
+        if let Some(picture) = picture {
+            tiles.push((format!("{}", n + 1), picture.to_rgba8()));
+        }
+    }
+    let mut out = vec![Output::Text(lines.join("\n"))];
+    if !tiles.is_empty() {
+        out.push(Output::Jpeg(board(&tiles)?));
+    }
+    Ok(out)
+}
+
+/// `tiles` side by side, [`BOARD_COLUMNS`] a row, each with its label, as a JPEG.
+fn board(tiles: &[(String, image::RgbaImage)]) -> Result<Vec<u8>, String> {
+    let width = tiles.iter().map(|(_, f)| f.width()).max().unwrap_or(1);
+    let columns = BOARD_COLUMNS.min(tiles.len() as u32).max(1);
+    let rows = (tiles.len() as u32).div_ceil(columns);
+    let mut board = image::RgbaImage::from_pixel(
+        width * columns,
+        TILE_HEIGHT * rows,
+        image::Rgba([16, 16, 16, 255]),
+    );
+    for (i, (label, frame)) in tiles.iter().enumerate() {
+        let (x, y) = (
+            (i as u32 % columns) * width,
+            (i as u32 / columns) * TILE_HEIGHT,
+        );
+        image::imageops::overlay(&mut board, frame, x as i64, y as i64);
+        let label_top = (y + TILE_HEIGHT) as i64 - 20;
+        fill(
+            &mut board,
+            x as i64,
+            label_top,
+            x as i64 + 64,
+            (y + TILE_HEIGHT) as i64,
+            image::Rgba([0, 0, 0, 200]),
+        );
+        draw_text(
+            &mut board,
+            x as i64 + 4,
+            (y + TILE_HEIGHT) as i64 - 18,
+            label,
+            14.0,
+            image::Rgba([255, 255, 255, 255]),
+        );
+    }
+    let rgb = image::DynamicImage::ImageRgba8(board).to_rgb8();
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 75)
+        .encode_image(&rgb)
+        .map_err(|e| format!("Could not encode the board: {e}"))?;
+    Ok(jpeg)
 }
 
 /// A board of [`BOARD_TILES`] frames spread over media `id`'s picture, and its notes.
@@ -158,42 +256,8 @@ fn media_board(ctx: &Ctx, id: &str, notes_dir: &std::path::Path) -> Result<Vec<O
         lines.push("No frame could be read.".into());
         return text(lines.join("\n"));
     }
-    let width = frames.iter().map(|(_, f)| f.width()).max().unwrap_or(1);
-    let columns = BOARD_COLUMNS.min(frames.len() as u32);
-    let rows = (frames.len() as u32).div_ceil(columns);
-    let mut board = image::RgbaImage::from_pixel(
-        width * columns,
-        TILE_HEIGHT * rows,
-        image::Rgba([16, 16, 16, 255]),
-    );
-    for (i, (at, frame)) in frames.iter().enumerate() {
-        let (x, y) = (
-            (i as u32 % columns) * width,
-            (i as u32 / columns) * TILE_HEIGHT,
-        );
-        image::imageops::overlay(&mut board, frame, x as i64, y as i64);
-        let label_top = (y + TILE_HEIGHT) as i64 - 20;
-        fill(
-            &mut board,
-            x as i64,
-            label_top,
-            x as i64 + 64,
-            (y + TILE_HEIGHT) as i64,
-            image::Rgba([0, 0, 0, 200]),
-        );
-        draw_text(
-            &mut board,
-            x as i64 + 4,
-            (y + TILE_HEIGHT) as i64 - 18,
-            &clock(*at),
-            14.0,
-            image::Rgba([255, 255, 255, 255]),
-        );
-    }
-    let rgb = image::DynamicImage::ImageRgba8(board).to_rgb8();
-    let mut jpeg = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 75)
-        .encode_image(&rgb)
-        .map_err(|e| format!("Could not encode the board: {e}"))?;
+    let tiles: Vec<(String, image::RgbaImage)> =
+        frames.into_iter().map(|(at, f)| (clock(at), f)).collect();
+    let jpeg = board(&tiles)?;
     Ok(vec![Output::Text(lines.join("\n")), Output::Jpeg(jpeg)])
 }

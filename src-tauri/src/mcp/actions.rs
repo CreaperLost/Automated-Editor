@@ -219,7 +219,7 @@ pub static ACTIONS: [ToolDef; 36] = [
             another preset was read already. Answers each new media id and its streams. `roles` \
             (`media`, `stream`, `role`) sets what streams stand for, after importing or on media \
             already in the project; music and sound effects get `music` / `effects` and their \
-            `licences` (music must need no credit).",
+            `licences` (music must need no credit). `stock`: proposes Pexels stock to import.",
         schema: schema::<MediaImportArgs>,
         read_only: false,
         run: media_import,
@@ -3416,6 +3416,39 @@ pub struct MediaImportArgs {
     /// media's bytes, outside the undo history; replaces its notes.
     #[serde(default)]
     pub notes: Vec<MediaNotesArgs>,
+    /// Instead: stock ids from `source_search` `stock`, proposed for the user to accept; they
+    /// are downloaded and imported only then, with their licence.
+    #[serde(default)]
+    pub stock: Vec<String>,
+    /// Stock: what it is for, in a sentence the user reads.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Proposes stock `ids` (looked up with `fetch`) for the user to accept.
+pub(crate) fn propose_stock(
+    ctx: &Ctx,
+    fetch: &dyn crate::stock::Fetch,
+    ids: &[String],
+    reason: Option<&str>,
+) -> Result<Vec<Output>, String> {
+    if ids.len() > crate::stock::LIMIT_MAX {
+        return Err(format!(
+            "At most {} stock files at once",
+            crate::stock::LIMIT_MAX
+        ));
+    }
+    let items = ids
+        .iter()
+        .map(|id| crate::stock::item(fetch, id.trim()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let reason = reason
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("Import {} from Pexels", plural(items.len(), "stock file")));
+    let agent = ctx.agent.clone();
+    super::propose::propose(ctx, |reader, proposals| {
+        crate::proposals::propose_stock(reader, proposals, &agent, items, &reason)
+    })
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -3509,6 +3542,10 @@ pub struct MediaRoleArgs {
 
 fn media_import(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: MediaImportArgs = params(args)?;
+    if !args.stock.is_empty() {
+        let web = crate::stock::Web::from_keychain()?;
+        return propose_stock(ctx, &web, &args.stock, args.reason.as_deref());
+    }
     if args.paths.is_empty()
         && args.roles.is_empty()
         && args.licences.is_empty()
@@ -6449,6 +6486,80 @@ mod tests {
                 (length + 2_550_000, 900_000, 2_150_000, id_of("take 2")),
             ]
         );
+    }
+
+    #[test]
+    fn stock_is_shown_proposed_and_downloaded_only_once_the_user_accepts() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        // Autopilot on: stock still waits for the user.
+        let ctx = Ctx::new(&host, "claude-code", true);
+        let clip =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test/fixtures/clip.mp4");
+        let fake = crate::stock::tests::Fake {
+            file: std::fs::read(clip).unwrap(),
+            ..Default::default()
+        };
+        let args: super::super::search::SearchArgs =
+            serde_json::from_value(json!({ "stock": "harbour", "limit": 2 })).unwrap();
+        let shown = super::super::search::stock_results(&fake, "harbour", &args).unwrap();
+        assert!(matches!(&shown[0], Output::Text(t) if t.contains("1. pexels-video-11: 12 s")));
+        assert!(matches!(shown.get(1), Some(Output::Jpeg(_))));
+
+        let answer =
+            match &propose_stock(&ctx, &fake, &["pexels-video-11".into()], None).unwrap()[0] {
+                Output::Text(t) => t.clone(),
+                _ => panic!("text first"),
+            };
+        assert!(answer.contains("waits for the user"), "{answer}");
+        let root = with_reader(ctx.state, |r| Ok(r.root().to_path_buf())).unwrap();
+        assert!(!root.join("media/stock").exists(), "nothing downloaded yet");
+        let view = crate::commands::proposals::proposals_list_impl(
+            ctx.state,
+            opened(&ctx).unwrap().handle,
+        )
+        .unwrap();
+        let batch = view
+            .batches
+            .iter()
+            .find(|b| b.kind == "stock")
+            .unwrap()
+            .clone();
+        assert!(batch.summary.iter().any(|l| l.contains("Pexels licence")));
+
+        let handle = opened(&ctx).unwrap().handle;
+        let items =
+            crate::proposals::pending_stock(&crate::proposals::load(&root).unwrap(), &batch.id)
+                .unwrap()
+                .unwrap();
+        let outcome =
+            crate::commands::proposals::accept_stock(ctx.state, &handle, &batch.id, &items, &fake)
+                .unwrap();
+        let asset = outcome
+            .project
+            .unwrap()
+            .assets
+            .into_iter()
+            .find(|a| a.name == "pexels-video-11.mp4")
+            .expect("imported");
+        let licence = asset.licence.unwrap();
+        assert!(licence.kind.needs_no_credit());
+        assert!(licence.source.unwrap().contains("Ana Lee"));
+        let decided = outcome
+            .proposals
+            .batches
+            .iter()
+            .find(|b| b.id == batch.id)
+            .unwrap();
+        assert_eq!(decided.status, crate::proposals::Status::Accepted);
+        assert!(decided.can_undo);
+        assert!(decided
+            .summary
+            .iter()
+            .any(|l| l.starts_with("Imported pexels-video-11.mp4 as ")));
     }
 
     #[test]

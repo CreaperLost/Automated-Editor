@@ -65,6 +65,66 @@ pub fn proposals_list_impl(
     Ok(proposals::view(reader, &proposals::load(reader.root())?))
 }
 
+/// Downloads stock batch `batch_id`'s files with `fetch` and imports them with their licences,
+/// one undo step; the batch is then accepted.
+pub(crate) fn accept_stock(
+    state: &AppState,
+    project_handle: &str,
+    batch_id: &str,
+    items: &[crate::stock::StockItem],
+    fetch: &dyn crate::stock::Fetch,
+) -> Result<ProposalOutcome, String> {
+    let (root, revision) = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, project_handle)?;
+        (reader.root().to_path_buf(), reader.document().revision)
+    };
+    let mut files = Vec::new();
+    for item in items {
+        let path = crate::stock::download(fetch, &root, item)?;
+        files.push((path, item));
+    }
+    let known: std::collections::HashSet<String> = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        reader
+            .document()
+            .assets
+            .iter()
+            .map(|a| a.id.clone())
+            .collect()
+    };
+    let licence_of = |path: &std::path::Path| {
+        let path = dunce::canonicalize(path).ok()?;
+        files
+            .iter()
+            .find(|(p, _)| dunce::canonicalize(p).ok().as_ref() == Some(&path))
+            .map(|(_, item)| item.licence())
+    };
+    let project = super::project_media_import_licensed(
+        state,
+        project_handle.to_string(),
+        revision,
+        files.iter().map(|(p, _)| p.display().to_string()).collect(),
+        licence_of,
+    )?;
+    let lines: Vec<String> = project
+        .assets
+        .iter()
+        .filter(|a| !known.contains(&a.id))
+        .map(|a| format!("Imported {} as {}.", a.name, a.id))
+        .collect();
+    let revision = project.revision;
+    let ((), proposals) = with_proposals(state, Some(project_handle), |_, p| {
+        proposals::stock_accepted(p, batch_id, revision, lines)
+    })?;
+    Ok(ProposalOutcome {
+        project: Some(project),
+        proposals,
+    })
+}
+
 pub fn proposal_accept_impl(
     state: &AppState,
     project_handle: String,
@@ -73,6 +133,16 @@ pub fn proposal_accept_impl(
     item_ids: Option<Vec<String>>,
     reject_rest: bool,
 ) -> Result<ProposalOutcome, String> {
+    let stock = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        proposals::pending_stock(&proposals::load(reader.root())?, &batch_id)?
+    };
+    if let Some(items) = stock {
+        let web = crate::stock::Web::from_keychain()?;
+        return accept_stock(state, &project_handle, &batch_id, &items, &web);
+    }
     // A rule goes into its preset (app-wide, like the Library's own changes), then is marked.
     let rule = {
         let opened = state.opened_project.lock();

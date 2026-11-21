@@ -57,6 +57,7 @@ pub mod sound_library;
 pub mod source_notes;
 pub mod source_search;
 pub mod spend;
+pub mod stock;
 pub mod style;
 pub mod take_short;
 pub mod telemetry;
@@ -457,6 +458,22 @@ async fn publish_set_key(key: String) -> Result<commands::publish::Accounts, Str
 fn treg_set_key(key: String) -> Result<Option<String>, String> {
     commands::faceless::treg_set_key_impl(key)?;
     Ok(commands::faceless::treg_key_source_impl())
+}
+
+/// Saves the Pexels key (stock footage and photos, FTG-6) in the keychain.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn pexels_set_key(key: String) -> Result<Option<String>, String> {
+    let config = transcript::settings::config_dir();
+    secrets::set(&config, stock::KEY, &key)?;
+    Ok(secrets::get(&config, stock::KEY).map(|(_, s)| s.to_string()))
+}
+
+/// Where the Pexels key comes from, or nothing when none is set.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn pexels_key_source() -> Option<String> {
+    secrets::get(&transcript::settings::config_dir(), stock::KEY).map(|(_, s)| s.to_string())
 }
 
 /// Where the Treg key comes from (`keychain`, `environment`), or nothing when none is set.
@@ -3768,6 +3785,8 @@ pub fn run() {
             publish_set_channel,
             treg_set_key,
             treg_key_source,
+            pexels_set_key,
+            pexels_key_source,
             publish_package,
             publish_package_save,
             publish_thumbnail_file,

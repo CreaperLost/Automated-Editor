@@ -200,10 +200,90 @@ export const AccountsDialog: React.FC<{ onClose: () => void }> = ({ onClose }) =
               </Button>
             </form>
           </div>
+          <KeyRow
+            name="Pexels"
+            env="PEXELS_API_KEY"
+            keysUrl="https://www.pexels.com/api/"
+            load={api.pexelsKeySource}
+            save={api.pexelsSetKey}
+            onError={setError}
+          >
+            Stock video and photos the agent can propose for B-roll. Free with your own key; each file is downloaded
+            only when you accept it in the Agent panel, and keeps its licence (free to use, no credit needed).
+          </KeyRow>
           {error && <p className="text-meta text-danger-fg">{error}</p>}
         </div>
       </div>
     </DialogBackdrop>,
     document.body,
+  );
+};
+
+/** One service's key: whether one is saved, where to make one, and a field to save a new one. */
+const KeyRow: React.FC<{
+  name: string;
+  env: string;
+  keysUrl: string;
+  load: () => Promise<string | null>;
+  save: (key: string) => Promise<string | null>;
+  onError: (error: string | undefined) => void;
+  children: React.ReactNode;
+}> = ({ name, env, keysUrl, load, save, onError, children }) => {
+  const [source, setSource] = useState<string | null>(null);
+  const [key, setKey] = useState("");
+  useEffect(() => {
+    void load().then(setSource).catch(() => undefined);
+  }, [load]);
+  const submit = async () => {
+    onError(undefined);
+    try {
+      setSource(await save(key.trim()));
+      setKey("");
+    } catch (err) {
+      onError(String(err));
+    }
+  };
+  return (
+    <div className="rounded-control border border-studio-800 p-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="font-medium text-studio-200">{name}</span>
+        {source ? (
+          <span className="inline-flex items-center gap-1 text-success-fg">
+            <CheckCircle2 className="w-4 h-4" /> Key saved{source === "environment" ? ` (from ${env})` : ""}
+          </span>
+        ) : (
+          <span className="text-studio-500">No key</span>
+        )}
+      </div>
+      <p className="text-meta text-studio-400">
+        {children}{" "}
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-accent-fg hover:underline"
+          onClick={() => void api.openUrl(keysUrl)}
+        >
+          Make a key <ExternalLink className="w-3 h-3" />
+        </button>
+      </p>
+      <form
+        className="flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
+      >
+        <input
+          type="password"
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder={source ? "Paste a new key to replace it" : `${name} key`}
+          autoComplete="off"
+          className="flex-1 min-w-0 h-8 rounded-control border border-studio-700 bg-studio-950 px-2 text-label text-studio-100 placeholder:text-studio-600 focus:outline-none focus:border-accent"
+        />
+        <Button type="submit" size="sm" variant="primary" disabled={!key.trim()}>
+          Save key
+        </Button>
+      </form>
+    </div>
   );
 };
