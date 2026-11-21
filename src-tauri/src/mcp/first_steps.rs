@@ -230,8 +230,138 @@ pub fn plan(preset: &str, choices: &Map<String, Value>, ready: Ready) -> Plan {
     }
 }
 
+/// Where a faceless production stands, as its run needs it (FCL-10).
+#[derive(Clone, Debug, Default)]
+pub struct Production {
+    /// The first stage not done (research, script, review, voice, visuals, package,
+    /// publish); none when every stage is done.
+    pub next: Option<String>,
+    /// The narration is accepted: the video's length is set.
+    pub voiced: bool,
+    /// Graphics on the timeline.
+    pub graphics: usize,
+    /// The story's links not read yet.
+    pub unread: Vec<String>,
+    /// A music bed is on the timeline.
+    pub music_placed: bool,
+    /// A sound effect starts on the first frame.
+    pub opening_placed: bool,
+    /// The bed the choices' `music` `query` finds first: its id, and whether it is on this
+    /// computer already.
+    pub music: Option<(String, bool)>,
+}
+
+/// The steps for a faceless production: what the app can do without the agent or a paid call
+/// at the stage it is at, then what is left. Writing, the paid narration, the graphics and the
+/// package stay with the agent and the user.
+pub fn plan_faceless(
+    preset: &str,
+    choices: &Map<String, Value>,
+    production: &Production,
+    online: bool,
+) -> Plan {
+    let mut steps = Vec::new();
+    let mut left = Vec::new();
+    let next = production.next.as_deref();
+    let on = |part: &str| {
+        choices
+            .get(part)
+            .and_then(|c| c.get("apply"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    };
+    if next == Some("research") && !production.unread.is_empty() {
+        if online {
+            steps.push(Step {
+                label: format!(
+                    "Read the story's {} (fetched from the web, free)",
+                    plural(production.unread.len(), "report")
+                ),
+                online: true,
+                tool: "faceless_research",
+                args: json!({ "op": "fetch", "urls": production.unread }),
+            });
+        } else {
+            left.push("The story's reports: allow online steps to read them.".into());
+        }
+    }
+    if production.voiced {
+        if production.graphics > 0 && next == Some("visuals") {
+            steps.push(Step {
+                label: "Check the visuals, each graphic stretched to meet the next".into(),
+                online: false,
+                tool: "faceless",
+                args: json!({ "op": "visuals", "fill": true }),
+            });
+        }
+        if on("opening") && !production.opening_placed {
+            if let Some(sound) = choices["opening"].get("sound").and_then(Value::as_str) {
+                steps.push(Step {
+                    label: format!("Opening sound ({sound}) on the first frame"),
+                    online: false,
+                    tool: "library",
+                    args: json!({ "kind": "sound", "op": "use", "name": sound, "atUs": 0 }),
+                });
+            }
+        }
+        if on("music") && !production.music_placed {
+            match &production.music {
+                Some((id, here)) if *here || online => steps.push(Step {
+                    label: format!(
+                        "Music bed under the narration ({id}{})",
+                        if *here { "" } else { ", downloaded once" }
+                    ),
+                    online: !here,
+                    tool: "library",
+                    args: json!({ "kind": "music", "op": "use", "name": id, "atUs": 0 }),
+                }),
+                Some(_) => left.push(
+                    "Music: the bed isn't on this computer yet; allow online steps to download it."
+                        .into(),
+                ),
+                None => left.push("Music: the agent picks a bed that suits the story.".into()),
+            }
+        }
+    }
+    left.push(
+        match next {
+            Some("research") => {
+                "Research and the brief: the agent, from the pages read, with facts quoted exactly."
+            }
+            Some("script") | Some("review") => "The script and its three reviews: the agent.",
+            Some("voice") => {
+                "Narration: paid (your OpenRouter key, a few cents a short, about 30 cents a \
+                 long); the agent voices it when you say, then you listen and accept it."
+            }
+            Some("visuals") if production.graphics == 0 => {
+                "Graphics: the agent plans them as a table first."
+            }
+            Some("visuals") => "What the visuals check finds: the agent fixes it.",
+            Some("package") => {
+                "The package (title, description with sources, tags): the agent; you see it on \
+                 the Export page."
+            }
+            _ => "Nothing else before the export.",
+        }
+        .to_string(),
+    );
+    left.push("Export and upload: only when you say go.".into());
+    Plan {
+        preset: preset.into(),
+        steps,
+        left,
+    }
+}
+
+fn plural(n: usize, word: &str) -> String {
+    format!("{n} {word}{}", if n == 1 { "" } else { "s" })
+}
+
 /// The plan for the project open now.
 pub fn plan_open(host: &dyn super::Host, online: bool) -> Result<Plan, String> {
+    if let Some(plan) = faceless_plan_open(host, online)? {
+        return Ok(plan);
+    }
     let (preset, mouse, transcribed) = with_reader(host.state(), |reader| {
         let mouse = reader.recordings().any(|a| {
             crate::telemetry::reader::read_telemetry(std::path::Path::new(&a.path))
@@ -263,8 +393,91 @@ pub fn plan_open(host: &dyn super::Host, online: bool) -> Result<Plan, String> {
     Ok(plan(&preset.name, &choices, ready))
 }
 
-/// The reason in a guarded pass's answer when it held back ("Not applied: ...").
+/// The plan for the open project when it is a faceless production.
+fn faceless_plan_open(host: &dyn super::Host, online: bool) -> Result<Option<Plan>, String> {
+    use crate::sequence::Role;
+    let found = with_reader(host.state(), |reader| {
+        let root = reader.root();
+        let Some(summary) = crate::faceless::summary(root) else {
+            return Ok(None);
+        };
+        let document = reader.document();
+        let voiced = summary
+            .stages
+            .iter()
+            .any(|s| s.id == "voice" && s.state == crate::faceless::StageState::Done);
+        let read: Vec<String> = crate::faceless::evidence::load(root)
+            .map(|d| d.sources.into_iter().map(|s| s.url).collect())
+            .unwrap_or_default();
+        let unread = summary
+            .links
+            .iter()
+            .filter(|l| !read.contains(l))
+            .cloned()
+            .collect();
+        let mut graphics = 0;
+        let mut music_placed = false;
+        let mut opening_placed = false;
+        for (_, clip) in document.sequence.clips() {
+            let Some(asset) = document.asset(&clip.asset) else {
+                continue;
+            };
+            if asset.is_graphic() {
+                graphics += 1;
+            }
+            let role = |r: Role| asset.streams.iter().any(|s| s.role == r);
+            music_placed |= role(Role::Music);
+            opening_placed |=
+                role(Role::Effects) && clip.start_us <= crate::faceless::voice::LEAD_US;
+        }
+        Ok(Some((
+            crate::preset::of(document),
+            Production {
+                next: summary.next.map(String::from),
+                voiced,
+                graphics,
+                unread,
+                music_placed,
+                opening_placed,
+                music: None,
+            },
+        )))
+    })?;
+    let Some((preset, mut production)) = found else {
+        return Ok(None);
+    };
+    let query = preset
+        .choices
+        .get("music")
+        .and_then(|m| m.get("query"))
+        .and_then(Value::as_str)
+        .map(String::from);
+    production.music = crate::commands::music::music_library_list_impl(query)
+        .ok()
+        .and_then(|tracks| tracks.into_iter().next())
+        .map(|t| (t.id, t.downloaded));
+    Ok(Some(plan_faceless(
+        &preset.name,
+        &preset.choices,
+        &production,
+        online,
+    )))
+}
+
+/// The reason in a guarded pass's answer when it held back ("Not applied: ..."), or the
+/// visuals check's when something blocks them.
 fn held(answer: &str) -> Option<String> {
+    if let Some(at) = answer.find("\nMust fix:") {
+        let fixes = answer[at + 1..]
+            .lines()
+            .skip(1)
+            .take_while(|l| l.starts_with("- "))
+            .count();
+        return Some(format!(
+            "Waits for the agent: the visuals check found {} to fix.",
+            plural(fixes, "thing")
+        ));
+    }
     let start = answer.find("Not applied: ")? + "Not applied: ".len();
     let reason = &answer[start..];
     let end = reason.find(". Ask the user").unwrap_or(reason.len());
@@ -352,6 +565,128 @@ mod tests {
 
     fn tools_of(plan: &Plan) -> Vec<&str> {
         plan.steps.iter().map(|s| s.tool).collect()
+    }
+
+    fn faceless() -> Map<String, Value> {
+        crate::preset::builtin()
+            .into_iter()
+            .find(|p| p.name == crate::preset::FACELESS_SHORT)
+            .unwrap()
+            .choices
+    }
+
+    #[test]
+    fn a_faceless_run_does_the_app_s_steps_at_each_stage_and_never_a_paid_one() {
+        // Just made from an idea: read its reports (online), then the agent researches.
+        let fresh = Production {
+            next: Some("research".into()),
+            unread: vec!["https://a.example/1".into(), "https://b.example/2".into()],
+            ..Production::default()
+        };
+        let plan = plan_faceless("Faceless short", &faceless(), &fresh, true);
+        assert_eq!(tools_of(&plan), ["faceless_research"]);
+        assert_eq!(plan.steps[0].args["op"], "fetch");
+        assert_eq!(plan.steps[0].args["urls"].as_array().unwrap().len(), 2);
+        assert!(plan.steps[0].online);
+        assert!(plan.left[0].starts_with("Research"));
+        let offline = plan_faceless("Faceless short", &faceless(), &fresh, false);
+        assert!(offline.steps.is_empty());
+        assert!(offline.left[0].contains("allow online steps"));
+
+        // Waiting for the narration: paid, so it is left to the agent at the user's word.
+        let script_done = Production {
+            next: Some("voice".into()),
+            ..Production::default()
+        };
+        let plan = plan_faceless("Faceless short", &faceless(), &script_done, true);
+        assert!(plan.steps.is_empty());
+        assert!(plan.left[0].contains("paid"), "{:?}", plan.left);
+
+        // Voiced, graphics placed: the visuals check, the opening hit and the bed.
+        let voiced = Production {
+            next: Some("visuals".into()),
+            voiced: true,
+            graphics: 7,
+            music: Some(("calm-bed".into(), true)),
+            ..Production::default()
+        };
+        let plan = plan_faceless("Faceless short", &faceless(), &voiced, false);
+        assert_eq!(tools_of(&plan), ["faceless", "library", "library"]);
+        assert_eq!(plan.steps[0].args, json!({ "op": "visuals", "fill": true }));
+        assert_eq!(plan.steps[1].args["name"], "hit-soft");
+        assert_eq!(plan.steps[1].args["atUs"], 0);
+        assert_eq!(plan.steps[2].args["name"], "calm-bed");
+        assert!(plan.steps.iter().all(|s| !s.online));
+        assert!(plan.left.iter().any(|l| l.contains("only when you say go")));
+
+        // Placed already, the sound steps are not repeated; a bed still to download needs
+        // online steps.
+        let placed = Production {
+            next: Some("package".into()),
+            voiced: true,
+            graphics: 7,
+            opening_placed: true,
+            music: Some(("calm-bed".into(), false)),
+            ..Production::default()
+        };
+        let plan = plan_faceless("Faceless short", &faceless(), &placed, false);
+        assert!(plan.steps.is_empty());
+        assert!(plan.left[0].contains("download"));
+        let plan = plan_faceless("Faceless short", &faceless(), &placed, true);
+        assert_eq!(tools_of(&plan), ["library"]);
+        assert!(plan.steps[0].online);
+        let done = Production {
+            music_placed: true,
+            ..placed
+        };
+        assert!(plan_faceless("Faceless short", &faceless(), &done, true)
+            .steps
+            .is_empty());
+    }
+
+    #[test]
+    fn an_open_faceless_production_gets_its_own_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = crate::faceless::create(
+            dir.path(),
+            "Robot",
+            crate::faceless::Format::Short,
+            &["https://a.example/report".into()],
+        )
+        .unwrap();
+        let host = crate::mcp::tests_support::BareHost::default();
+        let opened =
+            crate::commands::open_project_impl(&host.state, root.to_string_lossy().into()).unwrap();
+        crate::commands::preset::project_preset_set_impl(
+            &host.state,
+            opened.project_handle,
+            opened.revision,
+            crate::preset::FACELESS_SHORT.into(),
+            crate::commands::preset::PresetTarget::Video,
+        )
+        .unwrap();
+        let online = plan_open(&host, true).unwrap();
+        assert_eq!(online.preset, crate::preset::FACELESS_SHORT);
+        assert_eq!(
+            tools_of(&online),
+            ["faceless_research"],
+            "no scan or transcription"
+        );
+        assert_eq!(
+            online.steps[0].args["urls"],
+            json!(["https://a.example/report"])
+        );
+        assert!(plan_open(&host, false).unwrap().steps.is_empty());
+    }
+
+    #[test]
+    fn the_visuals_check_finding_something_stops_the_run() {
+        let answer = "7 graphics over 40 s.\nMust fix:\n- a gap\n- another\nWorth a look:\n- x";
+        assert_eq!(
+            held(answer).as_deref(),
+            Some("Waits for the agent: the visuals check found 2 things to fix.")
+        );
+        assert_eq!(held("7 graphics over 40 s.\nVisuals done."), None);
     }
 
     #[test]

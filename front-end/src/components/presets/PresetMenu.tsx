@@ -582,7 +582,7 @@ const RunDialog: React.FC<{ onClose: () => void; onError: (message: string) => v
       </p>
       <label className="flex items-center gap-2 text-label text-studio-300">
         <input type="checkbox" checked={online} disabled={phase !== "ready"} onChange={(e) => setOnline(e.target.checked)} />
-        Allow online steps for this run (transcription and the fillers&apos; review use your keys)
+        Allow online steps for this run (they use your keys or read the web; paid steps stay with your agent)
       </label>
       <ol className="flex flex-col gap-1.5 max-h-[50vh] overflow-y-auto">
         {plan?.steps.map((step, i) => {
