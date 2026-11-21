@@ -213,7 +213,7 @@ impl Spec {
         )
     }
 
-    fn file_name(&self, hash: &str) -> String {
+    pub(crate) fn file_name(&self, hash: &str) -> String {
         format!("{}{hash}.webm", self.stem())
     }
 
@@ -232,7 +232,7 @@ impl Spec {
     }
 
     /// What names this render: the source files and everything about the output.
-    fn hash(&self) -> Result<String, String> {
+    pub(crate) fn hash(&self) -> Result<String, String> {
         let mut hasher = Sha256::new();
         hasher.update(runtime::HYPERFRAMES_VERSION.as_bytes());
         hasher.update(format!(
