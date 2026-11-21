@@ -332,8 +332,6 @@ pub(crate) fn free_track<'t>(
     to: u64,
     taken: impl IntoIterator<Item = &'t str> + Clone,
 ) -> Result<(crate::sequence::Sequence, String), String> {
-    use crate::sequence::edit::{apply_reserving, SequenceEdit};
-    use crate::sequence::TrackKind;
     let only = |id: &str| {
         document
             .asset(id)
@@ -350,10 +348,23 @@ pub(crate) fn free_track<'t>(
                 && t.is_free(from, to)
         })
         .map(|t| t.id.clone());
-    let sequence = document.sequence.clone();
     if let Some(id) = free {
-        return Ok((sequence, id));
+        return Ok((document.sequence.clone(), id));
     }
+    add_track(document, role, name, taken)
+}
+
+/// The document's sequence with a new audio track named `name` for `role` (an id not in
+/// `taken`), and its id.
+pub(crate) fn add_track<'t>(
+    document: &EditDocument,
+    role: Role,
+    name: &str,
+    taken: impl IntoIterator<Item = &'t str> + Clone,
+) -> Result<(crate::sequence::Sequence, String), String> {
+    use crate::sequence::edit::{apply_reserving, SequenceEdit};
+    use crate::sequence::TrackKind;
+    let sequence = document.sequence.clone();
     let (added, _) = apply_reserving(
         &sequence,
         &document.assets,

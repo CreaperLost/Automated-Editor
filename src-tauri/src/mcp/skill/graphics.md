@@ -26,8 +26,9 @@ size in vw/vh). Move things with transforms (`x`, `y`, `xPercent`, `scale`), nev
 Before the first graphic, read the project's style once (`library` `kind: style` `op: show`):
 pick each graphic's kind from its kinds, start from its examples' source (read their files),
 follow its motion and look rules. Its sound only when the user asks for sounds on graphics (or
-the preset's rules or choices do): never add them unasked. A style without them has only its
-look. When
+the preset's rules or choices do): never add them unasked. Then mark the moments a sound fits
+with `data-cues="0.4:pop 1.2:hit"` on the root (seconds in, a role of the style's sound) and
+place them with `library` `kind: sound` `op: cues`. A style without them has only its look. When
 the user wants a new look from references (images, clips, graphics they like), start with
 `op: propose` and follow the steps it gives.
 

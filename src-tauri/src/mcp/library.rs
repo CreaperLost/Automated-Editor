@@ -38,6 +38,7 @@ pub enum Op {
     Versions,
     Restore,
     Draw,
+    Cues,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -118,13 +119,14 @@ pub struct LibraryArgs {
     /// style's.
     #[serde(default)]
     pub look: Option<String>,
+    #[serde(default)]
+    pub apply: Option<bool>,
 }
 
 pub static TOOLS: [ToolDef; 1] = [ToolDef {
     name: "library",
-    description: "The user's styles (how graphics, captions and the frame look and move: \
-        brand, graphics look, captions, frame, 9:16 variant, motion, kinds, examples, look \
-        rules, references, sounds), presets (what the app does for a kind of video: cleanup, \
+    description: "The user's styles (how graphics, captions and the frame look, move and \
+        sound: brand, motion, kinds, examples, look rules, references), presets (what the app does for a kind of video: cleanup, \
         captions, zooms, layouts, shorts, export, the method you follow) and favourite \
         layouts, kept for every project. `op`: list, show (a style's brief: read it before \
         making graphics), use (this project takes it: one undo step), set (change fields \
@@ -138,8 +140,9 @@ pub static TOOLS: [ToolDef; 1] = [ToolDef {
         `saveAs`; with `exceptions`, `checks`, `note` it is a workflow the user approved on this \
         edit: only at their word), versions and restore (`version`: each change to one is a new \
         version), reset (the project's changes back), propose_rule (`rule`, `example`: the \
-        user accepts it in the Agent panel). Sounds (CC0 whooshes, risers, hits, clicks, \
-        pops; the user's own): list (`query`), use (`name` = id, at `atUs`/`atWord`). Music \
+        user accepts it in the Agent panel). Sounds (CC0 and the user's own): list (`query`), use (`name` = id, at `atUs`/`atWord`), cues \
+        (the style's sound cues at graphic moments; `set` {role: id}; `apply: false` \
+        lists). Music \
         (CC0 beds by mood): the same, until `untilUs` or the end, kept under the speech. \
         Images (still pictures for graphics, one set per look so a video keeps one; sourced \
         flags, maps, wordmarks and portraits with every look): list (the project style's look \
@@ -618,7 +621,13 @@ fn style(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
             crate::style::request::clear(&ctx.host.config_dir());
             Ok(out)
         }
-        Op::Save | Op::Reset | Op::ProposeRule | Op::Versions | Op::Restore | Op::Draw => Err(
+        Op::Save
+        | Op::Reset
+        | Op::ProposeRule
+        | Op::Versions
+        | Op::Restore
+        | Op::Draw
+        | Op::Cues => Err(
             "Styles take list, show, use, set, remove, preview, check, bring_in_line or propose"
                 .into(),
         ),
@@ -1021,7 +1030,64 @@ fn sound(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
             );
             text(applied(ctx, "library", &before, vec![line])?)
         }
-        _ => Err("Sounds take `op: list` or `op: use`; the user adds their own in the app".into()),
+        Op::Cues => {
+            let cues: Vec<crate::style::Cue> = match &args.set {
+                Some(Value::Object(map)) => map
+                    .iter()
+                    .map(|(role, sound)| {
+                        Ok(crate::style::Cue {
+                            role: role.clone(),
+                            sound: sound
+                                .as_str()
+                                .ok_or("`set` is {role: sound id}")?
+                                .to_string(),
+                        })
+                    })
+                    .collect::<Result<_, String>>()?,
+                Some(_) => return Err("`set` is {role: sound id}".into()),
+                None => Vec::new(),
+            };
+            let apply = args.apply != Some(false);
+            let before = opened(ctx)?;
+            let placed = sounds::project_graphic_cues_impl(
+                ctx.state,
+                &before.handle,
+                before.revision,
+                cues,
+                apply,
+            )?;
+            let mut lines = vec![if placed.planned.is_empty() {
+                format!(
+                    "No cues: {} has no sound for them. Give the style's `sound.cues` \
+                     (role: in, out, whoosh or a mark's) or `set` {{\"in\": \"whoosh-soft\"}}.",
+                    plural(placed.moments, "graphic moment")
+                )
+            } else {
+                format!(
+                    "{} {} at {}:",
+                    if apply { "Placed" } else { "Would place" },
+                    plural(placed.planned.len(), "cue"),
+                    plural(placed.moments, "graphic moment")
+                )
+            }];
+            lines.extend(placed.planned.iter().map(|p| {
+                format!(
+                    "{} {} ({} of {})",
+                    super::tools::clock(p.moment.at_us),
+                    p.sound,
+                    p.moment.role,
+                    p.moment.graphic
+                )
+            }));
+            lines.extend(placed.problems.iter().cloned());
+            if placed.project.is_none() {
+                return text(lines.join("\n"));
+            }
+            text(applied(ctx, "library", &before, lines)?)
+        }
+        _ => Err(
+            "Sounds take `op: list`, `use` or `cues`; the user adds their own in the app".into(),
+        ),
     }
 }
 

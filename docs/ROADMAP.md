@@ -141,7 +141,7 @@ None supersedes the shorts style or George's next real edit.
 | ID | Work and acceptance boundary | Size |
 |---|---|---|
 | <a id="loop-1"></a>LOOP-1 | Use accepted/rejected proposals, restored cuts and redone graphics to propose improvements to methods, styles and templates. User accepts each change; no hidden learning. | L |
-| <a id="snd-2"></a>SND-2 | Opt-in cues at graphic events: event markers, sound-peak offsets, density limits and ducking, using the style's sound set. Improve the sounds before scaling. | M/L |
+| <a id="snd-2"></a>SND-2 | Opt-in cues at graphic events. Built 21 Nov (`graphic_cues.rs`): `library` `kind: sound` `op: cues` places the style's `sound.cues` (role to library sound) where each graphic comes on (`in`, else `whoosh`), at moments its composition marks (`data-cues="0.4:pop"`) and where one held 2 s goes off (`out`). Each sound's loudest moment lands on the moment; at least 1.5 s apart and 6 a minute (entrances first); its own "Graphic cues" track ducked 8 dB under speech; one undo step that replaces the last. Left: no style has cues yet and the first ones were judged weak, so George listens and picks the sounds before a style or preset uses them. | M/L |
 | <a id="ftg-2"></a>FTG-2 | Saved selects and B-roll from own footage: reviewed batch, video-only streams, free overlay track, narration untouched, word anchors. Not urgent (1 Nov). | M |
 | <a id="ftg-3"></a>FTG-3 | Cache source descriptions/tags from sparse boards against fingerprints; OCR only if keyword search misses. | M |
 | <a id="ftg-4"></a>FTG-4 | Natural take ordering, missing/duplicate checks and script-guided assembly with alternatives in one proposal. | M |
