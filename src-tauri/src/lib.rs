@@ -23,6 +23,7 @@ pub mod face;
 pub mod faceless;
 pub mod files;
 pub mod fixtures;
+pub mod graphic_cues;
 pub mod graphics;
 pub mod ids;
 pub mod image_library;

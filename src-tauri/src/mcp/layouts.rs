@@ -23,9 +23,7 @@ pub const DESCRIPTION: &str = "Layouts: how the screen and the camera share the 
     `fromS`-`toS`; `remove` `ids`; `clear` `fromS`-`toS` (or all, or `autoOnly`); `base` \
     `layout`; `switch` to `layout` from `atS` to the next change (number-key switching); `pick` \
     from the recording, no AI (camera while the mouse rests as you talk, screen while busy, \
-    the opening line in a short; `settings` changes the rules first, e.g. `paced` holds \
-    shots 2-8 s, camera 2-5 s, then a punch-in, at most `shotsPerMinute`; `apply: false` only \
-    reports; sections made by hand stay); `settings` (`transitionMs`, rules); `save` a \
+    the opening line in a short; `settings` changes the rules first (`paced` too); `apply: false` only reports; sections made by hand stay); `settings` (`transitionMs`, rules); `save` a \
     favourite `name` from `id`, `layout` or the base; `forget` a favourite. Transitions: auto \
     (a cut between full-frame shots and on cuts, else a short move), cut or move. Seconds are \
     on the target's own timeline.";

@@ -144,6 +144,188 @@ pub fn project_sound_place_impl(
     })
 }
 
+/// What placing sounds at the graphics' moments found, and the project when it changed.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphicCuesPlaced {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<OpenedProject>,
+    /// How many graphic moments the video has.
+    pub moments: usize,
+    pub planned: Vec<crate::graphic_cues::Planned>,
+    /// Compositions whose `data-cues` couldn't be read.
+    pub problems: Vec<String>,
+}
+
+/// Sounds from the style's sound set (`cues` replace its roles for this call) at the video's
+/// graphic moments ([`crate::graphic_cues`]); `apply` false only plans. Placing is one undo
+/// step that replaces the cues placed before.
+pub fn project_graphic_cues_impl(
+    state: &AppState,
+    project_handle: &str,
+    expected_revision: u64,
+    cues: Vec<crate::style::Cue>,
+    apply: bool,
+) -> Result<GraphicCuesPlaced, String> {
+    use crate::graphic_cues as gc;
+    use crate::sequence::edit::{apply_reserving, SequenceEdit};
+    use crate::sequence::{Role, SourceRange};
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, project_handle)?;
+    let root = reader.root().to_path_buf();
+    let document = reader.document().clone();
+    let mut set = crate::style::of(&document).sound.cues.clone();
+    for cue in cues {
+        set.retain(|c| !c.role.eq_ignore_ascii_case(&cue.role));
+        set.push(cue);
+    }
+    let problems = std::cell::RefCell::new(Vec::new());
+    let moments = gc::moments(&document, |id| {
+        let html = crate::graphics::read_file(&crate::graphics::folder(&root, id), "index.html");
+        match html.map(|h| gc::marks(&h)) {
+            Ok(Ok(marks)) => marks,
+            Ok(Err(e)) => {
+                problems.borrow_mut().push(format!("{id}: {e}"));
+                Vec::new()
+            }
+            Err(_) => Vec::new(),
+        }
+    });
+    let planned = gc::plan(&moments, &set);
+    let mut out = GraphicCuesPlaced {
+        project: None,
+        moments: moments.len(),
+        planned,
+        problems: problems.into_inner(),
+    };
+    let existing = document
+        .sequence
+        .audio_tracks()
+        .find(|t| t.name == gc::TRACK_NAME && !t.locked)
+        .map(|t| t.id.clone());
+    if !apply || (out.planned.is_empty() && existing.is_none()) {
+        return Ok(out);
+    }
+    let taken: Vec<String> = document.track_ids_in_use().map(String::from).collect();
+    let mut next = document.clone();
+    let track_id = match existing {
+        Some(id) => {
+            if let Some(track) = next.sequence.tracks.iter_mut().find(|t| t.id == id) {
+                track.clips.clear();
+            }
+            id
+        }
+        None => {
+            let (sequence, id) = library::add_track(
+                &next,
+                Role::Effects,
+                gc::TRACK_NAME,
+                taken.iter().map(String::as_str),
+            )?;
+            next.sequence = sequence;
+            id
+        }
+    };
+    // Each sound once: its media in the project and where its loudest moment is.
+    let lib = library::dir();
+    let mut imported: Vec<Asset> = Vec::new();
+    let mut sounds: std::collections::BTreeMap<String, (String, u64, u64)> = Default::default();
+    let mut placed_ok = || -> Result<(), String> {
+        for p in &out.planned {
+            if sounds.contains_key(&p.sound) {
+                continue;
+            }
+            let sound = library::find(&lib, &p.sound)?;
+            let (asset, new) = library::asset_for(&next, &root, &sound)?;
+            let peak = crate::media::decode_pcm(Path::new(&sound.path), 48_000 * 10)
+                .map(|b| gc::peak_offset_us(&b.samples, b.channels, b.sample_rate))
+                .unwrap_or(0);
+            sounds.insert(
+                p.sound.clone(),
+                (asset.id.clone(), asset.duration_us.max(1), peak),
+            );
+            if new {
+                imported.push(asset.clone());
+            }
+            if next.asset(&asset.id).is_none() {
+                next.assets.push(asset);
+            }
+        }
+        let starts: Vec<(u64, &str)> = out
+            .planned
+            .iter()
+            .map(|p| {
+                let peak = sounds[&p.sound].2;
+                (p.moment.at_us.saturating_sub(peak), p.sound.as_str())
+            })
+            .collect();
+        let length_before = next.sequence.duration_us();
+        for (i, &(at, sound)) in starts.iter().enumerate() {
+            let (asset_id, length, _) = sounds[sound].clone();
+            let room = starts
+                .get(i + 1)
+                .map_or(u64::MAX, |n| n.0.saturating_sub(at));
+            let length = length.min(room);
+            if length == 0 {
+                continue;
+            }
+            let before: Vec<String> = next.sequence.clips().map(|(_, c)| c.id.clone()).collect();
+            let (placed, _) = apply_reserving(
+                &next.sequence,
+                &next.assets,
+                &SequenceEdit::PlaceAsset {
+                    asset_id: asset_id.clone(),
+                    at_us: at,
+                    track_id: Some(track_id.clone()),
+                    streams: Vec::new(),
+                    range: Some(SourceRange {
+                        start_us: 0,
+                        end_us: length,
+                    }),
+                },
+                taken.iter().map(String::as_str),
+            )?;
+            if placed.duration_us() > length_before.max(at + length) {
+                return Err("Placing the cues would have moved the video".into());
+            }
+            next.sequence = placed;
+            if length == room {
+                let fresh = next
+                    .sequence
+                    .tracks
+                    .iter_mut()
+                    .flat_map(|t| t.clips.iter_mut())
+                    .find(|c| c.asset == asset_id && !before.contains(&c.id));
+                if let Some(clip) = fresh {
+                    clip.mix.fade_out_us = gc::TAIL_FADE_US.min(length / 2);
+                }
+            }
+        }
+        next.audio
+            .tracks
+            .entry(track_id.clone())
+            .or_default()
+            .duck_db
+            .get_or_insert(gc::DUCK_DB);
+        Ok(())
+    };
+    let result = placed_ok().and_then(|()| reader.commit_document(expected_revision, next));
+    match result {
+        Ok(project) => {
+            out.project = Some(project);
+            Ok(out)
+        }
+        Err(error) => {
+            for asset in &imported {
+                crate::media_bin::remove_files(&root, asset);
+            }
+            Err(error)
+        }
+    }
+}
+
 /// Puts a library file on the timeline shown as one undo step, importing it into the project
 /// the first time (and taking an import away again when placing fails). `asset_for` finds or
 /// imports it. Answers the project, the asset's id and what `place` says.
@@ -325,5 +507,98 @@ mod tests {
             .expect("the short keeps its own edit");
         assert!(own.sequence.clip(&placed.clip_id).is_some());
         assert!(document.asset(&placed.asset_id).is_some());
+    }
+
+    #[test]
+    fn cues_land_on_a_graphics_moments_on_their_own_ducked_track_and_replace_the_last() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = crate::mcp::tests_support::lesson(dir.path());
+        let state = &host.state;
+        let (handle, revision, root) = {
+            let opened = state.opened_project.lock();
+            let reader = opened.as_ref().unwrap();
+            (
+                reader.summary.project_handle.clone(),
+                reader.summary.revision,
+                reader.root().to_path_buf(),
+            )
+        };
+        let created = crate::commands::graphics::project_graphic_create_impl(
+            state,
+            handle.clone(),
+            revision,
+            "blank".into(),
+            Some("Card".into()),
+            serde_json::Map::new(),
+            0,
+            Some(3_000_000),
+        )
+        .unwrap();
+        // The composition marks a pop 1.5 s in.
+        let folder = crate::graphics::folder(&root, &created.asset_id);
+        let html = crate::graphics::read_file(&folder, "index.html").unwrap();
+        let marked = crate::graphics::with_root_attribute(&html, "data-cues", "1.5:pop");
+        std::fs::write(folder.join("index.html"), marked).unwrap();
+        let set = vec![
+            crate::style::Cue {
+                role: "in".into(),
+                sound: "whoosh-soft".into(),
+            },
+            crate::style::Cue {
+                role: "pop".into(),
+                sound: "pop".into(),
+            },
+        ];
+        let revision = created.project.revision;
+        let dry = project_graphic_cues_impl(state, &handle, revision, set.clone(), false).unwrap();
+        assert!(dry.project.is_none());
+        let got: Vec<(u64, &str)> = dry
+            .planned
+            .iter()
+            .map(|p| (p.moment.at_us, p.sound.as_str()))
+            .collect();
+        assert_eq!(got, vec![(0, "whoosh-soft"), (1_500_000, "pop")]);
+
+        let length_before = state
+            .opened_project
+            .lock()
+            .as_ref()
+            .unwrap()
+            .document()
+            .duration_us();
+        let placed = project_graphic_cues_impl(state, &handle, revision, set.clone(), true)
+            .unwrap()
+            .project
+            .unwrap();
+        let again = project_graphic_cues_impl(state, &handle, placed.revision, set, true)
+            .unwrap()
+            .project
+            .unwrap();
+        let opened = state.opened_project.lock();
+        let document = opened.as_ref().unwrap().document();
+        assert_eq!(document.duration_us(), length_before, "nothing moved");
+        let tracks: Vec<_> = document
+            .sequence
+            .audio_tracks()
+            .filter(|t| t.name == crate::graphic_cues::TRACK_NAME)
+            .collect();
+        assert_eq!(tracks.len(), 1, "one track, used again");
+        let track = tracks[0];
+        assert_eq!(track.clips.len(), 2, "placing again replaced the first");
+        assert_eq!(
+            document.audio.tracks[&track.id].duck_db,
+            Some(crate::graphic_cues::DUCK_DB)
+        );
+        // The pop's loudest moment is on the mark: it starts a little before it.
+        let pop = &track.clips[1];
+        assert!(
+            pop.start_us <= 1_500_000 && pop.start_us > 1_000_000,
+            "{}",
+            pop.start_us
+        );
+        assert!(again.revision > placed.revision);
     }
 }

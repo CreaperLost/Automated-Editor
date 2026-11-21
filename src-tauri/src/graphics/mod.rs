@@ -689,6 +689,35 @@ pub fn root_has(html: &str, name: &str) -> bool {
         .any(|word| word == name || word.starts_with(&format!("{name}=")))
 }
 
+/// The value of the root composition element's attribute `name`, if it has one.
+pub fn root_attribute(html: &str, name: &str) -> Option<String> {
+    let at = root_at(html)?;
+    let start = html[..at].rfind('<').unwrap_or(0);
+    let end = html[at..].find('>').map_or(html.len(), |e| at + e);
+    let tag = &html[start..end];
+    let mut from = 0;
+    while let Some(found) = tag[from..].find(name) {
+        let i = from + found;
+        from = i + name.len();
+        let before = tag[..i].chars().next_back();
+        if !before.is_some_and(char::is_whitespace) {
+            continue;
+        }
+        let rest = tag[from..].trim_start();
+        let Some(rest) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let quote = rest.chars().next()?;
+        if quote == '"' || quote == '\'' {
+            return rest[1..].find(quote).map(|e| rest[1..1 + e].to_string());
+        }
+        let e = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        return Some(rest[..e].to_string());
+    }
+    None
+}
+
 /// Whether the composition says it covers only part of the frame ([`OVERLAY_ATTR`]).
 pub fn is_overlay(html: &str) -> bool {
     root_has(html, OVERLAY_ATTR)

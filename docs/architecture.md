@@ -131,6 +131,11 @@ fillers/retakes, then graphics and chapters. Reanalyse after edits; stale sugges
 - Synthesized click/whoosh telemetry cues (`sound_effects.rs`) are opt-in in audio settings,
   ducked under speech, density-limited and omitted inside graphics or removed time. Library
   sounds/music are separately imported assets with licence checks; they are not graphic audio.
+- Graphic cues (`graphic_cues.rs`, SND-2, opt-in): library sounds from the style's
+  `sound.cues` placed as clips on a "Graphic cues" effects track at each graphic's entrance,
+  its composition's `data-cues` marks and a long one's exit. Each is offset so its peak sample
+  lands on the moment, kept 1.5 s apart and 6 a minute, cut with a 40 ms fade where the next
+  starts, and the track ducks 8 dB under speech. Running it again clears that track first.
 
 ## Picture: layouts, zooms, telemetry
 
