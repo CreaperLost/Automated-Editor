@@ -553,6 +553,8 @@ fn broadsheet() -> Style {
             kind("source", "A report's own words, the key clause marked and a margin note on what it means (template quote)."),
             kind("claim", "A claim the story tests: its evidence, then the verdict stamp on the spoken word (template verdict)."),
             kind("comparison", "Numbers side by side, bars growing on the spoken word (template bars)."),
+            kind("trend", "A number over time, the line drawing to the point that matters (template chart)."),
+            kind("history", "When things happened: dated events on a rule, each marker landing in turn (template dates)."),
             kind("number", "One number the narration gives, counted up with its unit and source (template count-up)."),
             kind("sequence", "Events in order or a process, each step joined as it is said (template steps-link)."),
             kind("stack", "Things that add up, landing one on another (template items-stack)."),

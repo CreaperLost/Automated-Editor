@@ -1,0 +1,514 @@
+<!doctype html>
+<!--
+  Dated events: an AeroEdits graphic (a HyperFrames composition), built like bars. Up to five
+  events (`events`: "Date: what happened" split by "|") along an ink rule, in order; on `cue`
+  the rule draws through them and each date's marker lands in turn, the event named in
+  `highlight` (its date or words) in the accent. Across the frame at 16:9, down it at 9:16.
+  For when things happened: a story's history, a release and its recall.
+  Every change is a tween or a set on a paused GSAP timeline, so any seek draws the same frame.
+-->
+<html
+  lang="en"
+  data-composition-variables='[
+    {"id": "label", "type": "string", "label": "Title", "default": "How the recall unfolded"},
+    {"id": "events", "type": "string", "label": "Events (Date: what happened, split by |)", "default": "March 2024: The model ships|June 2025: Researchers flag the leak|2 Nov: The maker denies it|7 Nov: The recall"},
+    {"id": "highlight", "type": "string", "label": "Event in the accent (its date or words)", "default": "7 Nov"},
+    {"id": "source", "type": "string", "label": "Source tag", "default": "Source: company statements"},
+    {"id": "cue", "type": "number", "label": "The rule draws at (s)", "default": 1, "min": 0, "max": 60},
+    {"id": "background", "type": "color", "label": "Background", "default": "#FFFFFF"},
+    {"id": "text", "type": "color", "label": "Text", "default": "#1D1D1F"},
+    {"id": "accent", "type": "color", "label": "Accent", "default": "#0071E3"}
+  ]'
+>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>Dated events</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+      }
+      /* The look: AeroEdits sets these for the whole video after this block (the defaults here
+         are its "App" look). Sizes, corners, gaps and motion come from them, colours from the
+         background, text and accent variables (the brand kit's). */
+      [data-composition-id] {
+        --look-font: var(--brand-font, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif);
+        --look-align: center;
+        --look-body: 3.8vmin;
+        --look-border: 0.12vmin;
+        --look-distance: 1.8vmin;
+        --look-duration: 700;
+        --look-ease: cubic-bezier(0.22, 1, 0.36, 1);
+        --look-entry: rise;
+        --look-gap: 2.2vmin;
+        --look-gsap-ease: expo.out;
+        --look-heading: 5.2vmin;
+        --look-label: 3vmin;
+        --look-label-case: none;
+        --look-label-tracking: 0em;
+        --look-leading: 1.15;
+        --look-line-mix: 8%;
+        --look-margin: 8vw;
+        --look-muted-mix: 62%;
+        --look-out: 350;
+        --look-pad: 2.6vmin;
+        --look-radius: 2.6vmin;
+        --look-radius-small: 1.4vmin;
+        --look-shadow-mix: 5%;
+        --look-stagger: 90;
+        --look-tint-mix: 10%;
+        --look-title: 8vmin;
+        --look-title-tracking: -0.035em;
+        --look-title-weight: 650;
+        --look-wash-mix: 5%;
+        --look-muted: color-mix(in srgb, var(--text, #1D1D1F) var(--look-muted-mix), var(--background, #FFFFFF));
+        --look-line: color-mix(in srgb, var(--text, #1D1D1F) var(--look-line-mix), var(--background, #FFFFFF));
+        --look-tint: color-mix(in srgb, var(--accent, #0071E3) var(--look-tint-mix), var(--background, #FFFFFF));
+        --look-wash: color-mix(in srgb, var(--accent, #0071E3) var(--look-wash-mix), transparent);
+        --look-shadow: 0 1vmin 3vmin color-mix(in srgb, var(--text, #1D1D1F) var(--look-shadow-mix), transparent);
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        color: var(--text, #1d1d1f);
+        font-family: var(--look-font);
+        -webkit-font-smoothing: antialiased;
+      }
+      #card-back {
+        position: absolute;
+        inset: 0;
+        background: var(--background, #ffffff);
+      }
+      #card-back::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(ellipse at 15% 90%, var(--look-wash), transparent 60%),
+          radial-gradient(ellipse at 90% 5%, var(--look-wash), transparent 55%);
+      }
+      .layout {
+        position: absolute;
+        inset: 0;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: var(--look-gap);
+        padding: 0 var(--look-margin);
+        text-align: center;
+      }
+      [data-align="left"] .layout {
+        align-items: flex-start;
+        text-align: left;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 1vmin;
+        padding: 0.7vmin 1.8vmin;
+        border-radius: 99vmin;
+        background: var(--look-tint);
+        color: var(--accent, #0071e3);
+        font-size: var(--look-label);
+        font-weight: 600;
+        letter-spacing: var(--look-label-tracking);
+        text-transform: var(--look-label-case);
+      }
+      .pill:empty {
+        display: none;
+      }
+      .title {
+        margin: 0;
+        font-size: var(--look-title);
+        font-weight: var(--look-title-weight);
+        letter-spacing: var(--look-title-tracking);
+        line-height: var(--look-leading);
+        max-width: 80vw;
+        max-height: calc(var(--look-title) * var(--look-leading) * 3);
+        overflow-wrap: anywhere;
+      }
+      .muted {
+        margin: 0;
+        font-size: var(--look-body);
+        line-height: 1.35;
+        color: var(--look-muted);
+        max-width: 70vw;
+        max-height: calc(var(--look-body) * 1.35 * 2);
+        overflow-wrap: anywhere;
+      }
+      .muted:empty {
+        display: none;
+      }
+      .card {
+        box-sizing: border-box;
+        background: var(--background, #ffffff);
+        border: var(--look-border) solid var(--look-line);
+        border-radius: var(--look-radius);
+        box-shadow: var(--look-shadow);
+      }
+      /* Over a picture that shows through (over the face in a short, data-mode="over"): no
+         background of its own; the content sits on a panel in the lower part of the frame. */
+      [data-mode="over"] #card-back {
+        display: none;
+      }
+      [data-mode="over"] .layout {
+        inset: auto 6% 8% 6%;
+        padding: calc(var(--look-pad) * 1.6) calc(var(--look-pad) * 1.8);
+        border-radius: calc(var(--look-radius) * 1.3);
+        background: var(--background, #ffffff);
+        box-shadow: var(--look-shadow), 0 2vmin 6vmin color-mix(in srgb, var(--text, #1d1d1f) 22%, transparent);
+      }
+      [data-mode="over"] .layout > * {
+        zoom: 0.8;
+      }
+      [data-mode="over"] .layout .card {
+        border: none;
+        box-shadow: none;
+      }
+      @media (orientation: portrait) {
+        .layout {
+          padding: 0 calc(var(--look-margin) * 0.8);
+          gap: calc(var(--look-gap) * 1.2);
+        }
+        .pill {
+          font-size: calc(var(--look-label) * 1.35);
+          padding: 1vmin 2.4vmin;
+        }
+        .title {
+          font-size: calc(var(--look-title) * 1.35);
+          max-width: none;
+          max-height: calc(var(--look-title) * 1.35 * var(--look-leading) * 4);
+        }
+        .muted {
+          font-size: calc(var(--look-body) * 1.4);
+          max-width: none;
+          max-height: calc(var(--look-body) * 1.4 * 1.35 * 3);
+        }
+      }
+
+      /* A source tag: where a claim, number or quote on screen comes from. */
+      .tag {
+        position: absolute;
+        left: var(--look-margin);
+        bottom: calc(var(--look-margin) * 0.55);
+        font-family: var(--brand-data-font, var(--brand-body-font, var(--look-font)));
+        font-size: var(--look-label);
+        letter-spacing: 0.04em;
+        color: var(--look-muted);
+        line-height: 1.3;
+        max-width: 70vw;
+        max-height: calc(var(--look-label) * 1.3 * 2);
+        overflow-wrap: anywhere;
+      }
+      .tag:empty {
+        display: none;
+      }
+      /* In a short's split part the camera is below, not the platform's buttons. */
+      [data-mode="split"] .tag {
+        bottom: calc(var(--look-margin) * 0.55);
+      }
+      .kicker {
+        font-family: var(--brand-data-font, var(--brand-body-font, var(--look-font)));
+        font-size: var(--look-label);
+        letter-spacing: var(--look-label-tracking);
+        text-transform: var(--look-label-case);
+        color: var(--accent, #0071E3);
+        max-width: 80vw;
+        overflow-wrap: anywhere;
+      }
+      .kicker:empty {
+        display: none;
+      }
+      @media (orientation: portrait) {
+        .tag {
+          bottom: 14vh;
+          font-size: calc(var(--look-label) * 1.05);
+          max-width: 80vw;
+        }
+        .kicker {
+          font-size: calc(var(--look-label) * 1.3);
+        }
+      }
+
+      .chart {
+        --dot: 3vmin;
+        --dgap: 1.6vmin;
+        --date-size: calc(var(--look-label) * 1.45);
+        --date-h: calc(var(--date-size) * 1.3);
+        display: flex;
+        flex-direction: column;
+        gap: calc(var(--look-gap) * 1.8);
+        width: min(86vw, 164vmin);
+        text-align: left;
+      }
+      .chart .heading {
+        margin: 0;
+        font-size: calc(var(--look-heading) * 1.25);
+        font-weight: var(--look-title-weight);
+        letter-spacing: var(--look-title-tracking);
+        line-height: 1.15;
+        max-height: calc(var(--look-heading) * 1.25 * 1.15 * 2);
+        overflow-wrap: anywhere;
+        padding-bottom: calc(var(--look-gap) * 0.7);
+        border-bottom: calc(var(--look-border) * 3) solid var(--text, #1D1D1F);
+      }
+      .line {
+        position: relative;
+      }
+      /* The rule runs through the markers: across under the dates, or down beside them. */
+      .rule {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: calc(var(--date-h) + var(--dgap) + var(--dot) / 2 - var(--look-border) * 1.5);
+        height: calc(var(--look-border) * 3);
+        background: var(--text, #1D1D1F);
+        transform-origin: left center;
+      }
+      .events {
+        position: relative;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(0, 1fr);
+        gap: var(--look-gap);
+      }
+      .event {
+        display: flex;
+        flex-direction: column;
+        gap: var(--dgap);
+        min-width: 0;
+      }
+      .date {
+        font-family: var(--brand-data-font, var(--brand-body-font, var(--look-font)));
+        font-size: var(--date-size);
+        line-height: 1.3;
+        height: var(--date-h);
+        white-space: nowrap;
+        overflow: hidden;
+        letter-spacing: 0.02em;
+      }
+      .dot {
+        box-sizing: border-box;
+        width: var(--dot);
+        height: var(--dot);
+        background: var(--background, #FFFFFF);
+        border: calc(var(--look-border) * 3) solid var(--text, #1D1D1F);
+      }
+      .what {
+        font-size: calc(var(--look-body) * 1.3);
+        line-height: 1.25;
+        max-height: calc(var(--look-body) * 1.3 * 1.25 * 3);
+        overflow-wrap: anywhere;
+      }
+      .event.on .dot {
+        background: var(--accent, #0071E3);
+        border-color: var(--accent, #0071E3);
+      }
+      .event.on .date,
+      .event.on .what {
+        color: var(--accent, #0071E3);
+      }
+      @media (orientation: portrait) {
+        /* The events stay above the source tag, which sits 14% up. */
+        #layout {
+          padding-bottom: calc(14vh + var(--look-label) * 3);
+        }
+        .chart {
+          --dot: 3.8vmin;
+          --dgap: 1.8vmin;
+          --date-size: calc(var(--look-label) * 1.7);
+          width: 100%;
+          gap: calc(var(--look-gap) * 1.4);
+        }
+        .chart .heading {
+          font-size: calc(var(--look-heading) * 1.7);
+          max-height: calc(var(--look-heading) * 1.7 * 1.15 * 3);
+        }
+        .rule {
+          right: auto;
+          left: calc(var(--dot) / 2 - var(--look-border) * 1.5);
+          top: calc(var(--date-h) / 2);
+          bottom: calc(var(--look-gap) * 1.5);
+          width: calc(var(--look-border) * 3);
+          height: auto;
+          transform-origin: center top;
+        }
+        .events {
+          grid-auto-flow: row;
+          grid-auto-columns: auto;
+          gap: calc(var(--look-gap) * 1.5);
+        }
+        .event {
+          display: grid;
+          grid-template-columns: var(--dot) minmax(0, 1fr);
+          column-gap: calc(var(--look-gap) * 0.9);
+          row-gap: 0.4vmin;
+        }
+        .dot {
+          grid-column: 1;
+          grid-row: 1;
+          margin-top: calc((var(--date-h) - var(--dot)) / 2);
+        }
+        .date {
+          grid-column: 2;
+          grid-row: 1;
+        }
+        .what {
+          grid-column: 2;
+          grid-row: 2;
+          font-size: calc(var(--look-body) * 1.6);
+          max-height: calc(var(--look-body) * 1.6 * 1.25 * 2);
+        }
+      }
+      /* A short's split part is portrait but less than half as tall: the sizes of before. */
+      [data-mode="split"] #layout {
+        padding-bottom: calc(var(--look-margin) * 0.55 + var(--look-label) * 2.5);
+      }
+      [data-mode="split"] .chart {
+        --dot: 3.4vmin;
+        --dgap: 1.6vmin;
+        --date-size: calc(var(--look-label) * 1.5);
+        gap: calc(var(--look-gap) * 1.2);
+      }
+      [data-mode="split"] .chart .heading {
+        font-size: calc(var(--look-heading) * 1.4);
+        max-height: calc(var(--look-heading) * 1.4 * 1.15 * 2);
+      }
+      [data-mode="split"] .events {
+        gap: calc(var(--look-gap) * 1.1);
+      }
+      [data-mode="split"] .rule {
+        bottom: calc(var(--look-gap) * 1.1);
+      }
+      [data-mode="split"] .what {
+        font-size: calc(var(--look-body) * 1.4);
+        max-height: calc(var(--look-body) * 1.4 * 1.25 * 2);
+      }
+    </style>
+    <script src="gsap.min.js"></script>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="graphic"
+      data-start="0"
+      data-width="1920"
+      data-height="1080"
+      data-duration="6"
+    >
+      <div id="card-back"></div>
+      <div class="layout" id="layout">
+        <div class="chart" id="chart">
+          <h2 class="heading" id="label" data-var-text="label">How the recall unfolded</h2>
+          <div class="line">
+            <div class="rule" id="rule"></div>
+            <ol class="events" id="events"></ol>
+          </div>
+        </div>
+      </div>
+      <span class="tag" id="source" data-var-text="source">Source: company statements</span>
+    </div>
+    <script>
+      const root = document.getElementById("root");
+      const length = parseFloat(root.dataset.duration) || 5;
+      const vars = window.__hyperframes?.getVariables?.() || {};
+      document.querySelectorAll("[data-var-text]").forEach((el) => {
+        const value = vars[el.dataset.varText];
+        if (value != null) el.textContent = String(value);
+      });
+      const num = (id, fallback) => {
+        const value = parseFloat(vars[id]);
+        return Number.isFinite(value) ? value : fallback;
+      };
+      const text = (id, fallback = "") => String(vars[id] ?? fallback);
+      // The video's look: durations, easing and travel for every tween.
+      const style = getComputedStyle(root);
+      const token = (name, fallback) => style.getPropertyValue(`--look-${name}`).trim() || fallback;
+      const seconds = parseFloat(token("duration", "700")) / 1000;
+      const out = parseFloat(token("out", "350")) / 1000;
+      const stagger = parseFloat(token("stagger", "90")) / 1000;
+      const rise = token("distance", "1.8vmin");
+      gsap.defaults({ duration: seconds, ease: token("gsap-ease", "expo.out") });
+      root.dataset.align = token("align", "center");
+      // Text a long value would push out of its box gets smaller until it fits (see count-up).
+      function fit(el, wide = false) {
+        const unit = Math.min(innerWidth, innerHeight) / 100;
+        let size = parseFloat(getComputedStyle(el).fontSize);
+        const over = () =>
+          el.scrollHeight - el.clientHeight > size * 0.5 ||
+          (wide && el.scrollWidth > el.clientWidth + 1);
+        for (let n = 0; n < 45 && over(); n++) {
+          size *= 0.93;
+          el.style.fontSize = `${size / unit}vmin`;
+        }
+        if (el.scrollHeight > el.clientHeight + 1) el.style.maxHeight = `${el.scrollHeight}px`;
+      }
+      // When the action happens: the cue, kept inside the clip.
+      const cue = Math.min(Math.max(num("cue", 1), 0.3), Math.max(0.3, length - 1.2));
+      const tl = gsap.timeline({ paused: true });
+      const wanted = text("highlight", "7 Nov").trim().toLowerCase();
+      const events = text("events", "March 2024: The model ships|June 2025: Researchers flag the leak|2 Nov: The maker denies it|7 Nov: The recall")
+        .split("|")
+        .map((e) => {
+          const at = e.indexOf(":");
+          return at < 0 ? { date: "", what: e.trim() } : { date: e.slice(0, at).trim(), what: e.slice(at + 1).trim() };
+        })
+        .filter((e) => e.date || e.what)
+        .slice(0, 5);
+      const holder = document.getElementById("events");
+      const marks = [];
+      // The event that matters (`highlight`) is in the accent throughout.
+      events.forEach((e) => {
+        const item = document.createElement("li");
+        const on = wanted && (e.date.toLowerCase() === wanted || e.what.toLowerCase().includes(wanted));
+        item.className = on ? "event on" : "event";
+        const date = document.createElement("span");
+        date.className = "date";
+        date.textContent = e.date;
+        const dot = document.createElement("span");
+        dot.className = "dot";
+        const what = document.createElement("span");
+        what.className = "what";
+        what.textContent = e.what;
+        item.append(date, dot, what);
+        holder.appendChild(item);
+        marks.push({ dot });
+      });
+      document.querySelectorAll(".date").forEach((el) => fit(el, true));
+      document.querySelectorAll(".what").forEach((el) => fit(el));
+      fit(document.getElementById("label"));
+      tl.from("#label", { y: rise, opacity: 0 }, 0.1);
+      tl.from("#events", { opacity: 0 }, 0.15);
+      tl.from("#source", { opacity: 0 }, 0.3);
+      // On the cue the rule draws through the dates and each marker lands as it is reached.
+      const rule = document.getElementById("rule");
+      const down = rule.offsetHeight > rule.offsetWidth;
+      const step = Math.min(0.5, Math.max(0.15, (length - cue - 1) / Math.max(1, marks.length)));
+      const draw = step * Math.max(1, marks.length);
+      tl.fromTo(rule, down ? { scaleY: 0 } : { scaleX: 0 }, { ...(down ? { scaleY: 1 } : { scaleX: 1 }), duration: draw, ease: "none" }, cue);
+      marks.forEach((m, i) => {
+        const at = cue + i * step;
+        tl.fromTo(m.dot, { scale: 0 }, { scale: 1, duration: 0.25, ease: "power3.out" }, at);
+      });
+      fit(document.getElementById("source"));
+      // Full screen: cut in and out unless AeroEdits asks for an ease.
+      if (root.dataset.entrance === "ease") {
+        tl.from(["#card-back", "#layout"], { opacity: 0, duration: 0.3, ease: "power1.out" }, 0);
+        tl.to(["#card-back", "#layout"], { opacity: 0, duration: out, ease: "power1.in" }, Math.max(1.2, length - out));
+      }
+      // One paused timeline, exactly as long as the clip; HyperFrames seeks it.
+      tl.set({}, {}, length);
+      window.__timelines = window.__timelines || {};
+      window.__timelines["graphic"] = tl;
+    </script>
+  </body>
+</html>
