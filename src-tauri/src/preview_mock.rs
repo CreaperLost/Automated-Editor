@@ -120,6 +120,49 @@ fn preview_mock_writes_the_front_end_answers() {
     let mut music = music::music_library_list_impl(None).unwrap();
     music.truncate(12);
     put("music_library_list", json(music));
+    // The image library: the project's look and the sourced set, and its first group's pictures.
+    let images = images::image_library_list_impl(&state);
+    let look = images.project_look.clone().unwrap();
+    let mut catalog = json(images.catalog);
+    let ours = |v: &Value| v["look"] == look.as_str() || v["look"] == "sourced";
+    for list in ["topics", "images"] {
+        let kept: Vec<Value> = catalog[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| ours(v))
+            .cloned()
+            .collect();
+        catalog[list] = Value::Array(kept);
+    }
+    let first = catalog["topics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["look"] == look.as_str())
+        .unwrap();
+    let group = format!(
+        "{}/{}/",
+        first["id"].as_str().unwrap(),
+        first["groups"][0]["id"].as_str().unwrap()
+    );
+    let ids: Vec<String> = catalog["images"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v["id"].as_str())
+        .filter(|id| id.starts_with(&group))
+        .take(6)
+        .map(String::from)
+        .collect();
+    put(
+        "image_library_pictures",
+        json(images::image_library_pictures_impl(ids).unwrap()),
+    );
+    put(
+        "image_library_list",
+        serde_json::json!({ "catalog": catalog, "projectLook": look }),
+    );
     put(
         "joins_list",
         json(crate::joins::view_for(state.opened_project.lock().as_ref().unwrap()).unwrap()),

@@ -1,5 +1,6 @@
 // Screenshots of the preview build (`npm run build:preview`, mocked backend) at phone and
-// desktop widths: the start screen, the editor with the canned project, and the Export dialog.
+// desktop widths: the start screen, the editor with the canned project, the Images panel and the
+// Export dialog.
 //
 //   node scripts/preview-screenshots.mjs [out-dir=preview-screenshots] [build-dir=dist-preview]
 //
@@ -63,8 +64,12 @@ try {
     await recent.click();
     await page.getByRole("button", { name: /export/i }).first().waitFor({ timeout: 15000 });
     await shot("2-editor");
+    // The image library, with a picture picked.
+    await page.locator(".dv-tab", { hasText: /^Images$/ }).first().click();
+    await page.locator("[role=listitem]").nth(1).click();
+    await shot("3-images");
     await page.getByRole("button", { name: /export/i }).first().click();
-    await shot("3-export");
+    await shot("4-export");
     } catch (error) {
       problems.push(`${name}: ${error.message.split("\n")[0]}`);
       await shot("failed");

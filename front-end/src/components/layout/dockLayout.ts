@@ -8,6 +8,7 @@ export const DOCK_PANELS = {
   media: { title: "Media", minimumWidth: 220, minimumHeight: 110 },
   sounds: { title: "Sounds", minimumWidth: 220, minimumHeight: 160 },
   music: { title: "Music", minimumWidth: 220, minimumHeight: 160 },
+  images: { title: "Images", minimumWidth: 220, minimumHeight: 160 },
   zoom: { title: "Zoom", minimumWidth: 220, minimumHeight: 160 },
   chapters: { title: "Chapters", minimumWidth: 220, minimumHeight: 110 },
   agent: { title: "Agent", minimumWidth: 260, minimumHeight: 160 },
@@ -63,6 +64,7 @@ const SHORTS_PANELS: readonly DockPanelId[] = [
   "media",
   "sounds",
   "music",
+  "images",
   "agent",
 ];
 
@@ -78,6 +80,7 @@ const FACELESS_PANELS: readonly DockPanelId[] = [
   "media",
   "sounds",
   "music",
+  "images",
   "agent",
 ];
 
@@ -109,9 +112,9 @@ function addMedia(api: DockviewApi) {
   addAgent(api);
 }
 
-/// The sound effects and music libraries, behind `beside`.
+/// The sound effects, music and image libraries, behind `beside`.
 function addLibraries(api: DockviewApi, beside: DockPanelId) {
-  for (const id of ["sounds", "music"] as const) {
+  for (const id of ["sounds", "music", "images"] as const) {
     api.addPanel({ ...panel(id), position: { referencePanel: beside, direction: "within" }, inactive: true });
   }
 }
@@ -159,7 +162,7 @@ function applyShortsLayout(api: DockviewApi) {
   api.addPanel({ ...panel("shorts"), position: { referencePanel: "preview", direction: "left" }, initialWidth: 340 });
   api.addPanel({ ...panel("transcript"), position: { referencePanel: "shorts", direction: "below" }, initialHeight: 420 });
   api.addPanel({ ...panel("shortLook"), position: { referencePanel: "preview", direction: "right" }, initialWidth: 320 });
-  for (const id of ["shortStyle", "jumpCuts", "noises", "media", "sounds", "music", "agent"] as const) {
+  for (const id of ["shortStyle", "jumpCuts", "noises", "media", "sounds", "music", "images", "agent"] as const) {
     api.addPanel({ ...panel(id), position: { referencePanel: "shortLook", direction: "within" }, inactive: true });
   }
   api.addPanel({ ...panel("timeline"), position: { direction: "below" }, initialHeight: 260 });
@@ -241,6 +244,11 @@ export function restoreLayout(api: DockviewApi, workspace: Workspace = "edit") {
       api.fromJSON(JSON.parse(stored));
       const ids = new Set(api.panels.map((p) => p.id));
       const wanted = workspacePanels(workspace);
+      // Layouts from before the image library was a panel: beside the music.
+      if (!ids.has("images") && ids.has("music")) {
+        api.addPanel({ ...panel("images"), position: { referencePanel: "music", direction: "within" }, inactive: true });
+        ids.add("images");
+      }
       if (isShortsWorkspace(workspace) || workspace === "faceless") {
         if (wanted.every((id) => ids.has(id)) && ids.size === wanted.length) return;
         throw new Error("Workspace layout without its panels");
@@ -256,6 +264,7 @@ export function restoreLayout(api: DockviewApi, workspace: Workspace = "edit") {
         addLibraries(api, "inspector");
         ids.add("sounds");
         ids.add("music");
+        ids.add("images");
       }
       if (!ids.has("zoom") && ids.has("inspector")) {
         addZoom(api);

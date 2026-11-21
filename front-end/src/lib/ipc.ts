@@ -118,6 +118,7 @@ import {
   TakeShortMade,
   FootageChange,
   ShortGraphicFrom,
+  ImageLibraryView,
   LibrarySound,
   SoundPlaced,
   LibraryTrack,
@@ -791,6 +792,11 @@ export const api = {
   projectMediaRemove: (projectHandle: string, expectedRevision: number, assetId: string) =>
     invokeTauri<OpenedProject>("project_media_remove", { projectHandle, expectedRevision, assetId }),
   /** The sound effects library, or the sounds matching `query`. */
+  imageLibraryList: () => invokeTauri<ImageLibraryView>("image_library_list"),
+  /** The ids of the pictures matching `query`, best first, in `look` and the sourced set. */
+  imageLibrarySearch: (query: string, look: string | null) => invokeTauri<string[]>("image_library_search", { query, look }),
+  /** Library pictures as data URLs (at most 60 at once). */
+  imageLibraryPictures: (ids: string[]) => invokeTauri<{ id: string; src: string }[]>("image_library_pictures", { ids }),
   soundLibraryList: (query?: string) => invokeTauri<LibrarySound[]>("sound_library_list", { query: query || null }),
   /** A library sound as a data URL to play. */
   soundLibraryPreview: (id: string) => invokeTauri<string>("sound_library_preview", { id }),

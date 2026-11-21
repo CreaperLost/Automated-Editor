@@ -277,6 +277,10 @@ Still pictures for graphics, built into the app (`src-tauri/src/image_library.rs
   explainers, 245), `light`, `dark`, `editorial`, `neon` (the same 60 subjects each), and
   `sourced` (real flags, maps, wordmarks, portraits; shown with every look, marked `*`). A style
   takes the look whose `styles` list names it, else the nearest by background and accent colour.
+- **Images panel** (`ImagesPage.tsx`, beside Sounds and Music): the project's look (or another)
+  by group, the sourced set after it, search, and a picture's details, licence and Copy id. The
+  agent puts a picture into a graphic; the panel doesn't. Commands `image_library_list`,
+  `image_library_search`, `image_library_pictures` (`commands/images.rs`).
 - **Agent:** `library` `kind: image`: `list` (the project style's look unless `look`; `query`
   matches words), `show` (a board of a picture or a group), `use` (copies the picture into a
   graphic as `images/<look>-<name>`, one undo step).
@@ -336,7 +340,7 @@ The Python Explainer repository informed the port; AeroEdits does not run it or 
   time, note >12 s without change, reading load >3 words/s, repeated kinds/templates and
   starts between words; `fill` stretches graphics to meet the next in one undo step. Results
   go to `faceless/beats.json`. General media import supports images/screenshots; integrated
-  image generation/intake remains FCL-6. The built-in image catalogue has no dedicated browser.
+  image generation/intake remains FCL-6.
 - **Broadsheet:** paper/ink/vermilion, Newsreader and IBM Plex Mono, square corners and restrained
   motion; four dedicated parts (`headline`, `quote`, `verdict`, `bars`) plus existing templates
   or agent-authored parts. Image look follows the style. Other dedicated parts remain FCL-5;

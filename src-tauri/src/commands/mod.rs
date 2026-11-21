@@ -18,6 +18,7 @@ pub mod effects;
 pub mod faceless;
 pub mod graphics;
 pub mod history;
+pub mod images;
 pub mod music;
 pub mod noises;
 pub mod preset;
