@@ -52,6 +52,7 @@ pub mod shorts;
 mod smoke;
 pub mod sound_effects;
 pub mod sound_library;
+pub mod source_notes;
 pub mod source_search;
 pub mod spend;
 pub mod style;

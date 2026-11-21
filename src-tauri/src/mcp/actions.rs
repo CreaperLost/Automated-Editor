@@ -3412,6 +3412,75 @@ pub struct MediaImportArgs {
     /// Licences of music and sound files (after importing, or alone).
     #[serde(default)]
     pub licences: Vec<MediaLicenceArgs>,
+    /// What footage shows, from its `source_search` board: kept for every project by the
+    /// media's bytes, outside the undo history; replaces its notes.
+    #[serde(default)]
+    pub notes: Vec<MediaNotesArgs>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaNotesArgs {
+    /// The media id.
+    pub media: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Moments worth finding, at the board's times.
+    #[serde(default)]
+    pub moments: Vec<MediaMomentArgs>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaMomentArgs {
+    /// Seconds on the media's own clock.
+    pub at_s: f64,
+    pub text: String,
+}
+
+/// Saves footage notes for `source_search`.
+fn save_notes(ctx: &Ctx, notes: Vec<MediaNotesArgs>) -> Result<Vec<String>, String> {
+    let dir = crate::source_notes::dir(&ctx.host.config_dir());
+    let mut lines = Vec::new();
+    for given in notes {
+        let (asset, root) = with_reader(ctx.state, |reader| {
+            let asset = reader
+                .document()
+                .asset(&given.media)
+                .cloned()
+                .ok_or_else(|| format!("No media {}", given.media))?;
+            Ok((asset, reader.root().to_path_buf()))
+        })?;
+        let moments = given
+            .moments
+            .into_iter()
+            .map(|m| {
+                Ok(crate::source_notes::NoteMoment {
+                    at_us: to_us(m.at_s)?,
+                    text: m.text,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let notes = crate::source_notes::Notes {
+            description: given.description,
+            tags: given.tags,
+            moments,
+            name: asset.name.clone(),
+            saved_at: chrono::Utc::now().to_rfc3339(),
+        };
+        let print = crate::source_notes::fingerprint(&root, &asset)?;
+        crate::source_notes::save(&dir, &print, &notes)?;
+        lines.push(format!(
+            "Kept notes on {} ({}): {} and {}; `source_search` finds them in any project.",
+            asset.id,
+            asset.name,
+            plural(notes.tags.len(), "tag"),
+            plural(notes.moments.len(), "moment")
+        ));
+    }
+    Ok(lines)
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -3440,13 +3509,21 @@ pub struct MediaRoleArgs {
 
 fn media_import(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: MediaImportArgs = params(args)?;
-    if args.paths.is_empty() && args.roles.is_empty() && args.licences.is_empty() {
-        return Err("Give `paths` to import, `roles` or `licences` to set, or both".into());
+    if args.paths.is_empty()
+        && args.roles.is_empty()
+        && args.licences.is_empty()
+        && args.notes.is_empty()
+    {
+        return Err("Give `paths` to import, or `roles`, `licences` or `notes` to set".into());
     }
     let before = opened(ctx)?;
+    if args.paths.is_empty() && args.roles.is_empty() && args.licences.is_empty() {
+        return text(save_notes(ctx, args.notes)?.join("\n"));
+    }
     if args.paths.is_empty() {
         let mut lines = set_roles(ctx, args.roles)?;
         lines.extend(set_licences(ctx, args.licences)?);
+        lines.extend(save_notes(ctx, args.notes)?);
         return text(applied(ctx, "media_import", &before, lines)?);
     }
     let known: std::collections::HashSet<String> = with_reader(ctx.state, |reader| {
@@ -3481,6 +3558,7 @@ fn media_import(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     }
     lines.extend(set_roles(ctx, args.roles)?);
     lines.extend(set_licences(ctx, args.licences)?);
+    lines.extend(save_notes(ctx, args.notes)?);
     text(applied(ctx, "media_import", &before, lines)?)
 }
 
@@ -6175,6 +6253,71 @@ mod tests {
         assert!(back.contains("Length 0:03"), "{back}");
         let captions = through_the_server("settings", json!({ "area": "captions" })).unwrap();
         assert!(captions.contains("\"enabled\":false"), "{captions}");
+    }
+
+    #[test]
+    fn footage_is_described_once_from_its_board_and_found_by_its_notes() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, key) = lesson(dir.path());
+        let _ = key;
+        let ctx = Ctx::new(&host, "claude-code", false);
+        let screen = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test/fixtures/screen.mp4")
+            .canonicalize()
+            .unwrap();
+        let imported = call(
+            &ctx,
+            "media_import",
+            json!({ "paths": [screen.display().to_string()] }),
+        )
+        .unwrap();
+        let media = imported
+            .split(" as ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .unwrap()
+            .to_string();
+        let board = (crate::mcp::tools::find("source_search").unwrap().run)(
+            &ctx,
+            json!({ "media": media }),
+        )
+        .unwrap();
+        let Output::Text(first) = &board[0] else {
+            panic!("no text")
+        };
+        assert!(first.contains("has no notes yet"), "{first}");
+        let Some(Output::Jpeg(jpeg)) = board.get(1) else {
+            panic!("no board")
+        };
+        if let Ok(out) = std::env::var("FOOTAGE_BOARD_OUT") {
+            std::fs::write(out, jpeg).unwrap();
+        }
+
+        let kept = call(
+            &ctx,
+            "media_import",
+            json!({ "notes": [{ "media": media, "description": "A settings screen",
+                "tags": ["preferences"], "moments": [{ "atS": 2.0, "text": "Dark mode toggle" }] }] }),
+        )
+        .unwrap();
+        assert!(kept.contains("Kept notes on"), "{kept}");
+        let found = call(&ctx, "source_search", json!({ "query": "dark toggle" })).unwrap();
+        assert!(
+            found.contains(&media) && found.contains("at 0:02.00: Dark mode toggle"),
+            "{found}"
+        );
+        let again = (crate::mcp::tools::find("source_search").unwrap().run)(
+            &ctx,
+            json!({ "media": media }),
+        )
+        .unwrap();
+        let Output::Text(again) = &again[0] else {
+            panic!("no text")
+        };
+        assert!(again.contains("don't describe it again"), "{again}");
     }
 
     #[test]

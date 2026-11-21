@@ -398,6 +398,16 @@ pictures, generated thumbnails and online transcription (cost unknown, so kept a
 no project (story discovery), the AI review passes and the agent's own tokens are not counted,
 and the report says so.
 
+## Footage notes
+
+`source_notes.rs` (FTG-3): what footage shows, in the agent's words, kept in the app's settings
+folder (`source-notes/<fingerprint>.json`) rather than the project, so every project shares
+them. The fingerprint hashes each file's size and first and last 256 KB (a recording's
+segments, else the imported file), not its name or folder. `source_search` with `media` draws a
+12-frame board from the timeline thumbnails' cache and shows the notes; with `query` it adds
+notes lines (description and tags, or a moment with the source's tags) matching every word by
+its start. `media_import` `notes` replaces a media's notes; nothing here is in the undo history.
+
 ## Check, storyboard, export
 
 - **Exports** (`export/deliveries.rs`, DLV-2): one worker runs the queued exports in order; a
