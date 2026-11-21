@@ -71,7 +71,7 @@ pub fn project_clip_thumbnails_impl(
 }
 
 /// The thumbnail at `at_us` of `source`, from the cache or made now.
-fn thumbnail(
+pub(crate) fn thumbnail(
     root: &Path,
     asset_id: &str,
     source: &StreamSource,
