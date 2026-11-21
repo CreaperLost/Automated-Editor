@@ -49,6 +49,156 @@ pub struct EditParams {
     /// stays), on a free overlay track.
     #[serde(default)]
     pub broll: Vec<BrollItem>,
+    /// Imported takes put together, after `edits`.
+    #[serde(default)]
+    pub assemble: Option<AssembleParams>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AssembleParams {
+    /// Lines in order, each from the take that says it best (trimmed to it); alternatives and
+    /// missing lines are listed. None: whole takes in name order (2 before 10), a repeated
+    /// take left for the later one.
+    #[serde(default)]
+    pub script: Vec<String>,
+    /// Media ids. Default: every transcribed imported file not on the timeline.
+    #[serde(default)]
+    pub media: Vec<String>,
+    /// Default: the end.
+    #[serde(default)]
+    pub at_s: Option<f64>,
+}
+
+/// The takes `params` names (or the default ones) in `reader`'s project.
+fn takes(
+    reader: &ProjectReader,
+    params: &AssembleParams,
+) -> Result<Vec<crate::assemble::Take>, String> {
+    use crate::sequence::{AssetKind, StreamKind};
+    use crate::transcript::{store, WordKind};
+    let document = reader.document();
+    let words_of = |asset: &crate::sequence::Asset| {
+        asset
+            .streams
+            .iter()
+            .filter(|s| s.kind == StreamKind::Sound)
+            .find_map(|s| {
+                store::load_transcript(reader.root(), &format!("{}.{}", asset.id, s.id))
+                    .ok()
+                    .flatten()
+            })
+            .map(|t| {
+                t.words
+                    .into_iter()
+                    .filter(|w| w.kind == WordKind::Word)
+                    .map(|w| {
+                        (
+                            crate::source_search::normalize(&w.text),
+                            w.source_start_us,
+                            w.source_end_us,
+                        )
+                    })
+                    .filter(|w| !w.0.is_empty())
+                    .collect::<Vec<_>>()
+            })
+    };
+    let take =
+        |asset: &crate::sequence::Asset, words: Vec<(String, u64, u64)>| crate::assemble::Take {
+            media: asset.id.clone(),
+            name: asset.name.clone(),
+            duration_us: asset.duration_us,
+            words,
+        };
+    let playable =
+        |a: &crate::sequence::Asset| matches!(a.kind, AssetKind::Video | AssetKind::Audio);
+    if !params.media.is_empty() {
+        return params
+            .media
+            .iter()
+            .map(|id| {
+                let asset = document
+                    .asset(id)
+                    .filter(|a| playable(a))
+                    .ok_or_else(|| format!("No imported video or sound {id}"))?;
+                Ok(take(asset, words_of(asset).unwrap_or_default()))
+            })
+            .collect();
+    }
+    let placed: std::collections::HashSet<&str> = document
+        .sequence
+        .clips()
+        .map(|(_, c)| c.asset.as_str())
+        .collect();
+    let found: Vec<_> = document
+        .assets
+        .iter()
+        .filter(|a| playable(a) && !placed.contains(a.id.as_str()))
+        .filter_map(|a| words_of(a).filter(|w| !w.is_empty()).map(|w| take(a, w)))
+        .collect();
+    if found.is_empty() {
+        return Err("No transcribed imported takes off the timeline: name them in `media`".into());
+    }
+    Ok(found)
+}
+
+/// The placements that put the takes together, back to back from `at_s` (else the end), and
+/// what the user reads about them.
+fn assemble_edits(
+    reader: &ProjectReader,
+    before: &[SequenceEdit],
+    params: &AssembleParams,
+) -> Result<(Vec<SequenceEdit>, Vec<String>), String> {
+    use crate::sequence::edit::apply_reserving;
+    use crate::sequence::SourceRange;
+    let takes = takes(reader, params)?;
+    let plan = if params.script.is_empty() {
+        crate::assemble::by_order(&takes)
+    } else {
+        if takes.iter().all(|t| t.words.is_empty()) {
+            return Err("None of those takes is transcribed: transcribe them first".into());
+        }
+        crate::assemble::by_script(&takes, &params.script)
+    };
+    if plan.pieces.is_empty() {
+        return Err(format!("Nothing to place. {}", plan.report.join(". ")));
+    }
+    let document = reader.document();
+    let taken: Vec<String> = document.track_ids_in_use().map(String::from).collect();
+    let mut sequence = document.sequence.clone();
+    for edit in before {
+        sequence = apply_reserving(
+            &sequence,
+            &document.assets,
+            edit,
+            taken.iter().map(String::as_str),
+        )?
+        .0;
+    }
+    let mut at = match params.at_s {
+        Some(s) if s.is_finite() && s >= 0.0 => (s * 1e6).round() as u64,
+        Some(_) => return Err("`atS` is seconds from the start".into()),
+        None => sequence.duration_us(),
+    };
+    let edits = plan
+        .pieces
+        .iter()
+        .map(|p| {
+            let edit = SequenceEdit::PlaceAsset {
+                asset_id: p.media.clone(),
+                at_us: at,
+                track_id: None,
+                streams: Vec::new(),
+                range: Some(SourceRange {
+                    start_us: p.start_us,
+                    end_us: p.end_us,
+                }),
+            };
+            at += p.end_us - p.start_us;
+            edit
+        })
+        .collect();
+    Ok((edits, plan.report))
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -304,8 +454,8 @@ pub fn propose_edit(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 .map_err(|e| format!("Edit {} is not a timeline edit: {e}", index + 1))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    if edits.is_empty() && args.broll.is_empty() {
-        return Err("Give `edits` or `broll`".into());
+    if edits.is_empty() && args.broll.is_empty() && args.assemble.is_none() {
+        return Err("Give `edits`, `broll` or `assemble`".into());
     }
     let at = args
         .broll
@@ -320,6 +470,12 @@ pub fn propose_edit(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let agent = ctx.agent.clone();
     propose(ctx, |reader, proposals| {
         let mut edits = edits;
+        let mut report = Vec::new();
+        if let Some(assemble) = &args.assemble {
+            let (placed, said) = assemble_edits(reader, &edits, assemble)?;
+            edits.extend(placed);
+            report = said;
+        }
         let broll = broll_edits(reader, &notes_dir, &edits, &args.broll, &at)?;
         edits.extend(broll);
         proposals::propose_edits(
@@ -329,6 +485,7 @@ pub fn propose_edit(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
             args.expected_revision,
             edits,
             &args.reason,
+            report,
         )
     })
 }

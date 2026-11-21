@@ -6341,6 +6341,117 @@ mod tests {
     }
 
     #[test]
+    fn takes_are_put_together_from_a_script_with_the_missing_line_listed() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, key) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", true);
+        let clip =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../test/fixtures/clip.mp4");
+        let paths: Vec<String> = ["take 2.mp4", "take 10.mp4"]
+            .iter()
+            .map(|name| {
+                let to = dir.path().join(name);
+                std::fs::copy(&clip, &to).unwrap();
+                to.display().to_string()
+            })
+            .collect();
+        call(&ctx, "media_import", json!({ "paths": paths })).unwrap();
+        let root = with_reader(ctx.state, |reader| Ok(reader.root().to_path_buf())).unwrap();
+        let lesson_transcript = crate::transcript::store::load_transcript(&root, &key)
+            .unwrap()
+            .unwrap();
+        let (revision, length, ids) = with_reader(ctx.state, |r| {
+            let d = r.document();
+            let ids: Vec<(String, String, String)> = d
+                .assets
+                .iter()
+                .filter(|a| a.name.starts_with("take"))
+                .map(|a| {
+                    let sound = a
+                        .streams
+                        .iter()
+                        .find(|s| s.kind == StreamKind::Sound)
+                        .unwrap();
+                    (
+                        a.name.clone(),
+                        a.id.clone(),
+                        format!("{}.{}", a.id, sound.id),
+                    )
+                })
+                .collect();
+            Ok((d.revision, d.duration_us(), ids))
+        })
+        .unwrap();
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        for (name, _, stream) in &ids {
+            let said = if name.starts_with("take 10") {
+                "welcome everyone to the course"
+            } else {
+                "um now open the settings panel"
+            };
+            let mut transcript = lesson_transcript.clone();
+            transcript.track_id = stream.clone();
+            transcript.words = said
+                .split(' ')
+                .enumerate()
+                .map(|(i, text)| crate::transcript::TranscriptWord {
+                    id: format!("w-{i}"),
+                    text: text.into(),
+                    kind: crate::transcript::WordKind::Word,
+                    source_start_us: i as u64 * 500_000,
+                    source_end_us: i as u64 * 500_000 + 400_000,
+                    confidence: None,
+                    speaker: None,
+                })
+                .collect();
+            crate::transcript::store::save_transcript(&root, &transcript).unwrap();
+        }
+        let id_of = |prefix: &str| {
+            ids.iter()
+                .find(|i| i.0.starts_with(prefix))
+                .unwrap()
+                .1
+                .clone()
+        };
+        let answer = call(
+            &ctx,
+            "propose_edit",
+            json!({ "expectedRevision": revision, "reason": "Put the takes together",
+                "assemble": { "script": ["Welcome everyone to the course.",
+                    "Open the settings panel.", "Then export it."] } }),
+        )
+        .unwrap();
+        assert!(
+            answer.contains("ccepted") && answer.contains("Missing: line 3"),
+            "{answer}"
+        );
+        let placed = with_reader(ctx.state, |r| {
+            let mut placed: Vec<(u64, u64, u64, String)> = r
+                .document()
+                .sequence
+                .video_tracks()
+                .flat_map(|t| t.clips.iter())
+                .filter(|c| c.start_us >= length)
+                .map(|c| (c.start_us, c.in_us, c.duration_us, c.asset.clone()))
+                .collect();
+            placed.sort();
+            Ok(placed)
+        })
+        .unwrap();
+        // Line 1 from take 10 (0-2.4 s with room), then line 2 from take 2 trimmed past "um now".
+        assert_eq!(
+            placed,
+            vec![
+                (length, 0, 2_550_000, id_of("take 10")),
+                (length + 2_550_000, 900_000, 2_150_000, id_of("take 2")),
+            ]
+        );
+    }
+
+    #[test]
     fn footage_is_described_once_from_its_board_and_found_by_its_notes() {
         if !crate::media::ffmpeg::available() {
             return;
