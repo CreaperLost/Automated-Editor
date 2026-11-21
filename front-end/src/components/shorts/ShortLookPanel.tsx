@@ -16,6 +16,7 @@ import {
   useShortsStore,
 } from "../../stores/shortsStore";
 import { InspectorSection } from "../inspector/InspectorSection";
+import { ShortPresetMarks } from "../presets/PresetMarks";
 import { LayoutsSection } from "../layouts/LayoutsSection";
 import { CameraFramingControl } from "./CameraFraming";
 import { TakeFootage } from "./TakeFootage";
@@ -102,6 +103,10 @@ export const ShortLookPanel: React.FC = () => {
           )}
 
           {selected.take && <TakeFootage project={project} short={selected} viewing={viewing} />}
+
+          <div className="px-4 pt-3">
+            <ShortPresetMarks short={selected} layout={layout} />
+          </div>
 
           {/* The layouts of the short's own timeline (in the store while viewing it). */}
           {playable ? (

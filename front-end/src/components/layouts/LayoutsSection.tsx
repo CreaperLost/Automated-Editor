@@ -4,6 +4,7 @@ import { InspectorSection, MoreSettings, RangeRow } from "../inspector/Inspector
 import { Button, Field, Segmented, Switch, cn } from "../ui";
 import { LayoutEditor } from "./LayoutEditor";
 import { LayoutThumb } from "./LayoutThumb";
+import { PresetMarks } from "../presets/PresetMarks";
 import { useProjectStore } from "../../stores/projectStore";
 import {
   changeLayouts,
@@ -164,6 +165,8 @@ export const LayoutsSection: React.FC = () => {
 
   return (
     <InspectorSection id="layouts" title="Layouts" icon={LayoutGrid}>
+      {/* The video's layouts follow its preset; a short's start from its own kind's, not listed here. */}
+      {!project.shortView && <PresetMarks part="layouts" />}
       <p className="text-meta text-studio-500">
         {selected
           ? "Pick a layout for the selected section, or change it below."

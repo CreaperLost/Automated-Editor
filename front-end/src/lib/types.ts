@@ -1098,6 +1098,9 @@ export interface PresetsView {
   changed: number;
   /** The preset's value of every setting, by part. */
   inherited: Partial<Record<PresetPart, Record<string, unknown>>>;
+  /** The look a short starts from in its preset (its hand framing and graphic places left out):
+   *  `shorts` for shorts made from a take, `clips` for clips cut from the video. */
+  shortLooks: Partial<Record<"shorts" | "clips", Record<string, unknown>>>;
   folder: string;
 }
 
