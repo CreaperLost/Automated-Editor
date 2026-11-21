@@ -23,6 +23,7 @@ function tone(section: LayoutSection): string {
     case "sideBySide":
       return "bg-caption/70 border-caption";
     case "bubble":
+    case "presenter":
       return "bg-zoom/70 border-zoom";
     default:
       return "bg-studio-600/50 border-studio-500";

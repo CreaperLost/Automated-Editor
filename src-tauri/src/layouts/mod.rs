@@ -41,6 +41,8 @@ pub const MIN_SIDE_PCT: f32 = 20.0;
 pub const MAX_SIDE_PCT: f32 = 80.0;
 pub const MIN_CAMERA_ONLY_PCT: f32 = 40.0;
 pub const MAX_PUNCH_IN: f32 = 2.0;
+pub const MIN_PRESENTER_PCT: f32 = 40.0;
+pub const MAX_PRESENTER_PCT: f32 = 90.0;
 
 /// Where a bubble sits: a spot on a 3x3 grid, or anywhere (`custom`).
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -193,6 +195,28 @@ pub struct ScreenOnly {
     pub screen: ScreenFit,
 }
 
+/// The person from the camera, cut out of their room (from their matte), standing on the
+/// bottom edge in front of the screen.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Presenter {
+    /// On the right; false stands them on the left.
+    pub right: bool,
+    /// Their picture's height, as a percent of the canvas height (40 to 90).
+    pub size_pct: f32,
+    pub screen: ScreenFit,
+}
+
+impl Default for Presenter {
+    fn default() -> Self {
+        Self {
+            right: true,
+            size_pct: 60.0,
+            screen: ScreenFit::Auto,
+        }
+    }
+}
+
 /// How the screen and the camera share the frame.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -201,6 +225,7 @@ pub enum Layout {
     SideBySide(SideBySide),
     CameraOnly(CameraOnly),
     ScreenOnly(ScreenOnly),
+    Presenter(Presenter),
 }
 
 impl Default for Layout {
@@ -241,6 +266,13 @@ impl Layout {
                     return Err("A punch-in is 1x to 2x".into());
                 }
             }
+            Layout::Presenter(p) => {
+                if !in_range(p.size_pct, MIN_PRESENTER_PCT, MAX_PRESENTER_PCT) {
+                    return Err(format!(
+                        "The presenter is {MIN_PRESENTER_PCT} to {MAX_PRESENTER_PCT} % of the height"
+                    ));
+                }
+            }
             Layout::ScreenOnly(_) => {}
         }
         Ok(())
@@ -254,6 +286,7 @@ impl Layout {
             Layout::CameraOnly(c) if c.punch_in > 1.0 => "Punch-in",
             Layout::CameraOnly(_) => "Camera only",
             Layout::ScreenOnly(_) => "Screen only",
+            Layout::Presenter(_) => "Presenter",
         }
     }
 
@@ -298,6 +331,7 @@ pub fn built_ins() -> Vec<(&'static str, Layout)> {
             }),
         ),
         ("Screen only", Layout::ScreenOnly(ScreenOnly::default())),
+        ("Presenter", Layout::Presenter(Presenter::default())),
     ]
 }
 
@@ -406,6 +440,13 @@ impl Default for LayoutTrack {
 }
 
 impl LayoutTrack {
+    /// Its base or a section is a presenter, which needs the camera's mattes.
+    pub fn has_presenter(&self) -> bool {
+        std::iter::once(&self.base)
+            .chain(self.sections.iter().filter_map(|s| s.layout.as_ref()))
+            .any(|l| matches!(l, Layout::Presenter(_)))
+    }
+
     /// A short's: camera on top of the screen at 35 %, and picking tuned for a short.
     pub fn for_short() -> Self {
         Self {

@@ -263,6 +263,7 @@ impl Facts {
                     crate::layouts::Layout::ScreenOnly(_) => "screen",
                     crate::layouts::Layout::SideBySide(_) => "split",
                     crate::layouts::Layout::Bubble(_) => "screen+cam",
+                    crate::layouts::Layout::Presenter(_) => "screen+presenter",
                 };
                 (p.start_us, p.end_us, kind)
             })

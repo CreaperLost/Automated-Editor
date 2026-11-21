@@ -500,7 +500,8 @@ pub fn ensure(root: &Path, asset: &Asset, stream: &str, retry: bool) {
 const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(1200);
 
 /// Waits until every camera of `document` has its mattes, finding the missing ones, when its
-/// style draws the camera's person over another background; `progress` gets the share found.
+/// style draws the camera's person over another background or a layout is a presenter;
+/// `progress` gets the share found.
 /// Gives up when `cancel` is set or after twenty minutes. True when it had to wait.
 pub fn wait_for_mattes(
     root: &Path,
@@ -508,7 +509,9 @@ pub fn wait_for_mattes(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(f32),
 ) -> bool {
-    if document.layout.webcam_backdrop == crate::style::CameraBackdrop::None || !compiled_in() {
+    let needed = document.layout.webcam_backdrop != crate::style::CameraBackdrop::None
+        || document.layouts.has_presenter();
+    if !needed || !compiled_in() {
         return false;
     }
     let cameras: Vec<(Asset, String)> = super::camera_streams(document)

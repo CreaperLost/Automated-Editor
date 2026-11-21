@@ -89,11 +89,13 @@ pub enum LayerEffect {
     },
     /// The camera's person over another background, from the layer's `matte` (FX-1): `mode`
     /// 1 blurs the rest (blocks `block` across, as [`LayerEffect::Blur`]), 2 leaves it out
-    /// (what is behind shows), 3 fills it with `color` (RGB, 0 to 1).
+    /// (what is behind shows), 3 fills it with `color` (RGB, 0 to 1). `strength` (0 to 1) is
+    /// how far the rest has gone, for a move into or out of a presenter.
     Backdrop {
         mode: u32,
         block: [f32; 2],
         color: [f32; 3],
+        strength: f32,
     },
 }
 
@@ -537,12 +539,14 @@ impl Scene {
     }
 
     /// Puts the last camera's person over `backdrop` (blurred, left out or `color`), from
-    /// `matte`. Left out, the camera loses its ring and shadow: only the person shows.
+    /// `matte`, `strength` of the way (1 in full). Left out in full, the camera loses its ring
+    /// and shadow: only the person shows.
     pub fn camera_backdrop(
         &mut self,
         backdrop: crate::style::CameraBackdrop,
         color: &str,
         matte: std::sync::Arc<Vec<u8>>,
+        strength: f32,
     ) -> Result<(), String> {
         use crate::style::CameraBackdrop;
         let Some(index) = self
@@ -565,9 +569,10 @@ impl Scene {
             mode,
             block: [CAMERA_BLUR_BLOCK, CAMERA_BLUR_BLOCK * aspect],
             color: [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0],
+            strength: strength.clamp(0.0, 1.0),
         };
         picture.matte = Some(matte);
-        if mode == 2 {
+        if mode == 2 && strength >= 1.0 {
             picture.shadow_blur_px = 0.0;
             picture.shadow_opacity = 0.0;
             if index > 0 && self.layers[index - 1].role == LayerRole::WebcamBorder {
@@ -2353,10 +2358,18 @@ fn layer_params(layer: &Layer, pass_kind: u32) -> LayerParams {
                 amount,
             },
         ) => (3, hole, [feather, 0.0, amount, radius]),
-        (0, LayerEffect::Backdrop { mode, block, color }) => (
+        (
+            0,
+            LayerEffect::Backdrop {
+                mode,
+                block,
+                color,
+                strength,
+            },
+        ) => (
             4,
             [color[0], color[1], color[2], 0.0],
-            [block[0], block[1], mode as f32, 0.0],
+            [block[0], block[1], mode as f32, strength],
         ),
         (kind, _) => (kind, [0.0; 4], [0.0; 4]),
     };
@@ -2635,11 +2648,17 @@ fn blit_effect(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
             };
             let (color, alpha) = match layer.effect {
                 LayerEffect::Blur { block } => (blurred(block), opacity),
-                LayerEffect::Backdrop { mode, block, color } => {
+                LayerEffect::Backdrop {
+                    mode,
+                    block,
+                    color,
+                    strength,
+                } => {
                     let m = layer
                         .matte
                         .as_deref()
                         .map_or(1.0, |matte| sample_matte(matte, u, v));
+                    let m = 1.0 - strength * (1.0 - m);
                     let own = sample_bilinear(&layer.frame, u, v);
                     let own = [own[0] as f32, own[1] as f32, own[2] as f32];
                     if mode == 2 {
@@ -3957,6 +3976,10 @@ mod tests {
     /// A camera of vertical stripes over the whole canvas (red on the left, blue on the
     /// right) whose matte says the left half is the person, over a green backdrop.
     fn backdrop_scene(backdrop: crate::style::CameraBackdrop) -> Scene {
+        backdrop_scene_at(backdrop, 1.0)
+    }
+
+    fn backdrop_scene_at(backdrop: crate::style::CameraBackdrop, strength: f32) -> Scene {
         let side = crate::face::matte::SIZE;
         let mut camera = VideoFrame::solid(32, 16, 0, 0, 0, 0).unwrap();
         for y in 0..16u32 {
@@ -3981,7 +4004,7 @@ mod tests {
             .map(|i| if i % side < side / 2 { 255 } else { 0 })
             .collect();
         scene
-            .camera_backdrop(backdrop, "#FFFFFF", std::sync::Arc::new(matte))
+            .camera_backdrop(backdrop, "#FFFFFF", std::sync::Arc::new(matte), strength)
             .unwrap();
         scene
     }
@@ -4017,6 +4040,13 @@ mod tests {
                 CameraBackdrop::None => unreachable!(),
             }
         }
+        // Half way into a presenter, the room is half gone: blue stripes over the green.
+        let half =
+            Compositor::composite_cpu(&backdrop_scene_at(CameraBackdrop::Remove, 0.5)).unwrap();
+        let [b, g, _] = px(&half, 56, 16);
+        assert!((120..=135).contains(&g), "half the green: {g}");
+        assert!(b <= 130, "at most half a blue stripe: {b}");
+        assert_eq!(px(&half, 4, 16)[1], 0, "the person stays whole");
         // Without a camera nothing changes.
         let mut empty = effects_scene();
         let before = empty.layers.clone();
@@ -4025,6 +4055,7 @@ mod tests {
                 CameraBackdrop::Blur,
                 "#000000",
                 std::sync::Arc::new(Vec::new()),
+                1.0,
             )
             .unwrap();
         assert_eq!(empty.layers, before);
@@ -4043,14 +4074,16 @@ mod tests {
             CameraBackdrop::Remove,
             CameraBackdrop::Color,
         ] {
-            let scene = backdrop_scene(backdrop);
-            let cpu = Compositor::composite_cpu(&scene).unwrap();
-            let gpu = compositor.composite(&scene).unwrap();
-            let (max, mean) = crate::media::compare_frames(&gpu, &cpu).unwrap();
-            assert!(
-                mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE + 1.0,
-                "{backdrop:?}: GPU vs CPU mean {mean} max {max}"
-            );
+            for strength in [1.0, 0.5] {
+                let scene = backdrop_scene_at(backdrop, strength);
+                let cpu = Compositor::composite_cpu(&scene).unwrap();
+                let gpu = compositor.composite(&scene).unwrap();
+                let (max, mean) = crate::media::compare_frames(&gpu, &cpu).unwrap();
+                assert!(
+                    mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE + 1.0,
+                    "{backdrop:?} at {strength}: GPU vs CPU mean {mean} max {max}"
+                );
+            }
         }
     }
 

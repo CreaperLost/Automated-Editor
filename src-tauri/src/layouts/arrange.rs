@@ -1,7 +1,9 @@
 //! Where the screen and the camera go for a layout on a canvas, and how two of those blend
 //! during a move. Pure geometry in canvas pixels; the evaluator turns it into layers and fills
 //! in what changes every frame (the zoom, the face).
-use super::{Bubble, CameraOnly, CameraShape, Layout, ScreenFit, ScreenOnly, SideBySide};
+use super::{
+    Bubble, CameraOnly, CameraShape, Layout, Presenter, ScreenFit, ScreenOnly, SideBySide,
+};
 use crate::project::EditLayout;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -100,6 +102,8 @@ pub struct CameraSlot {
     pub punch_in: f32,
     /// A bubble over the screen (the kind that hides while you work under it).
     pub bubble: bool,
+    /// How much the person is cut out of their room (a presenter), 0 to 1.
+    pub cutout: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -155,6 +159,7 @@ pub fn available(layout: &Layout, sources: Sources) -> Option<Layout> {
         Layout::Bubble(b) => b.screen,
         Layout::SideBySide(s) => s.screen,
         Layout::ScreenOnly(s) => s.screen,
+        Layout::Presenter(p) => p.screen,
         Layout::CameraOnly(_) => ScreenFit::Auto,
     };
     match (sources.screen.is_some(), sources.camera.is_some()) {
@@ -227,11 +232,46 @@ pub fn arrange(
                     opacity: 1.0,
                     punch_in: c.punch_in.max(1.0),
                     bubble: false,
+                    cutout: 0.0,
                 }),
                 ..Default::default()
             }
         }
         Layout::SideBySide(s) => side_by_side(s, style, canvas, &screen_in, style_radius),
+        Layout::Presenter(p) => Arrangement {
+            screen: Some(screen_in(
+                full,
+                p.screen.fills(canvas.width, canvas.height),
+                0.0,
+            )),
+            camera: Some(presenter_slot(p, canvas, camera_src)),
+            seam: None,
+        },
+    }
+}
+
+/// The presenter's picture: `size_pct` of the height, standing on the bottom edge a little in
+/// from its side, in the camera's shape (no wider than 60 % of the canvas, cut round the face).
+fn presenter_slot(p: &Presenter, canvas: Canvas, src: (u32, u32)) -> CameraSlot {
+    let (w, h) = (canvas.width as f32, canvas.height as f32);
+    let frac = p
+        .size_pct
+        .clamp(super::MIN_PRESENTER_PCT, super::MAX_PRESENTER_PCT)
+        / 100.0;
+    let tall = (h * frac).round();
+    let aspect = src.0.max(1) as f32 / src.1.max(1) as f32;
+    let wide = (tall * aspect).min(w * 0.6).round();
+    let margin = (canvas.short_side() * 0.02).round();
+    let x = if p.right { w - wide - margin } else { margin };
+    CameraSlot {
+        rect: Rect::new(x, h - tall, wide, tall),
+        corners: Corners::Round(0.0),
+        border: 0.0,
+        shadow: 0.0,
+        opacity: 1.0,
+        punch_in: 1.0,
+        bubble: false,
+        cutout: 1.0,
     }
 }
 
@@ -290,6 +330,7 @@ fn side_by_side(
         opacity: 1.0,
         punch_in: 1.0,
         bubble: false,
+        cutout: 0.0,
     };
     let seam = (!landscape).then(|| {
         if s.camera_first {
@@ -401,6 +442,7 @@ fn bubble_slot(b: &Bubble, style: &EditLayout, canvas: Canvas, src: (u32, u32)) 
         opacity: 1.0,
         punch_in: 1.0,
         bubble: true,
+        cutout: 0.0,
     }
 }
 
@@ -456,6 +498,7 @@ pub fn blend(from: &Arrangement, to: &Arrangement, t: f32) -> Arrangement {
                 opacity: l(a.opacity, b.opacity),
                 punch_in: l(a.punch_in, b.punch_in),
                 bubble: if t < 0.5 { a.bubble } else { b.bubble },
+                cutout: l(a.cutout, b.cutout),
             })
         }
         (Some(a), None) => Some(CameraSlot {
@@ -570,6 +613,44 @@ mod tests {
             only_camera.camera.unwrap().rect,
             Rect::new(0.0, 0.0, 1920.0, 1080.0)
         );
+    }
+
+    #[test]
+    fn a_presenter_stands_on_the_bottom_edge_cut_out_in_front_of_the_screen() {
+        let layout = Layout::Presenter(Presenter::default());
+        let wide = arrange(&layout, &style(), Canvas::new(1920, 1080), BOTH);
+        let camera = wide.camera.unwrap();
+        // 60 % of the height in the camera's 16:9, on the right, 2 % of the short side in.
+        assert_eq!(
+            camera.rect,
+            Rect::new(1920.0 - 1152.0 - 22.0, 432.0, 1152.0, 648.0)
+        );
+        assert_eq!(
+            (camera.cutout, camera.border, camera.shadow),
+            (1.0, 0.0, 0.0)
+        );
+        assert!(!camera.bubble);
+        assert!(!wide.screen.unwrap().fill, "fitted on 16:9");
+        // On 9:16 no wider than 60 % of the canvas, on the left when asked.
+        let left = Layout::Presenter(Presenter {
+            right: false,
+            ..Presenter::default()
+        });
+        let tall = arrange(&left, &style(), Canvas::new(1080, 1920), BOTH)
+            .camera
+            .unwrap();
+        assert_eq!(tall.rect, Rect::new(22.0, 768.0, 648.0, 1152.0));
+        // Moving there from a bubble, the room goes half way through.
+        let bubble = arrange(&Layout::default(), &style(), Canvas::new(1920, 1080), BOTH);
+        let mid = blend(&bubble, &wide, 0.5).camera.unwrap();
+        assert_eq!(mid.cutout, 0.5);
+        assert!(Layout::Presenter(Presenter::default()).validate().is_ok());
+        assert!(Layout::Presenter(Presenter {
+            size_pct: 95.0,
+            ..Presenter::default()
+        })
+        .validate()
+        .is_err());
     }
 
     #[test]
