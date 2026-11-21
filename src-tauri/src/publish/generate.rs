@@ -31,12 +31,14 @@ pub struct Drawn {
 
 /// Something that draws a picture from words and example pictures; tests answer from fixtures.
 pub trait Draw: Sync {
-    /// `references`: (MIME type, bytes) of pictures to follow the look of.
+    /// `references`: (MIME type, bytes) of pictures to follow the look of; `aspect` the
+    /// picture's shape, such as "16:9".
     fn draw(
         &self,
         model: &str,
         prompt: &str,
         references: &[(String, Vec<u8>)],
+        aspect: &str,
     ) -> Result<Drawn, String>;
 }
 
@@ -69,6 +71,7 @@ pub fn request_body(
     model: &str,
     prompt: &str,
     references: &[(String, Vec<u8>)],
+    aspect: &str,
 ) -> serde_json::Value {
     let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
     for (mime, bytes) in references {
@@ -81,7 +84,7 @@ pub fn request_body(
     serde_json::json!({
         "model": model,
         "modalities": ["image", "text"],
-        "image_config": { "aspect_ratio": "16:9" },
+        "image_config": { "aspect_ratio": aspect },
         "messages": [{ "role": "user", "content": content }],
     })
 }
@@ -123,13 +126,14 @@ impl Draw for OpenRouter {
         model: &str,
         prompt: &str,
         references: &[(String, Vec<u8>)],
+        aspect: &str,
     ) -> Result<Drawn, String> {
         let response = self
             .client
             .post(CHAT_URL)
             .bearer_auth(&self.key)
             .header("X-Title", "AeroEdits")
-            .json(&request_body(model, prompt, references))
+            .json(&request_body(model, prompt, references, aspect))
             .send()
             .map_err(|e| format!("Could not reach OpenRouter: {e}"))?;
         let status = response.status().as_u16();
@@ -269,7 +273,12 @@ pub fn generate(
         return Err("Describe the thumbnail: what it shows and its few words".into());
     }
     let refs = references(style, style_folder);
-    let drawn = draw.draw(model, &prompt(brief, style, !refs.is_empty()), &refs)?;
+    let drawn = draw.draw(
+        model,
+        &prompt(brief, style, !refs.is_empty()),
+        &refs,
+        "16:9",
+    )?;
     let bytes = fit(&drawn.bytes)?;
     let mut notes = Vec::new();
     let contrast = small_contrast(&bytes)?;
@@ -333,10 +342,11 @@ mod tests {
             model: &str,
             prompt: &str,
             references: &[(String, Vec<u8>)],
+            aspect: &str,
         ) -> Result<Drawn, String> {
             self.asked
                 .lock()
-                .push(request_body(model, prompt, references));
+                .push(request_body(model, prompt, references, aspect));
             picture_in(&self.reply)
         }
     }

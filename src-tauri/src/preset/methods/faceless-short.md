@@ -44,8 +44,9 @@ tools are behind `more`: `faceless` (stories, productions), `faceless_research`,
 6. **Visuals.** Read the style (`library` `op: show`, the project's: Broadsheet) and the
    narration's words (`transcript_get`). Plan a beat for every 3 to 5 seconds: what the
    sentence shows (never just the topic), its kind (headline, quote, verdict, bars, chart, dates,
-   count-up, steps-link, items-stack, before-after, key-point, or a picture from `library` `kind: image`
-   in a graphic of your own), the word it enters on and the word it acts on. Show the user the
+   count-up, steps-link, items-stack, before-after, key-point, or picture: then `library`
+   `kind: image` `use` a library picture, a screenshot `file` with its `source`, or `draw` one
+   only where none fits), the word it enters on and the word it acts on. Show the user the
    plan (`graphic_add` with `plan: true`), then add them all in one call: `atWord` the entry
    word, `actionWord` the action word, the variables from the script's facts and
    `onScreen` (a source tag only where a claim, number or quote is on screen). Then `faceless`

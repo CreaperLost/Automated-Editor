@@ -559,7 +559,7 @@ fn broadsheet() -> Style {
             kind("sequence", "Events in order or a process, each step joined as it is said (template steps-link)."),
             kind("stack", "Things that add up, landing one on another (template items-stack)."),
             kind("change", "One object in a new state: before and after (template before-after)."),
-            kind("picture", "A Broadsheet illustration, or a sourced logo, flag, map or portrait, from the image library (look broadsheet) in a graphic of your own."),
+            kind("picture", "What something looks like (template picture): a library illustration (look broadsheet) or sourced logo, flag, map or portrait, a screenshot (`file`), or a drawn illustration (`draw`) only where none fits."),
             kind("consequence", "The ending: the consequence or the open question, worth repeating (template key-point)."),
         ],
         rules: lines(&[

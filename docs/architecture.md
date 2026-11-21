@@ -339,10 +339,16 @@ The Python Explainer repository informed the port; AeroEdits does not run it or 
   `actionWord` resolves the action cue against narration words. Visual checks block uncovered
   time, note >12 s without change, reading load >3 words/s, repeated kinds/templates and
   starts between words; `fill` stretches graphics to meet the next in one undo step. Results
-  go to `faceless/beats.json`. General media import supports images/screenshots; integrated
-  image generation/intake remains FCL-6.
+  go to `faceless/beats.json`. Pictures from outside the image library come into a graphic
+  through `library` `kind: image` (`graphics/pictures.rs`): `use` with a `file` (a screenshot or
+  the user's picture, scaled to 2560 px at most, its credit as `source`) or `draw` (an image model
+  on the user's OpenRouter key draws the brief in the graphic's look at the video's shape, with
+  two of the look's library pictures as references). Each lands in the graphic's `images/` with
+  an entry in its `pictures.json` (origin, credit, brief, model, cost) in the same undo step, and
+  becomes the `picture` of a picture part. `check` warns when a credit is missing from the
+  description or a drawn picture is in a video whose package has AI disclosure off.
 - **Broadsheet:** paper/ink/vermilion, Newsreader and IBM Plex Mono, square corners and restrained
-  motion; six dedicated parts (`headline`, `quote`, `verdict`, `bars`, `dates`, `chart`) plus
+  motion; seven dedicated parts (`headline`, `quote`, `verdict`, `bars`, `dates`, `chart`, `picture`) plus
   existing templates or agent-authored parts. Image look follows the style. The old explainer's
   twelve kinds are not twelve templates here; the rest are listed under FCL-5.
 

@@ -65,6 +65,8 @@ pub enum Kind {
     MusicLicence,
     ImageLicence,
     ImageLook,
+    ImageCredit,
+    ImageDisclosure,
     OutOfSync,
     PastMediaEnd,
     GraphicFont,
@@ -216,6 +218,7 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
     proposals(&mut out, root);
     music_licences(&mut out, document);
     image_licences(&mut out, root, document);
+    brought_pictures(&mut out, root, document);
     linked_sync(&mut out, document);
     past_media_end(&mut out, document);
     graphic_fonts(&mut out, root, document);
@@ -851,6 +854,62 @@ fn music_licences(out: &mut Builder, document: &EditDocument) {
                      credit (CC0, public domain), or set its licence if you know it.",
                     if music { "music" } else { "a sound effect" }
                 ),
+            )
+            .at(clip.start_us, clip.end_us());
+        }
+    }
+}
+
+/// Pictures brought into graphics from outside the library (FCL-6): a credited file whose
+/// credit the video's description doesn't give, and drawn pictures while the package's AI
+/// disclosure is off. Once per graphic.
+fn brought_pictures(out: &mut Builder, root: &Path, document: &EditDocument) {
+    let package = crate::publish::packages(root).remove("video");
+    let description = package
+        .as_ref()
+        .map(|p| p.description.to_lowercase())
+        .unwrap_or_default();
+    let mut seen: Vec<&str> = Vec::new();
+    for clip in document.sequence.video_tracks().flat_map(|t| &t.clips) {
+        let Some(asset) = document.asset(&clip.asset).filter(|a| a.is_graphic()) else {
+            continue;
+        };
+        if seen.contains(&asset.id.as_str()) {
+            continue;
+        }
+        seen.push(&asset.id);
+        let pictures =
+            crate::graphics::pictures::recorded(&crate::graphics::folder(root, &asset.id));
+        let uncredited: Vec<&str> = pictures
+            .iter()
+            .filter(|p| p.origin == crate::graphics::pictures::Origin::File)
+            .map(|p| p.source.as_str())
+            .filter(|s| !s.is_empty() && !description.contains(&s.to_lowercase()))
+            .collect();
+        if !uncredited.is_empty() {
+            out.push(
+                Kind::ImageCredit,
+                Severity::Warning,
+                format!("\"{}\" shows pictures to credit", asset.name),
+                format!(
+                    "Credit {} in the description (`publish` `op: set`), as they were brought \
+                     in.",
+                    uncredited.join("; ")
+                ),
+            )
+            .at(clip.start_us, clip.end_us());
+        }
+        let drawn = pictures
+            .iter()
+            .any(|p| p.origin == crate::graphics::pictures::Origin::Drawn);
+        if drawn && package.as_ref().is_some_and(|p| !p.ai_disclosure) {
+            out.push(
+                Kind::ImageDisclosure,
+                Severity::Warning,
+                format!("\"{}\" shows a drawn picture", asset.name),
+                "An image model drew it, and the package's AI disclosure is off: turn it on \
+                 (`publish` `op: set` `aiDisclosure: true`) or swap the picture."
+                    .into(),
             )
             .at(clip.start_us, clip.end_us());
         }

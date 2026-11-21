@@ -174,6 +174,14 @@ static TEMPLATES: &[Template] = &[
          lands in the accent with its value and `unit`. For a trend."
     ),
     template!(
+        "picture",
+        "Picture",
+        5000,
+        "One picture as a paper prints it: a kicker, the picture as large as the frame allows, \
+         a caption under it and a source tag; on `cue` the caption lands. `library` \
+         `kind: image` `use` or `draw` into it sets `picture`. For what something looks like."
+    ),
+    template!(
         "blank",
         "Blank",
         4000,
