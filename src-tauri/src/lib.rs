@@ -9,6 +9,7 @@
 )]
 
 pub mod ai;
+pub mod assemble;
 pub mod bubble_hide;
 pub mod captions;
 pub mod chapters;

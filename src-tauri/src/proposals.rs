@@ -753,6 +753,7 @@ pub fn propose_edits(
     expected_revision: u64,
     edits: Vec<SequenceEdit>,
     reason: &str,
+    notes: Vec<String>,
 ) -> Result<String, String> {
     let document = reader.document();
     check_revision(document, expected_revision)?;
@@ -763,7 +764,8 @@ pub fn propose_edits(
         return Err(format!("At most {MAX_EDITS} edits in one batch"));
     }
     let next = apply_edits(document, &edits)?;
-    let summary = sequence_diff(document, &next);
+    let mut summary = sequence_diff(document, &next);
+    summary.extend(notes);
     proposals.add(Batch {
         id: String::new(),
         agent: agent.to_string(),
@@ -2005,6 +2007,7 @@ mod tests {
                 revision,
                 edits.clone(),
                 "Split at the topic change",
+                Vec::new(),
             )
             .unwrap();
             let summary = &proposals.get(&id).unwrap().summary;
@@ -2018,7 +2021,8 @@ mod tests {
             // A bad edit is refused when proposed, naming which one.
             let bad: Vec<SequenceEdit> =
                 serde_json::from_value(json!([{ "kind": "delete", "clipIds": ["nope"] }])).unwrap();
-            let error = propose_edits(reader, proposals, "codex", revision, bad, "").unwrap_err();
+            let error = propose_edits(reader, proposals, "codex", revision, bad, "", Vec::new())
+                .unwrap_err();
             assert!(error.starts_with("Edit 1 (delete)"), "{error}");
 
             accept(reader, proposals, &id, revision, None, false, false).unwrap();
@@ -2030,7 +2034,8 @@ mod tests {
 
             // A batch made before another change goes stale rather than guessing.
             let revision = reader.document().revision;
-            let late = propose_edits(reader, proposals, "codex", revision, edits, "").unwrap();
+            let late =
+                propose_edits(reader, proposals, "codex", revision, edits, "", Vec::new()).unwrap();
             reader.ripple_cuts(revision, &[(0, 100_000)]).unwrap();
             assert!(view(reader, proposals).batches[0].stale);
             let revision = reader.document().revision;
