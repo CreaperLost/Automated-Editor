@@ -147,7 +147,7 @@ None supersedes the shorts style or George's next real edit.
 | <a id="ftg-4"></a>FTG-4 | Natural take ordering, missing/duplicate checks and script-guided assembly with alternatives in one proposal. | M |
 | <a id="ftg-6"></a>FTG-6 | Stock providers using the user's key; record licences and download only on acceptance. | M |
 | <a id="ftg-5"></a>FTG-5 | Import external word transcripts only if trivially small; not currently needed. | S |
-| <a id="lay-3"></a>LAY-3 | Bounded auto layouts on top of `pick`: few changes/minute, screen 2–8 s, camera 2–5 s, punch-in 1.5–4 s, review with list and storyboard. | M |
+| <a id="lay-3"></a>LAY-3 | Bounded auto layouts on top of `pick`. Built 21 Nov: the `paced` pick rule (off by default) holds screen 2–8 s and camera 2–5 s, carries a long rest on as a punch-in 1.5–4 s, and starts at most `shotsPerMinute` (default 3) shots in any minute, keeping the opening line first, then busy screen, then rests. One undoable step; the dry run lists the shots and `storyboard` shows them once applied. Left: George judges the pacing on a real edit before any preset turns it on. | M |
 | <a id="fx-1"></a>FX-1 | Cached per-recording camera segmentation for background removal/blur/replacement; composite in wgpu. | L |
 | <a id="lay-4"></a>LAY-4 | Presenter cut-out layout, dependent on FX-1's matte. | M |
 | <a id="dlv-3"></a>DLV-3 | Standalone alpha graphics, then constrained FCP7 XML/OTIO handoff. Test in the destination editor and report what was flattened. | M→L |

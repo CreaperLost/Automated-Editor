@@ -4,6 +4,10 @@
 //! - **busy:** screen only while clicks, scrolls and typing come thick and fast;
 //! - **hook:** camera only for the opening line (a short's).
 //!
+//! **Paced** (LAY-3) bounds what the rules give: each shot is held a bounded time (screen 2–8 s,
+//! camera 2–5 s), a long rest goes on as a punch-in on the camera (1.5–4 s), and only a few
+//! shots start in any minute (the opening line first, then busy screen, then rests).
+//!
 //! The screen wins where both want the frame. Picked sections are anchored in the recording's
 //! time and replace the earlier picks; sections made by hand stay
 //! ([`super::LayoutTrack::replace_auto`]).
@@ -36,6 +40,13 @@ const MERGE_GAP_US: u64 = 1_500_000;
 const MEET_GAP_US: u64 = 1_000_000;
 /// Picks shorter than this flicker.
 const MIN_PICK_US: u64 = 1_500_000;
+/// Paced shots: how long each kind is held, at least and at most.
+const PACED_SCREEN_US: (u64, u64) = (2_000_000, 8_000_000);
+const PACED_CAMERA_US: (u64, u64) = (2_000_000, 5_000_000);
+const PACED_PUNCH_IN_US: (u64, u64) = (1_500_000, 4_000_000);
+/// How far a paced punch-in leans in (the built-in Punch-in's).
+const PACED_PUNCH_IN: f32 = 1.4;
+const MINUTE_US: u64 = 60_000_000;
 
 fn default_speech_threshold_db() -> f32 {
     -38.0
@@ -64,6 +75,11 @@ pub struct PickSettings {
     pub cursor_moves_are_activity: bool,
     /// The camera's size while it takes the frame, percent of the canvas (40 to 100).
     pub rest_size_pct: f32,
+    /// Bounded shots: screen 2-8 s, camera 2-5 s, a long rest goes on as a punch-in 1.5-4 s,
+    /// and at most `shots_per_minute` start in any minute.
+    pub paced: bool,
+    /// With `paced`: picked shots that may start in any minute (1 to 10).
+    pub shots_per_minute: u32,
 }
 
 impl Default for PickSettings {
@@ -79,6 +95,8 @@ impl Default for PickSettings {
             min_rest_ms: 2_500,
             cursor_moves_are_activity: true,
             rest_size_pct: 100.0,
+            paced: false,
+            shots_per_minute: 3,
         }
     }
 }
@@ -114,6 +132,9 @@ impl PickSettings {
             || !(super::MIN_CAMERA_ONLY_PCT..=100.0).contains(&self.rest_size_pct)
         {
             return Err("The camera's size is 40 to 100 %".into());
+        }
+        if !(1..=10).contains(&self.shots_per_minute) {
+            return Err("Shots a minute is 1 to 10".into());
         }
         Ok(())
     }
@@ -193,6 +214,9 @@ pub fn pick(input: &PickInput, settings: &PickSettings) -> Vec<LayoutSection> {
         };
         picked.push((a, b, camera_layout.clone(), rule));
     }
+    if settings.paced {
+        picked = paced(picked, settings, start);
+    }
     picked.sort_by_key(|p| p.0);
     // A moment of the base between a camera and a screen pick would only flicker: they meet.
     for i in 1..picked.len() {
@@ -215,6 +239,81 @@ pub fn pick(input: &PickInput, settings: &PickSettings) -> Vec<LayoutSection> {
                 Some(layout),
             )
         })
+        .collect()
+}
+
+/// One picked shot: where, what, and the rule that gave it.
+type Shot<'a> = (u64, u64, Layout, &'a str);
+
+/// The picks held to bounded shots and few a minute (see the module's note). A shot too short
+/// for its kind is dropped; a punch-in goes only with the camera shot it follows.
+fn paced<'a>(picked: Vec<Shot<'a>>, settings: &PickSettings, start: u64) -> Vec<Shot<'a>> {
+    let held = |(a, b): (u64, u64), (min, max): (u64, u64)| {
+        let b = b.min(a + max);
+        (b - a >= min).then_some((a, b))
+    };
+    // Candidates by priority (0 first); a punch-in names the camera shot it follows.
+    let mut candidates: Vec<(u8, Shot<'a>, Option<usize>)> = Vec::new();
+    for (a, b, layout, rule) in picked {
+        match (&layout, rule) {
+            (Layout::ScreenOnly(_), _) => {
+                if let Some((a, b)) = held((a, b), PACED_SCREEN_US) {
+                    candidates.push((1, (a, b, layout, rule), None));
+                }
+            }
+            (Layout::CameraOnly(camera), _) => {
+                let Some((a, cut)) = held((a, b), PACED_CAMERA_US) else {
+                    continue;
+                };
+                let hook = rule == "hook" && a == start;
+                candidates.push((
+                    if hook { 0 } else { 2 },
+                    (a, cut, layout.clone(), rule),
+                    None,
+                ));
+                if hook {
+                    continue;
+                }
+                if let Some((p, q)) = held((cut, b), PACED_PUNCH_IN_US) {
+                    let punch = Layout::CameraOnly(CameraOnly {
+                        punch_in: PACED_PUNCH_IN,
+                        ..camera.clone()
+                    });
+                    let parent = candidates.len() - 1;
+                    candidates.push((3, (p, q, punch, "punch-in"), Some(parent)));
+                }
+            }
+            _ => {}
+        }
+    }
+    let limit = settings.shots_per_minute.max(1) as usize;
+    let mut order: Vec<usize> = (0..candidates.len()).collect();
+    order.sort_by_key(|&i| (candidates[i].0, candidates[i].1 .0));
+    let mut kept = vec![false; candidates.len()];
+    let mut starts: Vec<u64> = Vec::new();
+    for i in order {
+        if candidates[i].2.is_some_and(|parent| !kept[parent]) {
+            continue;
+        }
+        let t = candidates[i].1 .0;
+        let mut with: Vec<u64> = starts.iter().copied().chain([t]).collect();
+        with.sort_unstable();
+        // The busiest minute starts at one of the shots.
+        let fits = with.iter().all(|&w| {
+            with.iter()
+                .filter(|&&x| x >= w && x < w + MINUTE_US)
+                .count()
+                <= limit
+        });
+        if fits {
+            kept[i] = true;
+            starts = with;
+        }
+    }
+    candidates
+        .into_iter()
+        .zip(kept)
+        .filter_map(|((_, shot, _), keep)| keep.then_some(shot))
         .collect()
 }
 
@@ -549,5 +648,89 @@ mod tests {
         let lead = MOVE + ACTIVITY_LEAD_US;
         assert_eq!(spans, vec![(11 * S, 30 * S - lead), (40 * S, 60 * S)]);
         assert!(picked.iter().all(|s| s.media.as_deref() == Some("rec")));
+    }
+
+    #[test]
+    fn paced_picks_hold_each_shot_a_bounded_time_and_start_few_a_minute() {
+        // Talk throughout; one click at 30 s; clicks every 0.5 s from 45 to 57 s.
+        let mut events = vec![click(30 * S)];
+        events.extend((0..25).map(|i| click(45 * S + i * 500 * MS)));
+        let telemetry = stream(events);
+        let settings = PickSettings {
+            idle_ms: 5_000,
+            busy: true,
+            paced: true,
+            shots_per_minute: 3,
+            ..PickSettings::default()
+        };
+        let input = PickInput {
+            start_us: 0,
+            end_us: 60 * S,
+            media: None,
+            telemetry: &telemetry,
+            speech: &[(0, 60 * S)],
+            move_us: 0,
+        };
+        let picked = pick(&input, &settings);
+        let shots: Vec<(u64, u64, &str)> = picked
+            .iter()
+            .map(|s| {
+                (
+                    s.source_start_us,
+                    s.source_end_us,
+                    s.rule.as_deref().unwrap_or(""),
+                )
+            })
+            .collect();
+        // The busy screen (13 s of clicks) is held 8 s and each rest 5 s of camera; three shots
+        // fill the minute, so the punch-ins that would follow the rests wait.
+        let busy_start = 45 * S - BUSY_LEAD_US;
+        assert_eq!(
+            shots,
+            vec![
+                (0, 5 * S, "rest"),
+                (35 * S, 40 * S, "rest"),
+                (busy_start, busy_start + 8 * S, "busy"),
+            ]
+        );
+        // With room for five, each rest goes on as a punch-in (the second meets the screen).
+        let roomy = pick(
+            &input,
+            &PickSettings {
+                shots_per_minute: 5,
+                ..settings.clone()
+            },
+        );
+        let punches: Vec<(u64, u64)> = roomy
+            .iter()
+            .filter(|s| s.rule.as_deref() == Some("punch-in"))
+            .map(|s| (s.source_start_us, s.source_end_us))
+            .collect();
+        assert_eq!(punches, vec![(5 * S, 9 * S), (40 * S, busy_start)]);
+        match &roomy[1].layout {
+            Some(Layout::CameraOnly(c)) => assert_eq!(c.punch_in, PACED_PUNCH_IN),
+            other => panic!("{other:?}"),
+        }
+        let mut track = super::super::LayoutTrack::default();
+        track.replace_auto(picked);
+        track.validate().unwrap();
+
+        // Unpaced, the same recording gives long shots.
+        let loose = pick(
+            &input,
+            &PickSettings {
+                paced: false,
+                ..settings
+            },
+        );
+        assert!(loose
+            .iter()
+            .any(|s| s.source_end_us - s.source_start_us > 8 * S));
+        assert!(PickSettings {
+            shots_per_minute: 0,
+            ..PickSettings::default()
+        }
+        .validate()
+        .is_err());
     }
 }
