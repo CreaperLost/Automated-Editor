@@ -398,6 +398,15 @@ pictures, generated thumbnails and online transcription (cost unknown, so kept a
 no project (story discovery), the AI review passes and the agent's own tokens are not counted,
 and the report says so.
 
+## Corrections
+
+`corrections.rs` (LOOP-1, first part) reads what the app already records: `agent/proposals.json`
+(cut items accepted or rejected, timeline-edit batches rejected or undone, actions undone) and
+the undo history (the user's own steps after the first agent step and still in the edit,
+grouped by label: time put back, graphic file changes, zooms, layouts). `proposals_list`
+`corrections: true` shows the counts. Nothing is learned from them by itself: a rule reaches a
+preset only through `propose_rule` and the user's accept.
+
 ## Footage notes
 
 `source_notes.rs` (FTG-3): what footage shows, in the agent's words, kept in the app's settings

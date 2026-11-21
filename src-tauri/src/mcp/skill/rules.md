@@ -133,7 +133,8 @@ one line before changing anything. Change only what was named. Several fixes in 
 this order: missing information and readability, then timing, then detail.
 
 When the user corrects you the same way twice (restores a kind of cut, moves graphics the same
-way, says "always" or "never"), offer it as a rule: `library` `kind: preset`
+way, says "always" or "never"; `proposals_list` `corrections: true` counts them), offer it as a
+rule: `library` `kind: preset`
 `op: propose_rule` with the `rule` in their words and the `example` that taught it. They accept
 it in the Agent panel; never write rules yourself, and one rejected cut is not a rule. When one
 of their rules shaped a proposal, name it in the reason.

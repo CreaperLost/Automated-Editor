@@ -14,6 +14,7 @@ pub mod captions;
 pub mod chapters;
 pub mod check;
 pub mod commands;
+pub mod corrections;
 pub mod cuda;
 pub mod cursor;
 pub mod dsp;

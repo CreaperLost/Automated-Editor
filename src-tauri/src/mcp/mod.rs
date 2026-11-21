@@ -1524,8 +1524,11 @@ mod tests {
         // the budget moved to 48,000. Then `publish` came out of `more` (every video is packaged
         // at export, George: "app wide"), 50,741; the budget moved to 51,000. 21 Nov (FCL-6):
         // `library` images take a `file` with its `source` and `op: draw`, 51,338; the budget
-        // moved to 51,500.
+        // moved to 51,500. Later that day (SND-2, FTG-3, LOOP-1): `library` sound `op: cues`,
+        // `source_search` `media` boards with `media_import` `notes`, and `proposals_list`
+        // `corrections`, each paid for with trims elsewhere until the last, 51,610; the budget
+        // moved to 52,000.
         let size = serde_json::to_string(&list).unwrap().len();
-        assert!(size < 51_500, "the tool list grew to {size} characters");
+        assert!(size < 52_000, "the tool list grew to {size} characters");
     }
 }
