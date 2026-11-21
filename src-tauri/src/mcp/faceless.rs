@@ -259,6 +259,15 @@ fn research(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         ResearchOp::Youtube => {
             let query = args.query.ok_or("Give `query`")?;
             let (videos, cost) = fc::faceless_youtube_impl(&query)?;
+            if let Ok(root) = fc::production_root(ctx.state) {
+                crate::spend::record(
+                    &root,
+                    "YouTube search",
+                    "Treg",
+                    Some(crate::spend::from_micro(cost)),
+                    &query,
+                );
+            }
             let lines = videos
                 .iter()
                 .take(args.limit.unwrap_or(12))

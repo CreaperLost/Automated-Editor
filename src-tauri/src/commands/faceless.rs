@@ -439,12 +439,12 @@ pub fn faceless_fetch_impl(
     let own = faceless::evidence::WebPages::new()?;
     // With a Treg key, Treg reads the PDFs and Google News links the app can't.
     match faceless::treg::Web::from_keychain() {
-        Some(treg) => faceless::evidence::fetch(
-            &root,
-            &faceless::evidence::WithTreg { own, treg },
-            urls,
-            again,
-        ),
+        Some(treg) => {
+            let pages = faceless::evidence::WithTreg::new(own, treg);
+            let read = faceless::evidence::fetch(&root, &pages, urls, again);
+            pages.record_spend(&root, "Page reads");
+            read
+        }
         None => faceless::evidence::fetch(&root, &own, urls, again),
     }
 }
@@ -455,10 +455,18 @@ pub fn faceless_web_search_impl(
     query: &str,
     limit: usize,
 ) -> Result<(Vec<faceless::treg::SearchResult>, u64), String> {
-    production_root(state)?;
+    let root = production_root(state)?;
     let treg = faceless::treg::Web::from_keychain()
         .ok_or("Web search needs a Treg key: File → Accounts (or search with your own tools)")?;
-    faceless::treg::web_search(&treg, query, limit)
+    let (results, cost) = faceless::treg::web_search(&treg, query, limit)?;
+    crate::spend::record(
+        &root,
+        "Web search",
+        "Treg",
+        Some(crate::spend::from_micro(cost)),
+        query,
+    );
+    Ok((results, cost))
 }
 
 /// Saves the Treg key in the keychain.
@@ -555,6 +563,15 @@ pub fn faceless_voice_impl(
             },
         )?
     };
+    if made.generated > 0 {
+        crate::spend::record(
+            &root,
+            "Narration",
+            "OpenRouter",
+            made.cost_usd,
+            &format!("{} scene(s), {}", made.generated, made.model),
+        );
+    }
     progress(0.72, "Putting the narration on the timeline");
     let same_file = previous
         .as_ref()

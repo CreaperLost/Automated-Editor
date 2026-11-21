@@ -382,6 +382,14 @@ app-level `faceless/made.json` (test/private/public) to warn on repeating a topi
 exists (GAP-014 superseded); full status/release semantics and made-list failure handling still
 need acceptance. Release-time source/time-word rechecks are FCL-9, not built guarantees.
 
+Spend (`spend.rs`): each paid call the app makes for an open project is appended to the
+project's `spend.json` as it happens, outside the undo history: narration (OpenRouter), Treg
+web, YouTube and page-read costs (summed per call through `WithTreg`), release checks, drawn
+pictures, generated thumbnails and online transcription (cost unknown, so kept as unknown).
+`status` adds the total; `status` `spend: true` lists it by provider and step. Calls made with
+no project (story discovery), the AI review passes and the agent's own tokens are not counted,
+and the report says so.
+
 ## Check, storyboard, export
 
 - **Exports** (`export/deliveries.rs`, DLV-2): one worker runs the queued exports in order; a

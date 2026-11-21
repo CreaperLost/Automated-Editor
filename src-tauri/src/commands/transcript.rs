@@ -352,6 +352,23 @@ fn transcribe_online(
             progress,
         ) {
             Ok(mut output) => {
+                // The services don't say what a transcription cost: recorded as unknown.
+                let seconds: u64 = ctx
+                    .segments
+                    .iter()
+                    .map(|s| s.end_us.saturating_sub(s.start_us))
+                    .sum::<u64>()
+                    / 1_000_000;
+                crate::spend::record(
+                    &ctx.root,
+                    "Transcription",
+                    match route {
+                        ProviderKind::ElevenLabs => "ElevenLabs",
+                        _ => "OpenRouter",
+                    },
+                    None,
+                    &format!("{seconds} s of audio"),
+                );
                 if !failed.is_empty() {
                     output.diagnostics.insert(
                         0,
