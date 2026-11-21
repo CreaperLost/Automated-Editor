@@ -188,7 +188,16 @@ export interface ScreenOnlyLayout {
   kind: "screenOnly";
   screen: ScreenFit;
 }
-export type Layout = BubbleLayout | SideBySideLayout | CameraOnlyLayout | ScreenOnlyLayout;
+/** The camera's person cut out of their room (from their matte), standing on the bottom edge in front of the screen. */
+export interface PresenterLayout {
+  kind: "presenter";
+  /** On the right; false stands them on the left. */
+  right: boolean;
+  /** Their picture's height, 40 to 90 % of the frame's. */
+  sizePct: number;
+  screen: ScreenFit;
+}
+export type Layout = BubbleLayout | SideBySideLayout | CameraOnlyLayout | ScreenOnlyLayout | PresenterLayout;
 
 export type LayoutTransition = "auto" | "cut" | "move";
 
@@ -281,6 +290,7 @@ export const BUILT_IN_LAYOUTS: { name: string; layout: Layout }[] = [
   { name: "Camera only", layout: { kind: "cameraOnly", sizePct: 100, punchIn: 1 } },
   { name: "Punch-in", layout: { kind: "cameraOnly", sizePct: 100, punchIn: 1.4 } },
   { name: "Screen only", layout: { kind: "screenOnly", screen: "auto" } },
+  { name: "Presenter", layout: { kind: "presenter", right: true, sizePct: 60, screen: "auto" } },
 ];
 
 export const DEFAULT_PICK_SETTINGS: PickSettings = {
@@ -316,6 +326,8 @@ export function layoutKindName(layout: Layout): string {
       return layout.punchIn > 1 ? "Punch-in" : "Camera only";
     case "screenOnly":
       return "Screen only";
+    case "presenter":
+      return "Presenter";
   }
 }
 

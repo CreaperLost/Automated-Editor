@@ -46,6 +46,15 @@ function boxes(layout: Layout, w: number, h: number): { screen?: Box; camera?: B
       const r = layout.shape === "circle" ? bw / 2 : layout.shape === "squircle" ? bw * 0.3 : (Math.min(bw, bh) * layout.roundnessPct) / 100;
       return { screen: fitted(0, 0, w, h, fills(layout.screen)), camera: { x, y, w: bw, h: bh, r } };
     }
+    case "presenter": {
+      const ch = (h * layout.sizePct) / 100;
+      const cw = Math.min((ch * 16) / 9, w * 0.6) * 0.55;
+      const margin = short * 0.02;
+      return {
+        screen: fitted(0, 0, w, h, fills(layout.screen)),
+        camera: { x: layout.right ? w - cw - margin : margin, y: h - ch, w: cw, h: ch, r: cw * 0.3 },
+      };
+    }
     case "sideBySide": {
       const side = landscape ? w : h;
       const cam = (side * layout.cameraPct) / 100;

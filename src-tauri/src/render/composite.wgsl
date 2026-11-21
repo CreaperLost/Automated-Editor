@@ -159,7 +159,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if params.pass_kind == 4u {
         // Camera backdrop: effect.z is the mode (1 blur, 2 left out, 3 colour in hole.rgb).
         let color = layer_color_level(in.uv);
-        let m = textureSampleLevel(layer_matte, layer_samp, in.uv, 0.0).r;
+        // effect.w: how far the rest has gone (a move into or out of a presenter).
+        let m = 1.0 - params.effect.w * (1.0 - textureSampleLevel(layer_matte, layer_samp, in.uv, 0.0).r);
         let mode = u32(params.effect.z + 0.5);
         if mode == 2u {
             return vec4<f32>(color.rgb, m * params.opacity);

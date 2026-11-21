@@ -1060,16 +1060,23 @@ impl SceneEvaluator {
             let uv =
                 crate::render::camera_uv((picture.width, picture.height), &slot, focus, offset);
             scene.push_camera(picture, &slot, uv, style, unit)?;
-            // The person over a blurred, left-out or plain background (FX-1).
-            if style.webcam_backdrop != crate::style::CameraBackdrop::None {
+            // The person over a blurred, left-out or plain background (FX-1), or cut out of
+            // their room in front of the screen (a presenter, LAY-4).
+            let (backdrop, strength) = if slot.cutout > 0.0 {
+                (crate::style::CameraBackdrop::Remove, slot.cutout)
+            } else {
+                (style.webcam_backdrop, 1.0)
+            };
+            if backdrop != crate::style::CameraBackdrop::None {
                 if let Some(matte) = shown
                     .webcam
                     .and_then(|clip| self.camera_matte(clip, at(clip)))
                 {
                     scene.camera_backdrop(
-                        style.webcam_backdrop,
+                        backdrop,
                         &style.webcam_backdrop_color,
                         matte,
+                        strength,
                     )?;
                 }
             }

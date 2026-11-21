@@ -67,6 +67,7 @@ export const LayoutEditor: React.FC<{ layout: Layout; portrait: boolean; onChang
         { value: "sideBySide", label: "Side by side" },
         { value: "cameraOnly", label: "Camera" },
         { value: "screenOnly", label: "Screen" },
+        { value: "presenter", label: "Presenter", title: "You cut out of your room, in front of the screen" },
       ]}
     />
 
@@ -186,6 +187,26 @@ export const LayoutEditor: React.FC<{ layout: Layout; portrait: boolean; onChang
       <>
         <RangeRow label="Size" value={layout.sizePct} min={40} max={100} unit="%" onChange={(sizePct) => onChange({ ...layout, sizePct })} />
         <RangeRow label="Punch-in" value={layout.punchIn} min={1} max={2} step={0.05} unit="×" onChange={(punchIn) => onChange({ ...layout, punchIn })} />
+      </>
+    )}
+
+    {layout.kind === "presenter" && (
+      <>
+        <Field label="Stands" hint="Cut out of the room by the camera's matte, found the first time it shows.">
+          <Segmented<"left" | "right">
+            label="Presenter side"
+            size="sm"
+            className="w-full"
+            value={layout.right ? "right" : "left"}
+            onChange={(side) => onChange({ ...layout, right: side === "right" })}
+            options={[
+              { value: "left", label: "Left" },
+              { value: "right", label: "Right" },
+            ]}
+          />
+        </Field>
+        <RangeRow label="Height" value={layout.sizePct} min={40} max={90} unit="%" onChange={(sizePct) => onChange({ ...layout, sizePct })} />
+        <ScreenFitField value={layout.screen} onChange={(screen) => onChange({ ...layout, screen })} />
       </>
     )}
 

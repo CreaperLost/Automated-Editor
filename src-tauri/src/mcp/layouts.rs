@@ -16,8 +16,9 @@ pub const DESCRIPTION: &str = "Layouts: how the screen and the camera share the 
     3x3 grid or custom, `sizePct` 5-60, small 20/medium 35/large 50, `shape` rect/circle/squircle), \
     `sideBySide` (camera left or right, top or bottom in 9:16: `cameraFirst`, `cameraPct` 20-80, \
     `overlap`, `screen` fit/fill/auto), `cameraOnly` (`sizePct` 40-100, `punchIn` 1-2), \
-    `screenOnly`. `layout` is a built-in name (Camera bubble, Side by side, Camera only, \
-    Punch-in, Screen only), a favourite's name, `base`, or a spec like {\"kind\":\"sideBySide\", \
+    `screenOnly`, `presenter` (the person cut out of their room standing on the bottom edge \
+    over the screen: `right`, `sizePct` 40-90 of the height). `layout` is a built-in name \
+    (Camera bubble, Side by side, Camera only, Punch-in, Screen only, Presenter), a favourite's name, `base`, or a spec like {\"kind\":\"sideBySide\", \
     \"cameraPct\":30}. `op`: `list` (default); `add` with `sections` [{fromS, toS, layout, \
     transition?}] in one step; `update` `id` with `layout`/`transition`; `retime` `id` to \
     `fromS`-`toS`; `remove` `ids`; `clear` `fromS`-`toS` (or all, or `autoOnly`); `base` \
@@ -220,6 +221,12 @@ pub fn describe(layout: &Layout) -> String {
             crate::layouts::ScreenFit::Fit => "Screen only (fitted)".into(),
             crate::layouts::ScreenFit::Fill => "Screen only (filled)".into(),
         },
+        Layout::Presenter(p) => format!(
+            "Presenter ({}, {:.0} %{})",
+            if p.right { "right" } else { "left" },
+            p.size_pct,
+            fit(p.screen)
+        ),
     }
 }
 
