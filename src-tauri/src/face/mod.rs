@@ -8,6 +8,7 @@
 //! camera get a track: a recording without a camera (gaming footage, say) has none and keeps
 //! its framing.
 pub mod align;
+pub mod matte;
 pub mod yunet;
 
 use crate::project::revision::EditDocument;
