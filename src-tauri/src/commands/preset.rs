@@ -24,14 +24,32 @@ pub struct PresetsView {
     pub changed: usize,
     /// The preset's value of every setting, by part, to put one back.
     pub inherited: Map<String, Value>,
+    /// The look a short starts from in its preset: `shorts` (made from a take, the shorts
+    /// preset's) and `clips` (cut from the video, the clips preset's), so a short's settings
+    /// can show what it changed from its preset and take one back. Its hand framing and
+    /// graphic places are its own and left out.
+    pub short_looks: Map<String, Value>,
     pub folder: String,
+}
+
+/// A preset's short look without what is always a short's own.
+fn short_look(name: &str) -> Value {
+    let layout = store::resolve(name).short_layout();
+    let mut look = serde_json::to_value(&layout).unwrap_or_default();
+    if let Value::Object(map) = &mut look {
+        map.remove("cameraClips");
+        map.remove("graphicSlots");
+        // Written only when on; listed always, so a short that turned it on shows it.
+        map.insert("pushIns".into(), Value::Bool(layout.push_ins));
+    }
+    look
 }
 
 pub fn presets_impl(
     state: &AppState,
     project_handle: Option<String>,
 ) -> Result<PresetsView, String> {
-    let (project_preset, shorts_preset, clips_preset, changes, changed, inherited) =
+    let (project_preset, shorts_preset, clips_preset, changes, changed, inherited, short_looks) =
         match project_handle {
             Some(handle) => {
                 let opened = state.opened_project.lock();
@@ -47,9 +65,13 @@ pub fn presets_impl(
                     changes,
                     preset::changed_count(document),
                     preset::of(document).inherited(),
+                    Map::from_iter([
+                        ("shorts".to_string(), short_look(&document.shorts_preset)),
+                        ("clips".to_string(), short_look(&document.clips_preset)),
+                    ]),
                 )
             }
-            None => (None, None, None, Map::new(), 0, Map::new()),
+            None => (None, None, None, Map::new(), 0, Map::new(), Map::new()),
         };
     // Made before a preset of the user's own is saved, so "Open the presets folder" has one.
     let _ = std::fs::create_dir_all(store::dir());
@@ -61,6 +83,7 @@ pub fn presets_impl(
         changes,
         changed,
         inherited,
+        short_looks,
         folder: store::dir().display().to_string(),
     })
 }
@@ -411,4 +434,35 @@ pub fn preset_patch_impl(
         }
     }
     Ok((preset::view(&saved), copy))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_view_gives_the_look_new_shorts_and_clips_start_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new();
+        let folder = crate::project::folder::create_project_folder(dir.path(), "P", None).unwrap();
+        let opened =
+            super::super::open_project_impl(&state, folder.to_string_lossy().into()).unwrap();
+        let view = presets_impl(&state, Some(opened.project_handle)).unwrap();
+        for kind in ["shorts", "clips"] {
+            let look = view.short_looks[kind].as_object().unwrap();
+            let name = if kind == "shorts" {
+                view.shorts_preset.as_deref().unwrap()
+            } else {
+                view.clips_preset.as_deref().unwrap()
+            };
+            let mut expected = serde_json::to_value(store::resolve(name).short_layout()).unwrap();
+            let expected = expected.as_object_mut().unwrap();
+            expected.remove("cameraClips");
+            expected.remove("graphicSlots");
+            expected.insert("pushIns".into(), Value::Bool(false));
+            assert_eq!(look, expected, "{kind}");
+            assert!(look.contains_key("captionSpot"));
+        }
+        assert!(presets_impl(&state, None).unwrap().short_looks.is_empty());
+    }
 }

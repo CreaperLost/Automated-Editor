@@ -131,7 +131,7 @@ Promote only when a real job needs them. These are missing features, not newly c
 |---|---|
 | Resume stopped long analysis (`mcp/tools.rs`, job-owning command) | First identify a job expensive to restart; persist inputs/progress safely and prove resume equals a fresh run. Cancellation already exists. |
 | Per-video time/provider-spend report (`faceless/`, job/provider boundaries, UI) | Capture app/provider/agent categories separately with missing values explicit; EVAL-1's agent cost alone is insufficient. Decide accounting scope before UI. |
-| Remaining “changed here” chips (`components/layouts/`, short settings, `preset/`) | Show actual preset differences and reset only the intended owner; enumerate absent fields and test reset after project/short switching. |
+| Remaining “changed here” chips (`components/layouts/`, short settings, `preset/`) | 21 Nov: the video's Layouts section shows its chips (hidden while a short is in view), and a short's settings show what its look changed from its own kind's preset (shorts or clips), each taken back for that short only (`presetMarks.test.ts`). Left: none known; reopen if another settings panel lacks them. |
 
 ## Deferred work
 
