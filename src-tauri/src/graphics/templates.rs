@@ -157,6 +157,23 @@ static TEMPLATES: &[Template] = &[
          row (`highlight`) in the accent, a unit beside each value. For numbers compared."
     ),
     template!(
+        "dates",
+        "Dated events",
+        6000,
+        "Up to five events (\"Date: what happened\" split by |) on an ink rule, across at \
+         16:9 and down at 9:16; on `cue` the rule draws through them and each marker lands in \
+         turn, one event (`highlight`, its date or words) in the accent. For when things \
+         happened."
+    ),
+    template!(
+        "chart",
+        "Line chart",
+        6000,
+        "A number over time: up to twelve points (\"Label: value\" split by |) as one line over \
+         a baseline; on `cue` it draws left to right and one point (`highlight`, else the last) \
+         lands in the accent with its value and `unit`. For a trend."
+    ),
+    template!(
         "blank",
         "Blank",
         4000,

@@ -342,9 +342,9 @@ The Python Explainer repository informed the port; AeroEdits does not run it or 
   go to `faceless/beats.json`. General media import supports images/screenshots; integrated
   image generation/intake remains FCL-6.
 - **Broadsheet:** paper/ink/vermilion, Newsreader and IBM Plex Mono, square corners and restrained
-  motion; four dedicated parts (`headline`, `quote`, `verdict`, `bars`) plus existing templates
-  or agent-authored parts. Image look follows the style. Other dedicated parts remain FCL-5;
-  twelve conceptual kinds in the old explainer are not twelve finished new templates here.
+  motion; six dedicated parts (`headline`, `quote`, `verdict`, `bars`, `dates`, `chart`) plus
+  existing templates or agent-authored parts. Image look follows the style. The old explainer's
+  twelve kinds are not twelve templates here; the rest are listed under FCL-5.
 
 **Publishing is app-wide** (`publish/{mod,zernio}.rs`, `commands/publish.rs`,
 `components/export/PackageEditor.tsx`, `PublishDialog.tsx`). Each project stores target-keyed
