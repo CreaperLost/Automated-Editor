@@ -975,7 +975,14 @@ export interface Style {
   frame: {
     background: StyleBackground;
     screen: { cornerRadiusPx: number; shadowBlurPx: number; shadowOpacity: number };
-    camera: { borderColor: string; borderWidth: number; shadow: boolean };
+    camera: {
+      borderColor: string;
+      borderWidth: number;
+      shadow: boolean;
+      /** Behind the person in the camera, from their matte (FX-1). */
+      background?: CameraBackdrop;
+      backgroundColor?: string;
+    };
   };
   portrait: {
     graphics: ShortsLook;
@@ -2637,3 +2644,6 @@ export interface AiSettingsView {
   localPresent: boolean;
   localModelBytes: number;
 }
+
+/** What is drawn behind the person in the camera. */
+export type CameraBackdrop = "none" | "blur" | "remove" | "color";

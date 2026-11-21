@@ -315,6 +315,23 @@ pub struct CameraLook {
     /// 0 (none) to 8.
     pub border_width: u32,
     pub shadow: bool,
+    /// Behind the person in the camera (FX-1): `none`, `blur`, `remove` (what is behind the
+    /// camera shows through) or `color` (`backgroundColor`).
+    pub background: CameraBackdrop,
+    pub background_color: String,
+}
+
+/// What is drawn behind the person in the camera, from their matte.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum CameraBackdrop {
+    #[default]
+    None,
+    Blur,
+    Remove,
+    Color,
 }
 
 /// What a 9:16 canvas changes.
@@ -416,6 +433,8 @@ impl Default for CameraLook {
             border_color: "#6366F1".into(),
             border_width: MAX_BORDER_WIDTH,
             shadow: true,
+            background: CameraBackdrop::None,
+            background_color: "#1F2937".into(),
         }
     }
 }
@@ -470,6 +489,7 @@ pub fn builtin() -> Vec<Style> {
                 border_color: "#F5F5F7".into(),
                 border_width: 4,
                 shadow: true,
+                ..CameraLook::default()
             },
         },
         ..Style::default()
@@ -713,6 +733,7 @@ impl Style {
             ));
         }
         color("camera border", &f.camera.border_color)?;
+        color("camera background", &f.camera.background_color)?;
         lines("motion rules", &self.motion)?;
         lines("look rules", &self.rules)?;
         lines("9:16 motion rules", &self.portrait.motion)?;
@@ -765,6 +786,7 @@ impl Style {
         up(&mut self.frame.background.color_start);
         up(&mut self.frame.background.color_end);
         up(&mut self.frame.camera.border_color);
+        up(&mut self.frame.camera.background_color);
         if let Some(b) = &mut self.portrait.background {
             up(&mut b.color_start);
             up(&mut b.color_end);
@@ -914,6 +936,8 @@ pub fn dress_with(document: &mut EditDocument, style: &Style) {
     layout.webcam_border_color = frame.camera.border_color.clone();
     layout.webcam_border_width = frame.camera.border_width;
     layout.webcam_shadow = frame.camera.shadow;
+    layout.webcam_backdrop = frame.camera.background;
+    layout.webcam_backdrop_color = frame.camera.background_color.clone();
     dress_captions(&mut document.captions, style, portrait);
 }
 

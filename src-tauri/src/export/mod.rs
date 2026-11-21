@@ -816,6 +816,20 @@ impl SceneEvaluator {
     }
 
     /// How camera clip `clip` is framed: its face, or the hand framing.
+    /// The person in camera `clip` at `local` (its media's time), once its mattes are found;
+    /// they are started in the background the first time they are asked for.
+    fn camera_matte(&self, clip: &Clip, local: u64) -> Option<std::sync::Arc<Vec<u8>>> {
+        use crate::face::matte;
+        let asset = self.document.asset(&clip.asset)?;
+        let track = matte::cached_track(&self.root, &clip.asset, &clip.stream)
+            .filter(|t| matte::is_current(t, asset));
+        let Some(track) = track else {
+            matte::ensure(&self.root, asset, &clip.stream, false);
+            return None;
+        };
+        track.at(local).map(std::sync::Arc::new)
+    }
+
     fn framing_of(&self, clip: &Clip) -> (Option<crate::face::FocusPoint>, (f32, f32)) {
         if let Some(found) = self.camera_framing.borrow().get(&clip.id) {
             return *found;
@@ -1046,6 +1060,19 @@ impl SceneEvaluator {
             let uv =
                 crate::render::camera_uv((picture.width, picture.height), &slot, focus, offset);
             scene.push_camera(picture, &slot, uv, style, unit)?;
+            // The person over a blurred, left-out or plain background (FX-1).
+            if style.webcam_backdrop != crate::style::CameraBackdrop::None {
+                if let Some(matte) = shown
+                    .webcam
+                    .and_then(|clip| self.camera_matte(clip, at(clip)))
+                {
+                    scene.camera_backdrop(
+                        style.webcam_backdrop,
+                        &style.webcam_backdrop_color,
+                        matte,
+                    )?;
+                }
+            }
             // A bubble gets out of the way of work under it.
             let hidden = crate::bubble_hide::hidden_weight(self.bubble_hidden(), edited_us);
             if hidden > 0.0 {
@@ -2661,6 +2688,20 @@ fn export_to_temp(
         crate::face::wait_for_tracks(&captured.root, &captured.document, cancel, &mut |share| {
             note(ExportNote::Stage(finding.into(), Some(share as f64)))
         });
+    if waited {
+        note(ExportNote::Line(
+            ExportLogLevel::Info,
+            format!("{finding}: done"),
+        ));
+    }
+    // The person in the camera too, when the style draws them over another background.
+    let finding = "Finding the person in the camera";
+    let waited = crate::face::matte::wait_for_mattes(
+        &captured.root,
+        &captured.document,
+        cancel,
+        &mut |share| note(ExportNote::Stage(finding.into(), Some(share as f64))),
+    );
     if waited {
         note(ExportNote::Line(
             ExportLogLevel::Info,

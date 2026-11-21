@@ -17,7 +17,7 @@ struct LayerParams {
     // How opaque the layer and its shadow are drawn, 0 to 1.
     opacity: f32,
     _pad: u32,
-    // A dim's hole in layer pixels: x, y, w, h.
+    // A dim's hole in layer pixels: x, y, w, h. A camera backdrop: its colour (rgb).
     hole: vec4<f32>,
     // Blur: block size (uv). Dim: feather (px), unused, amount, hole radius (px).
     effect: vec4<f32>,
@@ -27,6 +27,8 @@ struct LayerParams {
 @group(0) @binding(1) var layer_samp: sampler;
 @group(0) @binding(2) var<uniform> params: LayerParams;
 @group(0) @binding(3) var layer_chroma: texture_2d<f32>;
+// The person in a camera picture (pass 4), over the whole picture.
+@group(0) @binding(4) var layer_matte: texture_2d<f32>;
 
 // The layer's colour at `uv`. NV12 is converted from limited-range BT.709 YCbCr; it has no
 // alpha. (Sampled at level 0, which needs no derivatives, so it may run per pixel.)
@@ -153,6 +155,20 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if params.pass_kind == 2u {
         let color = blurred(in.uv);
         return vec4<f32>(color.rgb, params.opacity);
+    }
+    if params.pass_kind == 4u {
+        // Camera backdrop: effect.z is the mode (1 blur, 2 left out, 3 colour in hole.rgb).
+        let color = layer_color_level(in.uv);
+        let m = textureSampleLevel(layer_matte, layer_samp, in.uv, 0.0).r;
+        let mode = u32(params.effect.z + 0.5);
+        if mode == 2u {
+            return vec4<f32>(color.rgb, m * params.opacity);
+        }
+        var behind = params.hole.rgb;
+        if mode == 1u {
+            behind = blurred(in.uv).rgb;
+        }
+        return vec4<f32>(mix(behind, color.rgb, m), params.opacity);
     }
     let color = layer_color(in.uv);
     return vec4<f32>(color.rgb, color.a * params.opacity);

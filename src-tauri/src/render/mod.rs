@@ -23,6 +23,8 @@ const TO_YUV: &str = include_str!("to_yuv.wgsl");
 const WEBCAM_SHADOW_BLUR_PX: f32 = 16.0;
 const WEBCAM_SHADOW_OPACITY: f32 = 0.55;
 const SHADOW_OFFSET_FACTOR: f32 = 0.35;
+/// A blurred camera background's blocks, as a share of the picture's width.
+const CAMERA_BLUR_BLOCK: f32 = 1.0 / 14.0;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -85,6 +87,14 @@ pub enum LayerEffect {
         feather: f32,
         amount: f32,
     },
+    /// The camera's person over another background, from the layer's `matte` (FX-1): `mode`
+    /// 1 blurs the rest (blocks `block` across, as [`LayerEffect::Blur`]), 2 leaves it out
+    /// (what is behind shows), 3 fills it with `color` (RGB, 0 to 1).
+    Backdrop {
+        mode: u32,
+        block: [f32; 2],
+        color: [f32; 3],
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -122,6 +132,9 @@ pub struct Layer {
     /// Draws the texture of the earlier layer at this index (the same frame) rather than
     /// uploading it again: a screen effect over the screen.
     pub shares: Option<usize>,
+    /// The person in this camera picture: [`crate::face::matte::SIZE`]² bytes over the whole
+    /// picture, 255 the person (with [`LayerEffect::Backdrop`]).
+    pub matte: Option<std::sync::Arc<Vec<u8>>>,
 }
 
 impl Layer {
@@ -146,6 +159,7 @@ impl Layer {
             opacity: 1.0,
             effect: LayerEffect::None,
             shares: None,
+            matte: None,
         }
     }
 
@@ -519,6 +533,47 @@ impl Scene {
             .position(|l| l.role == LayerRole::Caption)
             .unwrap_or(self.layers.len());
         self.layers.splice(at..at, layers);
+        Ok(())
+    }
+
+    /// Puts the last camera's person over `backdrop` (blurred, left out or `color`), from
+    /// `matte`. Left out, the camera loses its ring and shadow: only the person shows.
+    pub fn camera_backdrop(
+        &mut self,
+        backdrop: crate::style::CameraBackdrop,
+        color: &str,
+        matte: std::sync::Arc<Vec<u8>>,
+    ) -> Result<(), String> {
+        use crate::style::CameraBackdrop;
+        let Some(index) = self
+            .layers
+            .iter()
+            .rposition(|l| l.role == LayerRole::Webcam)
+        else {
+            return Ok(());
+        };
+        let mode = match backdrop {
+            CameraBackdrop::None => return Ok(()),
+            CameraBackdrop::Blur => 1,
+            CameraBackdrop::Remove => 2,
+            CameraBackdrop::Color => 3,
+        };
+        let [r, g, b] = crate::project::layout::parse_hex_rgb(color)?;
+        let picture = &mut self.layers[index];
+        let aspect = picture.frame.width as f32 / picture.frame.height.max(1) as f32;
+        picture.effect = LayerEffect::Backdrop {
+            mode,
+            block: [CAMERA_BLUR_BLOCK, CAMERA_BLUR_BLOCK * aspect],
+            color: [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0],
+        };
+        picture.matte = Some(matte);
+        if mode == 2 {
+            picture.shadow_blur_px = 0.0;
+            picture.shadow_opacity = 0.0;
+            if index > 0 && self.layers[index - 1].role == LayerRole::WebcamBorder {
+                self.layers.remove(index - 1);
+            }
+        }
         Ok(())
     }
 
@@ -1029,6 +1084,8 @@ pub struct Compositor {
     slots: std::sync::Mutex<Vec<LayerSlot>>,
     /// Bound as the chroma plane of layers that have none (BGRA).
     no_chroma: wgpu::TextureView,
+    /// Bound as the matte of layers that have none.
+    no_matte: wgpu::TextureView,
     /// Converting the composited frame to NV12 (see `to_yuv.wgsl`).
     yuv_layout: wgpu::BindGroupLayout,
     luma_pipeline: wgpu::RenderPipeline,
@@ -1086,6 +1143,16 @@ impl Compositor {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -1212,6 +1279,22 @@ impl Compositor {
                 view_formats: &[],
             })
             .create_view(&wgpu::TextureViewDescriptor::default());
+        let no_matte = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("aeroedits-no-matte"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
         Ok(Self {
             instance,
             adapter,
@@ -1226,6 +1309,7 @@ impl Compositor {
             target: std::sync::Mutex::new(None),
             slots: std::sync::Mutex::new(Vec::new()),
             no_chroma,
+            no_matte,
             yuv_layout,
             luma_pipeline,
             chroma_pipeline,
@@ -1288,6 +1372,45 @@ impl Compositor {
 
     pub fn copies(&self) -> u32 {
         self.copies
+    }
+
+    /// A camera matte as a texture to sample.
+    fn matte_view(&self, matte: &[u8]) -> Result<wgpu::TextureView, String> {
+        let side = crate::face::matte::SIZE as u32;
+        if matte.len() != (side * side) as usize {
+            return Err("A camera matte is the wrong size".into());
+        }
+        let size = wgpu::Extent3d {
+            width: side,
+            height: side,
+            depth_or_array_layers: 1,
+        };
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("aeroedits-matte"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            matte,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(side),
+                rows_per_image: Some(side),
+            },
+            size,
+        );
+        Ok(texture.create_view(&wgpu::TextureViewDescriptor::default()))
     }
 
     pub fn composite_cpu(scene: &Scene) -> Result<VideoFrame, String> {
@@ -1591,6 +1714,10 @@ impl Compositor {
                 .chroma
                 .as_ref()
                 .map_or_else(|| self.no_chroma.clone(), |(_, view)| view.clone());
+            let matte_view = match &layer.matte {
+                Some(matte) => self.matte_view(matte)?,
+                None => self.no_matte.clone(),
+            };
             let content_params = layer_params(layer, 0);
             let content_uniform =
                 self.device
@@ -1618,6 +1745,10 @@ impl Compositor {
                     wgpu::BindGroupEntry {
                         binding: 3,
                         resource: wgpu::BindingResource::TextureView(&chroma_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(&matte_view),
                     },
                 ],
             });
@@ -1662,6 +1793,10 @@ impl Compositor {
                         wgpu::BindGroupEntry {
                             binding: 3,
                             resource: wgpu::BindingResource::TextureView(&chroma_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: wgpu::BindingResource::TextureView(&self.no_matte),
                         },
                     ],
                 });
@@ -2218,6 +2353,11 @@ fn layer_params(layer: &Layer, pass_kind: u32) -> LayerParams {
                 amount,
             },
         ) => (3, hole, [feather, 0.0, amount, radius]),
+        (0, LayerEffect::Backdrop { mode, block, color }) => (
+            4,
+            [color[0], color[1], color[2], 0.0],
+            [block[0], block[1], mode as f32, 0.0],
+        ),
         (kind, _) => (kind, [0.0; 4], [0.0; 4]),
     };
     LayerParams {
@@ -2351,6 +2491,24 @@ fn blit_shadow(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
 }
 
 /// Samples `frame` at normalized `(u, v)` like a clamp-to-edge bilinear GPU sampler.
+/// A camera matte at `u`, `v` of its picture, 0 to 1, filtered as the GPU samples it.
+fn sample_matte(matte: &[u8], u: f32, v: f32) -> f32 {
+    let side = crate::face::matte::SIZE;
+    if matte.len() != side * side {
+        return 1.0;
+    }
+    let x = u * side as f32 - 0.5;
+    let y = v * side as f32 - 0.5;
+    let (x0, y0) = (x.floor(), y.floor());
+    let (fx, fy) = (x - x0, y - y0);
+    let clamp = |value: f32| (value as i64).clamp(0, side as i64 - 1) as usize;
+    let (xa, xb, ya, yb) = (clamp(x0), clamp(x0 + 1.0), clamp(y0), clamp(y0 + 1.0));
+    let at = |sx: usize, sy: usize| matte[sy * side + sx] as f32 / 255.0;
+    let top = at(xa, ya) * (1.0 - fx) + at(xb, ya) * fx;
+    let bottom = at(xa, yb) * (1.0 - fx) + at(xb, yb) * fx;
+    top * (1.0 - fy) + bottom * fy
+}
+
 fn sample_bilinear(frame: &VideoFrame, u: f32, v: f32) -> [u8; 4] {
     let x = u * frame.width as f32 - 0.5;
     let y = v * frame.height as f32 - 0.5;
@@ -2459,23 +2617,46 @@ fn blit_effect(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
                 continue;
             }
             let u = layer.uv_x + layer.uv_w * local_x;
+            let blurred = |block: [f32; 2]| {
+                let (gx, gy) = (u / block[0] - 0.5, v / block[1] - 0.5);
+                let (ix, iy) = (gx.floor(), gy.floor());
+                let (fx, fy) = (smooth(gx - ix), smooth(gy - iy));
+                let at =
+                    |a: f32, b: f32| block_mean((ix + a) * block[0], (iy + b) * block[1], block);
+                let (c00, c10) = (at(0.5, 0.5), at(1.5, 0.5));
+                let (c01, c11) = (at(0.5, 1.5), at(1.5, 1.5));
+                let mut color = [0f32; 3];
+                for (c, out) in color.iter_mut().enumerate() {
+                    let top = c00[c] + (c10[c] - c00[c]) * fx;
+                    let bottom = c01[c] + (c11[c] - c01[c]) * fx;
+                    *out = top + (bottom - top) * fy;
+                }
+                color
+            };
             let (color, alpha) = match layer.effect {
-                LayerEffect::Blur { block } => {
-                    let (gx, gy) = (u / block[0] - 0.5, v / block[1] - 0.5);
-                    let (ix, iy) = (gx.floor(), gy.floor());
-                    let (fx, fy) = (smooth(gx - ix), smooth(gy - iy));
-                    let at = |a: f32, b: f32| {
-                        block_mean((ix + a) * block[0], (iy + b) * block[1], block)
-                    };
-                    let (c00, c10) = (at(0.5, 0.5), at(1.5, 0.5));
-                    let (c01, c11) = (at(0.5, 1.5), at(1.5, 1.5));
-                    let mut color = [0f32; 3];
-                    for (c, out) in color.iter_mut().enumerate() {
-                        let top = c00[c] + (c10[c] - c00[c]) * fx;
-                        let bottom = c01[c] + (c11[c] - c01[c]) * fx;
-                        *out = top + (bottom - top) * fy;
+                LayerEffect::Blur { block } => (blurred(block), opacity),
+                LayerEffect::Backdrop { mode, block, color } => {
+                    let m = layer
+                        .matte
+                        .as_deref()
+                        .map_or(1.0, |matte| sample_matte(matte, u, v));
+                    let own = sample_bilinear(&layer.frame, u, v);
+                    let own = [own[0] as f32, own[1] as f32, own[2] as f32];
+                    if mode == 2 {
+                        (own, m * opacity)
+                    } else {
+                        // The frame is BGRA; the colour is RGB.
+                        let behind = if mode == 1 {
+                            blurred(block)
+                        } else {
+                            [color[2] * 255.0, color[1] * 255.0, color[0] * 255.0]
+                        };
+                        let mut out = [0f32; 3];
+                        for c in 0..3 {
+                            out[c] = behind[c] + (own[c] - behind[c]) * m;
+                        }
+                        (out, opacity)
                     }
-                    (color, opacity)
                 }
                 LayerEffect::Dim {
                     hole,
@@ -3771,6 +3952,106 @@ mod tests {
         off.push_screen_effect(EffectKind::Blur, [0.0, 0.0, 0.1, 0.1], 1.0, 1.0, 1.0)
             .unwrap();
         assert_eq!(off.layers.len(), 1);
+    }
+
+    /// A camera of vertical stripes over the whole canvas (red on the left, blue on the
+    /// right) whose matte says the left half is the person, over a green backdrop.
+    fn backdrop_scene(backdrop: crate::style::CameraBackdrop) -> Scene {
+        let side = crate::face::matte::SIZE;
+        let mut camera = VideoFrame::solid(32, 16, 0, 0, 0, 0).unwrap();
+        for y in 0..16u32 {
+            for x in 0..32u32 {
+                let i = (y * camera.stride + x * 4) as usize;
+                let stripe = if (x / 2) % 2 == 0 { 255 } else { 0 };
+                // BGRA: left half red stripes, right half blue stripes.
+                camera.data[i..i + 4].copy_from_slice(&if x < 16 {
+                    [0, 0, stripe, 255]
+                } else {
+                    [stripe, 0, 0, 255]
+                });
+            }
+        }
+        let mut scene = Scene {
+            width: 64,
+            height: 32,
+            background: [0.0, 1.0, 0.0, 1.0],
+            layers: vec![Layer::placed(camera, 0, 0, 64, 32).with_role(LayerRole::Webcam)],
+        };
+        let matte: Vec<u8> = (0..side * side)
+            .map(|i| if i % side < side / 2 { 255 } else { 0 })
+            .collect();
+        scene
+            .camera_backdrop(backdrop, "#FFFFFF", std::sync::Arc::new(matte))
+            .unwrap();
+        scene
+    }
+
+    #[test]
+    fn the_camera_person_stays_and_the_backdrop_blurs_goes_or_turns_one_colour() {
+        use crate::style::CameraBackdrop;
+        let px = |f: &VideoFrame, x: u32, y: u32| {
+            let i = (y * f.stride + x * 4) as usize;
+            [f.data[i], f.data[i + 1], f.data[i + 2]]
+        };
+        for backdrop in [
+            CameraBackdrop::Blur,
+            CameraBackdrop::Remove,
+            CameraBackdrop::Color,
+        ] {
+            let out = Compositor::composite_cpu(&backdrop_scene(backdrop)).unwrap();
+            // The person (left) is the camera as it is: red stripes.
+            assert_eq!(px(&out, 4, 16)[0], 0, "{backdrop:?}");
+            assert!(px(&out, 9, 16)[2] > 200, "{backdrop:?}");
+            let right = px(&out, 56, 16);
+            match backdrop {
+                // Blurred: the blue stripes flatten to their mean.
+                CameraBackdrop::Blur => {
+                    let row: Vec<u8> = (48..60).map(|x| px(&out, x, 16)[0]).collect();
+                    let spread = row.iter().max().unwrap() - row.iter().min().unwrap();
+                    assert!(spread < 128, "blurred (the stripes span 255): {row:?}");
+                }
+                // Left out: the canvas's green shows.
+                CameraBackdrop::Remove => assert_eq!(right, [0, 255, 0]),
+                // One colour: white.
+                CameraBackdrop::Color => assert_eq!(right, [255, 255, 255]),
+                CameraBackdrop::None => unreachable!(),
+            }
+        }
+        // Without a camera nothing changes.
+        let mut empty = effects_scene();
+        let before = empty.layers.clone();
+        empty
+            .camera_backdrop(
+                CameraBackdrop::Blur,
+                "#000000",
+                std::sync::Arc::new(Vec::new()),
+            )
+            .unwrap();
+        assert_eq!(empty.layers, before);
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter; run with --ignored on a machine that has one"
+    )]
+    fn gpu_cpu_camera_backdrops_within_tolerance() {
+        use crate::style::CameraBackdrop;
+        let compositor = Compositor::new().expect("GPU compositor required for contract tests");
+        for backdrop in [
+            CameraBackdrop::Blur,
+            CameraBackdrop::Remove,
+            CameraBackdrop::Color,
+        ] {
+            let scene = backdrop_scene(backdrop);
+            let cpu = Compositor::composite_cpu(&scene).unwrap();
+            let gpu = compositor.composite(&scene).unwrap();
+            let (max, mean) = crate::media::compare_frames(&gpu, &cpu).unwrap();
+            assert!(
+                mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE + 1.0,
+                "{backdrop:?}: GPU vs CPU mean {mean} max {max}"
+            );
+        }
     }
 
     #[test]

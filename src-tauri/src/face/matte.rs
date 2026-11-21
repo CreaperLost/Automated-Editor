@@ -496,6 +496,46 @@ pub fn ensure(root: &Path, asset: &Asset, stream: &str, retry: bool) {
         .ok();
 }
 
+/// The longest an export waits for mattes.
+const MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(1200);
+
+/// Waits until every camera of `document` has its mattes, finding the missing ones, when its
+/// style draws the camera's person over another background; `progress` gets the share found.
+/// Gives up when `cancel` is set or after twenty minutes. True when it had to wait.
+pub fn wait_for_mattes(
+    root: &Path,
+    document: &crate::project::revision::EditDocument,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(f32),
+) -> bool {
+    if document.layout.webcam_backdrop == crate::style::CameraBackdrop::None || !compiled_in() {
+        return false;
+    }
+    let cameras: Vec<(Asset, String)> = super::camera_streams(document)
+        .into_iter()
+        .filter_map(|(asset, stream)| Some((document.asset(&asset)?.clone(), stream)))
+        .collect();
+    for (asset, stream) in &cameras {
+        ensure(root, asset, stream, false);
+    }
+    let started = std::time::Instant::now();
+    let mut waited = false;
+    loop {
+        let working: Vec<f32> = cameras
+            .iter()
+            .map(|(asset, stream)| status(root, asset, stream))
+            .filter(|s| s.state == "working")
+            .map(|s| s.progress)
+            .collect();
+        if working.is_empty() || cancel.load(Ordering::SeqCst) || started.elapsed() > MAX_WAIT {
+            return waited;
+        }
+        waited = true;
+        progress(working.iter().sum::<f32>() / working.len() as f32);
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

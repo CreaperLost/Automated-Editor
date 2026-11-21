@@ -13,6 +13,7 @@ import {
   SHORTS_LOOK_CONTROLS,
   presetBackgroundCss,
   type BackgroundPreset,
+  type CameraBackdrop,
   type CaptionStyle,
   type InLinePlan,
   type LookStill,
@@ -577,6 +578,33 @@ export const StylePanel: React.FC = () => {
             onChange={(shadow) => set("frame", { camera: { ...s.frame.camera, shadow } })}
           />
         </MoreSettings>
+        <Field label="Behind the person">
+          <Segmented<CameraBackdrop>
+            label="Behind the person in the camera"
+            size="sm"
+            className="w-full"
+            value={s.frame.camera.background ?? "none"}
+            onChange={(background) => set("frame", { camera: { ...s.frame.camera, background } })}
+            options={[
+              { value: "none", label: "As filmed", title: "The camera as it was recorded" },
+              { value: "blur", label: "Blur", title: "The room behind you blurred" },
+              { value: "remove", label: "Remove", title: "Only you: what is behind the camera shows through" },
+              { value: "color", label: "Colour", title: "One colour behind you" },
+            ]}
+          />
+        </Field>
+        {s.frame.camera.background === "color" && (
+          <ColorRow
+            label="Background colour"
+            value={s.frame.camera.backgroundColor ?? "#1F2937"}
+            onChange={(backgroundColor) => set("frame", { camera: { ...s.frame.camera, backgroundColor } })}
+          />
+        )}
+        {s.frame.camera.background && s.frame.camera.background !== "none" && (
+          <p className="text-meta text-studio-500">
+            The app finds you in the camera once, in the background; until then the camera shows as filmed.
+          </p>
+        )}
       </InspectorSection>
 
       <InspectorSection id="style-portrait" title="At 9:16 (shorts)" icon={Smartphone}>

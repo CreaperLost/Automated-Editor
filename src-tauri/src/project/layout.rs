@@ -53,6 +53,11 @@ pub struct EditLayout {
     pub webcam_border_width: u32,
     #[serde(skip)]
     pub webcam_shadow: bool,
+    /// Behind the person in the camera, from their matte (FX-1).
+    #[serde(skip)]
+    pub webcam_backdrop: crate::style::CameraBackdrop,
+    #[serde(skip)]
+    pub webcam_backdrop_color: String,
     /// Percent of the source trimmed from each screen edge.
     pub screen_crop_left: f32,
     pub screen_crop_top: f32,
@@ -111,6 +116,8 @@ impl Default for EditLayout {
             webcam_border_width: MAX_BORDER_WIDTH,
             webcam_mirror: true,
             webcam_shadow: true,
+            webcam_backdrop: crate::style::CameraBackdrop::None,
+            webcam_backdrop_color: "#1F2937".into(),
             face_framing: true,
             camera_clips: Default::default(),
             cursor_visible: true,
