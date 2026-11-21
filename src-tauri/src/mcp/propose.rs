@@ -55,6 +55,9 @@ pub struct ListParams {
     /// Only your own batches.
     #[serde(default)]
     pub mine: bool,
+    /// Instead: what the user turned down or redid of the agent's work here.
+    #[serde(default)]
+    pub corrections: bool,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -243,6 +246,15 @@ fn listing(view: &ProposalsView, agent: &str, pending_only: bool, mine: bool) ->
 
 pub fn proposals_list(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: ListParams = params(args)?;
+    if args.corrections {
+        let report = super::tools::with_reader(ctx.state, |reader| {
+            let proposals = proposals::load(reader.root())?;
+            let mut steps = reader.history().steps().recent_steps(500);
+            steps.reverse();
+            Ok(crate::corrections::gather(&proposals, &steps).text())
+        })?;
+        return super::tools::text(report);
+    }
     let (project, view) = super::tools::with_reader(ctx.state, |reader| {
         let view = proposals::view(reader, &proposals::load(reader.root())?);
         Ok((reader.summary.project_handle.clone(), view))
