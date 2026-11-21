@@ -167,7 +167,12 @@ The editing contract and approval rules live in [Product](product.md#editing-con
 
 The app runs a preset's first steps itself through the same tools (`first_steps.rs`, AUTO-1:
 Preset → Run), as author "AeroEdits", so its steps are undo steps like an agent's and `status`
-can tell a later agent what already ran.
+can tell a later agent what already ran. A faceless production gets its own steps by stage (FCL-10): read the
+story's unread reports (online), and once the narration is accepted, the visuals check with
+`fill` (it stops on anything that must be fixed), the choices' opening sound on the first frame
+and the first music bed the choices' `query` finds (online only when it still has to download),
+each skipped once on the timeline. Writing, the paid narration, the graphics, the package and the
+export stay with the agent and the user.
 
 - **Transport.** Agents start `aeroedits --mcp-stdio` (`bridge.rs`). The bridge answers
   `initialize`, `ping` and `tools/list` itself (so the client sees tools while the app is closed)
