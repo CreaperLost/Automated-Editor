@@ -2,6 +2,7 @@
 use crate::media::audio::{AudioMixer, CHANNELS, CHUNK_FRAMES, SAMPLE_RATE};
 pub mod deliveries;
 pub mod files;
+pub mod graphics_out;
 pub use deliveries::ExportOwner;
 mod native;
 

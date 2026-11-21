@@ -43,6 +43,7 @@ const OTHER_FILES: { kind: ExportFileKind; label: string; hint: string }[] = [
   { kind: "md", label: "Transcript", hint: "The words as Markdown, chapters as headings" },
   { kind: "txt", label: "Text", hint: "The words as plain text" },
   { kind: "wav", label: "Audio", hint: "The sound alone, as a WAV file" },
+  { kind: "graphics", label: "Graphics", hint: "Each graphic on its own with see-through parts (MOV), for another editor" },
 ];
 const MIN_MBPS = 1;
 const MAX_MBPS = 200;
@@ -207,7 +208,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     };
   }, []);
 
-  // Subtitles, transcript and sound go beside the video, named like it.
+  // Subtitles, transcript, sound and graphics go beside the video, named like it.
   const projectHandle = useProjectStore((s) => s.openedProject?.projectHandle);
   const [saving, setSaving] = useState<ExportFileKind>();
   const [saved, setSaved] = useState<{ path?: string; error?: string }>();
@@ -216,7 +217,8 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     setSaving(kind);
     setSaved(undefined);
     try {
-      const beside = destination ? destination.replace(/\.[^./\\]*$/, "") + `.${kind}` : null;
+      const stem = destination?.replace(/\.[^./\\]*$/, "");
+      const beside = stem ? (kind === "graphics" ? `${stem} graphics` : `${stem}.${kind}`) : null;
       setSaved({ path: await api.exportFile(projectHandle, kind, null, beside) });
     } catch (err) {
       setSaved({ error: String(err) });
@@ -412,7 +414,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                     </button>
                   </span>
                 ) : (
-                  "Subtitles and the transcript follow the cuts, as the captions do. Saved beside the video."
+                  "Subtitles and the transcript follow the cuts, as the captions do. Graphics go in a folder, named by where each starts. Saved beside the video."
                 ),
               )}
               </div>

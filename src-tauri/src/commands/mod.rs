@@ -3053,6 +3053,9 @@ pub fn export_file_impl(
     on_progress: &mut dyn FnMut(f64),
 ) -> Result<PathBuf, String> {
     use crate::export::files;
+    if kind == files::FileKind::Graphics {
+        return export_graphics_impl(state, project_handle, short_id, destination, on_progress);
+    }
     let (root, stem, assets, contents, sound, label, revision, fingerprint) = {
         let _guard = state.command_lock.lock();
         let opened = state.opened_project.lock();
@@ -3108,6 +3111,7 @@ pub fn export_file_impl(
             files::FileKind::Srt | files::FileKind::Vtt => "Subtitles",
             files::FileKind::Txt | files::FileKind::Md => "Transcript",
             files::FileKind::Wav => "Sound",
+            files::FileKind::Graphics => unreachable!("written by export_graphics_impl"),
         };
         let label = match short {
             Some(short) => format!("{}: {what}", short.title),
@@ -3182,6 +3186,109 @@ pub fn export_file_impl(
         },
     );
     Ok(path)
+}
+
+/// Writes each graphic of the video (or `short_id`'s short) on its own, see-through, into a
+/// folder beside the project (`<name> graphics`) or `destination`, at the export settings'
+/// size and frame rate; answers with the folder.
+pub fn export_graphics_impl(
+    state: &AppState,
+    project_handle: String,
+    short_id: Option<String>,
+    destination: Option<String>,
+    on_progress: &mut dyn FnMut(f64),
+) -> Result<PathBuf, String> {
+    let (root, stem, assets, document, revision, fingerprint) = {
+        let _guard = state.command_lock.lock();
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        let base = &reader.history().current;
+        let (stem, document) = match &short_id {
+            Some(id) => {
+                let short = base
+                    .shorts
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .ok_or("That short no longer exists")?;
+                (
+                    format!("{} - {}", reader.summary.name, short.title),
+                    crate::shorts::short_document(base, short, has_speech_transcript(reader))?,
+                )
+            }
+            None => (reader.summary.name.clone(), base.clone()),
+        };
+        // What the list of exports compares against to mark it out of date, as for files.
+        let inputs = crate::export::ExportInputs::capture(reader.root(), &document);
+        let fingerprint = crate::export::deliveries::fingerprint(&document, &inputs, true);
+        (
+            reader.root().to_path_buf(),
+            stem,
+            base.assets.clone(),
+            document,
+            base.revision,
+            fingerprint,
+        )
+    };
+    let settings = document.export.settings(&document.layout)?;
+    let canvas = match &short_id {
+        // A short is always made 1080x1920.
+        Some(_) => (1080, 1920),
+        None => (settings.width, settings.height),
+    };
+    let requested = match destination {
+        Some(path) if !path.trim().is_empty() => path,
+        _ => {
+            crate::export::default_destination(&root, &stem, 0)
+                .with_extension("")
+                .to_string_lossy()
+                .into_owned()
+                + " graphics"
+        }
+    };
+    let folder = crate::export::resolve_destination(&root, &stem, 0, Some(&requested), &assets)
+        .map_err(|failure| failure.message().to_string())?;
+    let written = crate::export::graphics_out::write(
+        &root,
+        &document,
+        canvas,
+        settings.fps,
+        &folder,
+        &std::sync::atomic::AtomicBool::new(false),
+        &mut |done, _| on_progress(done),
+    )?;
+    let output = folder.to_string_lossy().into_owned();
+    for earlier in crate::export::deliveries::records(&root) {
+        if earlier.request.file.is_some() && earlier.output_path.as_deref() == Some(&output) {
+            let _ = crate::export::deliveries::forget(&root, &earlier.job_id);
+        }
+    }
+    let _ = crate::export::deliveries::record(
+        &root,
+        crate::export::deliveries::Delivery {
+            job_id: uuid::Uuid::new_v4().to_string(),
+            label: format!(
+                "{} graphic{} (MOV with alpha)",
+                written.len(),
+                if written.len() == 1 { "" } else { "s" }
+            ),
+            request: crate::export::deliveries::Request {
+                short_id,
+                settings: Default::default(),
+                file: Some(crate::export::files::FileKind::Graphics),
+            },
+            state: crate::export::ExportState::Completed,
+            revision,
+            width: canvas.0,
+            height: canvas.1,
+            progress: 1.0,
+            output_path: Some(output),
+            failure: None,
+            finished_at: Some(chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()),
+            fingerprint: Some(fingerprint),
+        },
+    );
+    Ok(folder)
 }
 
 /// Formats the window title for project editing.
