@@ -43,7 +43,137 @@ pub struct EditParams {
     /// from timeline_get, assets and streams from project_info.
     // Parsed one by one (so an error names the edit), but published with every kind's schema.
     #[schemars(with = "Vec<SequenceEdit>")]
+    #[serde(default)]
     pub edits: Vec<Value>,
+    /// B-roll over the video, placed by the app after `edits`: pictures only (the narration
+    /// stays), on a free overlay track.
+    #[serde(default)]
+    pub broll: Vec<BrollItem>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BrollItem {
+    /// An imported media id.
+    pub media: String,
+    /// From `fromS` on its own clock, or from the notes moment whose words are `select`.
+    #[serde(default)]
+    pub from_s: Option<f64>,
+    #[serde(default)]
+    pub select: Option<String>,
+    /// Default 4.
+    #[serde(default)]
+    pub length_s: Option<f64>,
+    /// Lands on word `atWord` (an id) or at `atS` on the timeline.
+    #[serde(default)]
+    pub at_word: Option<String>,
+    #[serde(default)]
+    pub at_s: Option<f64>,
+}
+
+const BROLL_DEFAULT_US: u64 = 4_000_000;
+
+/// The placements for `items` on `reader`'s video, after `before` (the batch's other edits):
+/// each item's picture streams on a video track above the first that is free there, or a new
+/// one. `at` gives each item's timeline start.
+fn broll_edits(
+    reader: &ProjectReader,
+    notes_dir: &std::path::Path,
+    before: &[SequenceEdit],
+    items: &[BrollItem],
+    at: &[u64],
+) -> Result<Vec<SequenceEdit>, String> {
+    use crate::sequence::edit::apply_reserving;
+    use crate::sequence::{SourceRange, StreamKind, TrackKind};
+    let document = reader.document();
+    let taken: Vec<String> = document.track_ids_in_use().map(String::from).collect();
+    let mut sequence = document.sequence.clone();
+    for edit in before {
+        sequence = apply_reserving(
+            &sequence,
+            &document.assets,
+            edit,
+            taken.iter().map(String::as_str),
+        )?
+        .0;
+    }
+    let length_before = sequence.duration_us();
+    let mut out = Vec::new();
+    for (item, &at_us) in items.iter().zip(at) {
+        let asset = document
+            .asset(&item.media)
+            .ok_or_else(|| format!("No media {}", item.media))?;
+        let streams: Vec<String> = asset
+            .streams
+            .iter()
+            .filter(|s| s.kind == StreamKind::Picture)
+            .map(|s| s.id.clone())
+            .collect();
+        if streams.is_empty() || asset.is_graphic() {
+            return Err(format!("{} has no picture for B-roll", item.media));
+        }
+        let from_us = match (&item.select, item.from_s) {
+            (Some(words), _) => {
+                let print = crate::source_notes::fingerprint(reader.root(), asset)?;
+                let notes = crate::source_notes::load(notes_dir, &print)
+                    .ok_or_else(|| format!("{} has no notes to select from", item.media))?;
+                notes
+                    .matching(words)
+                    .into_iter()
+                    .find_map(|(at, _)| at)
+                    .ok_or_else(|| format!("No moment of {} matches \"{words}\"", item.media))?
+            }
+            (None, Some(s)) if s.is_finite() && s >= 0.0 => (s * 1e6).round() as u64,
+            _ => return Err("Give each B-roll `fromS` or `select`".into()),
+        };
+        let length = item
+            .length_s
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .map_or(BROLL_DEFAULT_US, |s| (s * 1e6).round() as u64);
+        let end = (from_us + length).min(asset.duration_us);
+        if end <= from_us {
+            return Err(format!("{} ends before {}", item.media, clock_s(from_us)));
+        }
+        let range = Some(SourceRange {
+            start_us: from_us,
+            end_us: end,
+        });
+        let free = sequence
+            .video_tracks()
+            .skip(1)
+            .find(|t| !t.locked && t.is_free(at_us, at_us + (end - from_us)))
+            .map(|t| t.id.clone());
+        let place = SequenceEdit::PlaceAsset {
+            asset_id: asset.id.clone(),
+            at_us,
+            track_id: free.clone(),
+            streams: streams.clone(),
+            range,
+        };
+        let edit = match free {
+            Some(_) => place,
+            None => SequenceEdit::OnNewTrack {
+                track_kind: TrackKind::Video,
+                edit: Box::new(place),
+            },
+        };
+        sequence = apply_reserving(
+            &sequence,
+            &document.assets,
+            &edit,
+            taken.iter().map(String::as_str),
+        )?
+        .0;
+        if sequence.duration_us() > length_before.max(at_us + (end - from_us)) {
+            return Err("That B-roll would have moved the video".into());
+        }
+        out.push(edit);
+    }
+    Ok(out)
+}
+
+fn clock_s(us: u64) -> String {
+    super::tools::clock(us)
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -174,8 +304,24 @@ pub fn propose_edit(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 .map_err(|e| format!("Edit {} is not a timeline edit: {e}", index + 1))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if edits.is_empty() && args.broll.is_empty() {
+        return Err("Give `edits` or `broll`".into());
+    }
+    let at = args
+        .broll
+        .iter()
+        .map(|b| match (&b.at_word, b.at_s) {
+            (Some(word), _) => super::actions::word_edited_us(ctx, None, word),
+            (None, Some(s)) if s.is_finite() && s >= 0.0 => Ok((s * 1e6).round() as u64),
+            _ => Err("Give each B-roll `atWord` or `atS`".to_string()),
+        })
+        .collect::<Result<Vec<u64>, String>>()?;
+    let notes_dir = crate::source_notes::dir(&ctx.host.config_dir());
     let agent = ctx.agent.clone();
     propose(ctx, |reader, proposals| {
+        let mut edits = edits;
+        let broll = broll_edits(reader, &notes_dir, &edits, &args.broll, &at)?;
+        edits.extend(broll);
         proposals::propose_edits(
             reader,
             proposals,
