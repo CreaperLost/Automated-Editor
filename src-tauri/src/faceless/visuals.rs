@@ -20,7 +20,7 @@ const ON_WORD_US: u64 = 300_000;
 /// A long video uses at least this many kinds.
 const LONG_KINDS: usize = 6;
 /// Variables that aren't read as words on screen.
-const NOT_READ: [&str; 4] = ["emphasis", "highlight", "unit", "source"];
+const NOT_READ: [&str; 5] = ["emphasis", "highlight", "unit", "source", "picture"];
 
 /// A graphic on the timeline, as the check sees it.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -45,6 +45,12 @@ pub struct Beat {
     /// Its source tag is still the template's example, which credits someone else (GAP-039).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub example_source: bool,
+    /// A picture part with no picture in it yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_picture: bool,
+    /// The pictures brought in from outside the library, and where each came from (FCL-6).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pictures: Vec<String>,
 }
 
 /// `faceless/beats.json`: the visuals stage's file.
@@ -125,6 +131,16 @@ pub fn gather(document: &crate::project::revision::EditDocument, root: &Path) ->
                         .and_then(|v| v.as_str())
                         .is_some_and(|s| !s.trim().is_empty())
             });
+            let no_picture = declared
+                .iter()
+                .any(|d| d.id == crate::graphics::pictures::VARIABLE)
+                && value(crate::graphics::pictures::VARIABLE)
+                    .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
+                    .is_none_or(|file| file.is_empty() || !dir.join(&file).is_file());
+            let pictures = crate::graphics::pictures::recorded(&dir)
+                .iter()
+                .map(|p| p.line())
+                .collect();
             Some(Beat {
                 asset_id: asset.id.clone(),
                 clip_id: clip.id.clone(),
@@ -136,6 +152,8 @@ pub fn gather(document: &crate::project::revision::EditDocument, root: &Path) ->
                 words,
                 said: String::new(),
                 example_source,
+                no_picture,
+                pictures,
             })
         })
         .collect();
@@ -241,6 +259,13 @@ pub fn judge(
             clock(beat.start_us)
         ));
     }
+    for beat in beats.iter().filter(|b| b.no_picture) {
+        errors.push(format!(
+            "\"{}\" at {} has no picture yet: `library` `kind: image` `use` (a library picture or a `file`) or `draw` into it.",
+            beat.name,
+            clock(beat.start_us)
+        ));
+    }
     for beat in beats {
         let shown = (beat.end_us - beat.start_us) as f64 / 1e6;
         let needed = beat.words as f64 / WORDS_PER_SECOND;
@@ -342,6 +367,15 @@ mod tests {
         let (errors, _) = judge(&beats, &words(&[0]), 6_000_000, Format::Short);
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("example source tag"), "{errors:?}");
+    }
+
+    #[test]
+    fn a_picture_part_with_no_picture_blocks() {
+        let mut beats = vec![beat("a", "picture", 0, 6)];
+        beats[0].no_picture = true;
+        let (errors, _) = judge(&beats, &words(&[0]), 6_000_000, Format::Short);
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("no picture yet"), "{errors:?}");
     }
 
     #[test]

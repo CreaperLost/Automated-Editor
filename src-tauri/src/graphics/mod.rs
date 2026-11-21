@@ -12,6 +12,7 @@ pub mod gate;
 pub mod gsap;
 pub mod library;
 pub mod look;
+pub mod pictures;
 pub mod render;
 pub mod restyle;
 pub mod runtime;

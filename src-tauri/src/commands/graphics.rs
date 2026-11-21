@@ -627,6 +627,207 @@ pub fn project_graphic_write_file_impl(
     reader.commit_graphic_files(expected_revision, vec![(asset.id, before)], None, label)
 }
 
+/// Brings a picture into graphic `asset_id` at `file` in its folder, as one undo step: with
+/// where it came from in the graphic's record when it isn't a library one (FCL-6), and as the
+/// graphic's `picture` when it declares one (the picture part). Says whether it set that.
+pub fn project_graphic_picture_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    file: &str,
+    bytes: &[u8],
+    record: Option<graphics::pictures::Picture>,
+) -> Result<(Option<OpenedProject>, bool), String> {
+    let _guard = state.command_lock.lock();
+    let mut opened = state.opened_project.lock();
+    let reader = opened.as_mut().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let asset = graphic_asset(reader, &asset_id)?;
+    if reader.history().current.revision != expected_revision {
+        return Err("Stale edit revision".into());
+    }
+    let dir = graphics::folder(reader.root(), &asset.id);
+    let before = reader.keep_graphic_files(&asset.id)?;
+    graphics::write_file(&dir, file, bytes)?;
+    if let Some(picture) = record {
+        let record = graphics::pictures::record_with(&dir, picture)?;
+        graphics::write_file(&dir, graphics::pictures::RECORD, &record)?;
+    }
+    let declares = graphics::declarations(&dir)
+        .unwrap_or_default()
+        .iter()
+        .any(|d| d.id == graphics::pictures::VARIABLE);
+    if declares {
+        let mut source = graphics::read_source(&dir)?;
+        source.variables.insert(
+            graphics::pictures::VARIABLE.into(),
+            Value::String(file.into()),
+        );
+        graphics::write_source(&dir, &source)?;
+    }
+    let label = format!("Bring {file} into graphic \"{}\"", asset.name);
+    let project =
+        reader.commit_graphic_files(expected_revision, vec![(asset.id, before)], None, label)?;
+    Ok((project, declares))
+}
+
+/// A picture brought into a graphic: where it went and what to tell about it.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PictureBrought {
+    pub project: Option<OpenedProject>,
+    /// Its path in the graphic's folder, for `src`.
+    pub src: String,
+    pub width: u32,
+    pub height: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_usd: Option<f64>,
+    /// It became the graphic's `picture` (a picture part).
+    pub shown: bool,
+}
+
+/// The folder of graphic `asset_id` and the project's look and shape, read while it is open.
+fn picture_target(
+    state: &AppState,
+    project_handle: &str,
+    asset_id: &str,
+) -> Result<
+    (
+        std::path::PathBuf,
+        &'static crate::image_library::Look,
+        String,
+    ),
+    String,
+> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, project_handle)?;
+    let asset = graphic_asset(reader, asset_id)?;
+    let dir = graphics::folder(reader.root(), &asset.id);
+    let style_name = graphics::read_source(&dir)
+        .ok()
+        .and_then(|s| s.style)
+        .unwrap_or_else(|| reader.document().style.clone());
+    let look = crate::image_library::look_for(&crate::style::store::resolve(&style_name));
+    let aspect = reader.document().layout.aspect_ratio.clone();
+    Ok((dir, look, aspect))
+}
+
+/// A screenshot or a picture of the user's at `file` brought into graphic `asset_id`
+/// (FCL-6). `source`: who to credit, as the description will; empty for the user's own.
+pub fn project_graphic_picture_file_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    file: &std::path::Path,
+    source: String,
+) -> Result<PictureBrought, String> {
+    let (dir, _, _) = picture_target(state, &project_handle, &asset_id)?;
+    let raw = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let (bytes, ext, (width, height)) = graphics::pictures::take(&raw)?;
+    let name = file
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let src = graphics::pictures::free_path(&dir, "own", &name, ext);
+    let picture = graphics::pictures::Picture {
+        file: src.clone(),
+        origin: graphics::pictures::Origin::File,
+        source: source.trim().to_string(),
+        from: file.file_name().map(|n| n.to_string_lossy().into_owned()),
+        brief: None,
+        model: None,
+        cost_usd: None,
+    };
+    let (project, shown) = project_graphic_picture_impl(
+        state,
+        project_handle,
+        expected_revision,
+        asset_id,
+        &src,
+        &bytes,
+        Some(picture),
+    )?;
+    Ok(PictureBrought {
+        project,
+        src,
+        width,
+        height,
+        cost_usd: None,
+        shown,
+    })
+}
+
+/// An illustration of `brief` drawn in the graphic's look, at the video's shape, by an image
+/// model on the user's OpenRouter key, brought into graphic `asset_id` (FCL-6). Paid: about
+/// 7 cents with the default model.
+pub fn project_graphic_picture_draw_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    brief: String,
+    model: Option<String>,
+) -> Result<PictureBrought, String> {
+    let draw = crate::publish::generate::OpenRouter::from_keychain()
+        .ok_or("Drawing a picture needs an OpenRouter key: set it in transcription settings")?;
+    picture_draw_with(
+        state,
+        project_handle,
+        expected_revision,
+        asset_id,
+        &brief,
+        model,
+        &draw,
+    )
+}
+
+fn picture_draw_with(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    asset_id: String,
+    brief: &str,
+    model: Option<String>,
+    draw: &dyn crate::publish::generate::Draw,
+) -> Result<PictureBrought, String> {
+    let (dir, look, aspect) = picture_target(state, &project_handle, &asset_id)?;
+    let model = model
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| crate::publish::generate::DEFAULT_MODEL.into());
+    // The drawing (seconds) runs without locks; the revision check catches an edit meanwhile.
+    let made = graphics::pictures::draw(brief, look, &aspect, &model, draw)?;
+    let src = graphics::pictures::free_path(&dir, "drawn", brief, "jpg");
+    let picture = graphics::pictures::Picture {
+        file: src.clone(),
+        origin: graphics::pictures::Origin::Drawn,
+        source: String::new(),
+        from: None,
+        brief: Some(brief.trim().to_string()),
+        model: Some(model),
+        cost_usd: made.cost_usd,
+    };
+    let (project, shown) = project_graphic_picture_impl(
+        state,
+        project_handle,
+        expected_revision,
+        asset_id,
+        &src,
+        &made.bytes,
+        Some(picture),
+    )?;
+    Ok(PictureBrought {
+        project,
+        src,
+        width: made.size.0,
+        height: made.size.1,
+        cost_usd: made.cost_usd,
+        shown,
+    })
+}
+
 /// Forgets failed renders and looks at the graphics' files again (after a hand edit).
 pub fn graphics_render_again_impl() {
     render::sources_changed();
@@ -1094,5 +1295,181 @@ pub(crate) mod tests {
         assert_eq!(view.name, "Step 2");
         assert_eq!(view.variables["step"], 2);
         assert_eq!(view.template.as_deref(), Some("step"));
+    }
+
+    /// Answers for the image model with a tall picture, as a 9:16 short would get.
+    struct Drawer;
+
+    impl crate::publish::generate::Draw for Drawer {
+        fn draw(
+            &self,
+            _model: &str,
+            prompt: &str,
+            references: &[(String, Vec<u8>)],
+            _aspect: &str,
+        ) -> Result<crate::publish::generate::Drawn, String> {
+            assert!(prompt.contains("contract") && !references.is_empty());
+            let img = image::RgbImage::from_pixel(1200, 800, image::Rgb([240, 233, 218]));
+            let mut bytes = Vec::new();
+            image::DynamicImage::ImageRgb8(img)
+                .write_to(
+                    &mut std::io::Cursor::new(&mut bytes),
+                    image::ImageFormat::Png,
+                )
+                .unwrap();
+            Ok(crate::publish::generate::Drawn {
+                bytes,
+                cost_usd: Some(0.07),
+            })
+        }
+    }
+
+    #[test]
+    fn a_screenshot_and_a_drawn_picture_come_in_with_where_they_came_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new();
+        let Some((handle, revision)) = project_with_sound(&state, dir.path()) else {
+            return;
+        };
+        let created = project_graphic_create_impl(
+            &state,
+            handle.clone(),
+            revision,
+            "blank".into(),
+            Some("Pictures".into()),
+            Map::new(),
+            0,
+            Some(3_000_000),
+        )
+        .unwrap();
+        let shot = dir.path().join("Screen Shot 1.png");
+        let img = image::RgbImage::from_pixel(640, 400, image::Rgb([20, 20, 20]));
+        image::DynamicImage::ImageRgb8(img).save(&shot).unwrap();
+        let file = project_graphic_picture_file_impl(
+            &state,
+            handle.clone(),
+            created.project.revision,
+            created.asset_id.clone(),
+            &shot,
+            "Screenshot: example.com".into(),
+        )
+        .unwrap();
+        assert_eq!(file.src, "images/own-screen-shot-1.png");
+        assert_eq!((file.width, file.height), (640, 400));
+        let revision = file.project.as_ref().unwrap().revision;
+        assert_eq!(revision, created.project.revision + 1, "one undo step");
+        let drawn = picture_draw_with(
+            &state,
+            handle.clone(),
+            revision,
+            created.asset_id.clone(),
+            "a robot reading a long contract",
+            None,
+            &Drawer,
+        )
+        .unwrap();
+        assert_eq!(
+            drawn.src,
+            "images/drawn-a-robot-reading-a-long-contract.jpg"
+        );
+        assert_eq!(drawn.cost_usd, Some(0.07));
+
+        let root = state
+            .opened_project
+            .lock()
+            .as_ref()
+            .unwrap()
+            .root()
+            .to_path_buf();
+        let folder = graphics::folder(&root, &created.asset_id);
+        let record = graphics::pictures::recorded(&folder);
+        assert_eq!(record.len(), 2);
+        assert_eq!(record[0].from.as_deref(), Some("Screen Shot 1.png"));
+        assert_eq!(
+            record[1].model.as_deref(),
+            Some(crate::publish::generate::DEFAULT_MODEL)
+        );
+        let kinds = || {
+            let opened = state.opened_project.lock();
+            let reader = opened.as_ref().unwrap();
+            crate::check::run(&root, reader.document(), &[])
+                .findings
+                .into_iter()
+                .map(|f| f.kind)
+                .filter(|k| {
+                    matches!(
+                        k,
+                        crate::check::Kind::ImageCredit | crate::check::Kind::ImageDisclosure
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        // No package yet: the credit is asked for; the disclosure waits for the package.
+        assert_eq!(kinds(), vec![crate::check::Kind::ImageCredit]);
+        crate::publish::save_package(
+            &root,
+            "video",
+            crate::publish::Package {
+                description: "Sources: screenshot: Example.com".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(kinds(), vec![crate::check::Kind::ImageDisclosure]);
+
+        // A picture part shows what comes into it, and the visuals check sees it.
+        let part = project_graphic_create_impl(
+            &state,
+            handle.clone(),
+            revision + 1,
+            "picture".into(),
+            None,
+            Map::new(),
+            3_000_000,
+            Some(1_000_000),
+        )
+        .unwrap();
+        let beat = |id: &str| {
+            let opened = state.opened_project.lock();
+            let reader = opened.as_ref().unwrap();
+            crate::faceless::visuals::gather(reader.document(), &root)
+                .into_iter()
+                .find(|b| b.asset_id == id)
+                .unwrap()
+        };
+        assert!(beat(&part.asset_id).no_picture);
+        let into = project_graphic_picture_file_impl(
+            &state,
+            handle.clone(),
+            part.project.revision,
+            part.asset_id.clone(),
+            &shot,
+            String::new(),
+        )
+        .unwrap();
+        assert!(into.shown);
+        let shown = beat(&part.asset_id);
+        assert!(!shown.no_picture);
+        assert_eq!(
+            shown.pictures,
+            ["images/own-screen-shot-1.png: the user's own"]
+        );
+        assert_eq!(
+            beat(&created.asset_id).pictures.len(),
+            2,
+            "the blank one's record"
+        );
+        assert!(!file.shown, "a graphic of the agent's own uses `src`");
+        // Undo takes the drawn picture and its record entry back together.
+        let mut at = into.project.unwrap().revision;
+        for _ in 0..3 {
+            at = super::super::project_undo_impl(&state, handle.clone(), at, None)
+                .unwrap()
+                .revision;
+        }
+        assert_eq!(graphics::pictures::recorded(&folder).len(), 1);
+        assert!(!folder
+            .join("images/drawn-a-robot-reading-a-long-contract.jpg")
+            .exists());
     }
 }

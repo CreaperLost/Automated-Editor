@@ -37,6 +37,7 @@ pub enum Op {
     Propose,
     Versions,
     Restore,
+    Draw,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -103,9 +104,16 @@ pub struct LibraryArgs {
     pub at_word: Option<String>,
     #[serde(default)]
     pub until_us: Option<u64>,
-    /// Images, use: the graphic (id) the picture goes into.
+    /// Images, use and draw: the graphic (id) the picture goes into.
     #[serde(default)]
     pub graphic: Option<String>,
+    /// Images, use: a PNG or JPEG (full path) instead of `name`: a screenshot, a picture of
+    /// the user's.
+    #[serde(default)]
+    pub file: Option<String>,
+    /// Images, use a `file`: who to credit ("" for the user's own).
+    #[serde(default)]
+    pub source: Option<String>,
     /// Images, list: broadsheet, light, dark, editorial, neon or all; default the project
     /// style's.
     #[serde(default)]
@@ -137,7 +145,8 @@ pub static TOOLS: [ToolDef; 1] = [ToolDef {
         flags, maps, wordmarks and portraits with every look): list (the project style's look \
         unless `look`; no `query`: its groups; `query`: what the beat shows), show (`name` = \
         a picture or a group: a board of them), use (`name` into `graphic`: copied into its \
-        folder as one undo step).",
+        folder as one undo step; or a `file` and its `source`), draw (`brief`: drawn in the \
+        look, paid, about 7 cents, only where no library picture fits).",
     schema: schema::<LibraryArgs>,
     read_only: false,
     run: library,
@@ -293,6 +302,53 @@ fn image(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
             let board = images::board(&shown)?;
             Ok(vec![Output::Text(lines.join("\n")), Output::Jpeg(board)])
         }
+        Op::Use if args.file.is_some() => {
+            let graphic = args
+                .graphic
+                .ok_or("Give the `graphic` (id) the picture goes into")?;
+            let source = args.source.ok_or(
+                "Say who to credit as `source` (\"Screenshot: example.com\"), or \"\" when \
+                 the picture is the user's own",
+            )?;
+            let before = opened(ctx)?;
+            let brought = commands::graphics::project_graphic_picture_file_impl(
+                ctx.state,
+                before.handle.clone(),
+                before.revision,
+                graphic.clone(),
+                std::path::Path::new(args.file.as_deref().unwrap_or_default()),
+                source,
+            )?;
+            text(applied(
+                ctx,
+                "library",
+                &before,
+                brought_lines(&graphic, &brought, true),
+            )?)
+        }
+        Op::Draw => {
+            let graphic = args
+                .graphic
+                .ok_or("Give the `graphic` (id) the picture goes into")?;
+            let brief = args
+                .brief
+                .ok_or("Describe the picture in `brief`: what it shows")?;
+            let before = opened(ctx)?;
+            let brought = commands::graphics::project_graphic_picture_draw_impl(
+                ctx.state,
+                before.handle.clone(),
+                before.revision,
+                graphic.clone(),
+                brief,
+                None,
+            )?;
+            text(applied(
+                ctx,
+                "library",
+                &before,
+                brought_lines(&graphic, &brought, false),
+            )?)
+        }
         Op::Use => {
             let image = images::find(
                 args.name
@@ -303,18 +359,23 @@ fn image(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
                 .graphic
                 .ok_or("Give the `graphic` (id) the picture goes into")?;
             let before = opened(ctx)?;
-            commands::graphics::project_graphic_write_file_impl(
+            let (_, shown) = commands::graphics::project_graphic_picture_impl(
                 ctx.state,
                 before.handle.clone(),
                 before.revision,
                 graphic.clone(),
                 &image.src(),
                 image.bytes(),
+                None,
             )?;
             let mut lines = vec![format!(
-                "Copied {} into graphic {graphic}: use it as src=\"{}\"{}.",
+                "Copied {} into graphic {graphic}{}{}.",
                 image.id,
-                image.src(),
+                if shown {
+                    " as its `picture`".to_string()
+                } else {
+                    format!(": use it as src=\"{}\"", image.src())
+                },
                 match (image.width, image.height) {
                     (Some(w), Some(h)) => format!(" ({w}x{h})"),
                     _ => String::new(),
@@ -337,8 +398,44 @@ fn image(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
             }
             text(applied(ctx, "library", &before, lines)?)
         }
-        _ => Err("Images take `op` list, show or use".into()),
+        _ => Err("Images take `op` list, show, use or draw".into()),
     }
+}
+
+/// What `use` with a file and `draw` say: where the picture went and what it asks for.
+fn brought_lines(
+    graphic: &str,
+    brought: &commands::graphics::PictureBrought,
+    file: bool,
+) -> Vec<String> {
+    let mut lines = vec![if brought.shown {
+        format!(
+            "Put it into graphic {graphic} as its `picture` ({}x{}).",
+            brought.width, brought.height
+        )
+    } else {
+        format!(
+            "Put it into graphic {graphic}: use it as src=\"{}\" ({}x{}).",
+            brought.src, brought.width, brought.height
+        )
+    }];
+    if file {
+        lines.push(
+            "Show it as what it is: a real screen only where it is one. `check` asks for its \
+             credit in the description."
+                .into(),
+        );
+    } else {
+        lines.push(format!(
+            "Drawn{}: it stands for the idea, never shown as a real screen or event. Look at \
+             it with `frame_render` before going on; `check` asks for the AI disclosure.",
+            brought
+                .cost_usd
+                .map(|c| format!(" for ${c:.3}"))
+                .unwrap_or_default()
+        ));
+    }
+    lines
 }
 
 /// The open project's style name, if a project is open.
@@ -521,7 +618,7 @@ fn style(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
             crate::style::request::clear(&ctx.host.config_dir());
             Ok(out)
         }
-        Op::Save | Op::Reset | Op::ProposeRule | Op::Versions | Op::Restore => Err(
+        Op::Save | Op::Reset | Op::ProposeRule | Op::Versions | Op::Restore | Op::Draw => Err(
             "Styles take list, show, use, set, remove, preview, check, bring_in_line or propose"
                 .into(),
         ),

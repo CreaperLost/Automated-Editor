@@ -1931,6 +1931,47 @@ mod tests {
             }
             assert!(report.passed, "{} fails the gate", template.name);
             assert!(Path::new(report.sheet.as_deref().unwrap()).is_file());
+            // A picture part with pictures in it: a library illustration and a wide screenshot.
+            if template.name == "picture" {
+                let image = crate::image_library::catalog()
+                    .images
+                    .iter()
+                    .find(|i| i.look == "broadsheet")
+                    .unwrap();
+                let shot = image::RgbImage::from_fn(1600, 1000, |x, y| {
+                    image::Rgb(if y < 80 {
+                        [40, 44, 52]
+                    } else if x < 320 {
+                        [236, 238, 242]
+                    } else if (y / 60) % 3 == 0 && x < 1200 {
+                        [200, 205, 214]
+                    } else {
+                        [255, 255, 255]
+                    })
+                });
+                let mut png = Vec::new();
+                image::DynamicImage::ImageRgb8(shot)
+                    .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                    .unwrap();
+                for (name, file, bytes) in [
+                    ("library", image.src(), image.bytes().to_vec()),
+                    ("screenshot", "images/own-settings.png".to_string(), png),
+                ] {
+                    super::super::write_file(&dir, &file, &bytes).unwrap();
+                    let mut source = super::super::read_source(&dir).unwrap();
+                    source
+                        .variables
+                        .insert("picture".into(), Value::String(file.clone()));
+                    super::super::write_source(&dir, &source).unwrap();
+                    let report = run(&dir, &cache, &cancel, &mut quiet).unwrap();
+                    eprintln!("picture with {name}:\n  {}", report.lines().join("\n  "));
+                    if let Some(keep) = std::env::var_os("GATE_SHEETS") {
+                        let to = Path::new(&keep).join(format!("picture-{name}.png"));
+                        std::fs::copy(report.sheet.as_deref().unwrap(), to).unwrap();
+                    }
+                    assert!(report.passed, "picture with {name} fails the gate");
+                }
+            }
             if template.name == "title" {
                 let started = Instant::now();
                 let again = run(&dir, &cache, &cancel, &mut quiet).unwrap();

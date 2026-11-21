@@ -499,6 +499,7 @@ mod tests {
             _model: &str,
             prompt: &str,
             _references: &[(String, Vec<u8>)],
+            _aspect: &str,
         ) -> Result<publish::generate::Drawn, String> {
             assert!(
                 prompt.contains("vermilion"),

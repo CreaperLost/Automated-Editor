@@ -63,12 +63,16 @@ exactly what the row says; never promise motion the graphic won't have.
 
 Show only real material: screens, product states, names and numbers from the recording, the
 transcript or the user. Never present an invented screenshot, feature, metric or result as
-real; a generated image comes in only as the user's own asset. The image library (`library`
+real; a drawn picture stands for an idea, never for a real thing. The image library (`library`
 `kind: image`) is the user's own: illustrations that stand for an idea, never as evidence of a
 real thing, one set per look; `list` gives the project style's look, and a video keeps that one
 (faceless explainers: `look: broadsheet`). Find them by what the beat shows (`query`), look at
 the board (`show`) and copy one in (`use` into the graphic, then the `src` it gives). Pictures
-marked * are real material from elsewhere: only at the user's word, credited as their rights say.
+marked * are real material from elsewhere: only at the user's word, credited as their rights say. A
+screenshot or the user's picture comes in the same way (`use` with `file` and `source`, the
+credit, "" for the user's own). `draw` (paid) makes an illustration in the look where no library
+picture fits; it is never shown as a real screen, product or event. Into a `picture` part, `use`
+and `draw` set its picture.
 
 Build a composition of your own in three passes. First the stills: every element at its final
 size and place, each with an id, none created by script; look at them with `frame_render`

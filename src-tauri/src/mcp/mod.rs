@@ -1522,8 +1522,10 @@ mod tests {
         // `frame_render` `sample` (the sample clip in place), 47,127; the budget moved to 47,500.
         // 8 Nov (FCL-6): `graphic_add` `actionWord` (a part acts on the spoken word), 47,697;
         // the budget moved to 48,000. Then `publish` came out of `more` (every video is packaged
-        // at export, George: "app wide"), 50,741; the budget moved to 51,000.
+        // at export, George: "app wide"), 50,741; the budget moved to 51,000. 21 Nov (FCL-6):
+        // `library` images take a `file` with its `source` and `op: draw`, 51,338; the budget
+        // moved to 51,500.
         let size = serde_json::to_string(&list).unwrap().len();
-        assert!(size < 51_000, "the tool list grew to {size} characters");
+        assert!(size < 51_500, "the tool list grew to {size} characters");
     }
 }
