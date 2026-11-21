@@ -55,6 +55,7 @@ const ShortsListPanel = React.lazy(() => import("../shorts/ShortsListPanel").the
 const ShortLookPanel = React.lazy(() => import("../shorts/ShortLookPanel").then((m) => ({ default: m.ShortLookPanel })));
 const SoundsPage = React.lazy(() => import("../media/SoundsPage").then((m) => ({ default: m.SoundsPage })));
 const MusicPage = React.lazy(() => import("../media/MusicPage").then((m) => ({ default: m.MusicPage })));
+const ImagesPage = React.lazy(() => import("../media/ImagesPage").then((m) => ({ default: m.ImagesPage })));
 const StylePanel = React.lazy(() => import("../style/StylePanel").then((m) => ({ default: m.StylePanel })));
 const JoinsPanel = React.lazy(() => import("../review/JoinsPanel").then((m) => ({ default: m.JoinsPanel })));
 const SearchPanel = React.lazy(() => import("../review/SearchPanel").then((m) => ({ default: m.SearchPanel })));
@@ -67,6 +68,7 @@ const COMPONENTS: Record<DockPanelId, React.FunctionComponent<IDockviewPanelProp
   media: () => fill(<MediaPanel />),
   sounds: () => fill(<Library><SoundsPage /></Library>),
   music: () => fill(<Library><MusicPage /></Library>),
+  images: () => fill(<Library><ImagesPage /></Library>),
   zoom: () => fill(<ZoomPanel />),
   chapters: () => fill(<ChaptersPanel />),
   agent: () => fill(<AgentPanel />),

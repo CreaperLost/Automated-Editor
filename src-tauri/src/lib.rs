@@ -963,6 +963,27 @@ fn project_media_licence(
     )
 }
 
+/// The built-in image library's catalogue and the open project's look (FCL-5).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn image_library_list(state: tauri::State<'_, AppState>) -> commands::images::ImageLibraryView {
+    commands::images::image_library_list_impl(&state)
+}
+
+/// The ids of the library pictures matching `query`, in `look` and the sourced set.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn image_library_search(query: String, look: Option<String>) -> Vec<String> {
+    commands::images::image_library_search_impl(query, look)
+}
+
+/// Library pictures as data URLs, to show.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn image_library_pictures(ids: Vec<String>) -> Result<Vec<commands::images::ImagePicture>, String> {
+    commands::images::image_library_pictures_impl(ids)
+}
+
 /// The sound effects library, or the sounds matching `query` (SND-3).
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
@@ -3590,6 +3611,9 @@ pub fn run() {
             project_media_import,
             project_media_roles,
             project_media_licence,
+            image_library_list,
+            image_library_search,
+            image_library_pictures,
             sound_library_list,
             sound_library_preview,
             sound_library_add,

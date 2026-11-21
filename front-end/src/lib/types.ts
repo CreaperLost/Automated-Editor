@@ -682,6 +682,40 @@ export interface Licence {
   source?: string;
 }
 
+/** The built-in image library (FCL-5): one set of pictures per look, plus sourced ones. */
+export interface ImageLibraryView {
+  catalog: {
+    looks: { id: string; description: string; ground: string; accent: string; styles: string[] }[];
+    topics: ImageTopic[];
+    images: LibraryImage[];
+  };
+  /** The look the open project's style takes; null with no project open. */
+  projectLook: string | null;
+}
+
+export interface ImageTopic {
+  /** `look/topic`, or the look itself. */
+  id: string;
+  look: string;
+  description: string;
+  groups: { id: string; description: string; terms: string[]; sourced: boolean; count: number }[];
+}
+
+export interface LibraryImage {
+  /** `look/topic/group/name` or `look/group/name`. */
+  id: string;
+  look: string;
+  file: string;
+  depicts: string;
+  placement: string;
+  licence: Licence;
+  rights?: string;
+  entity?: string;
+  kind?: string;
+  width?: number;
+  height?: number;
+}
+
 /** A sound of the sound effects library: the built-in CC0 set, or one of the user's own. */
 export interface LibrarySound {
   id: string;
