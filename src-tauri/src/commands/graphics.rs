@@ -687,7 +687,8 @@ pub struct PictureBrought {
     pub shown: bool,
 }
 
-/// The folder of graphic `asset_id` and the project's look and shape, read while it is open.
+/// The folder of graphic `asset_id`, the project's look and shape, and its root, read while it
+/// is open.
 fn picture_target(
     state: &AppState,
     project_handle: &str,
@@ -697,6 +698,7 @@ fn picture_target(
         std::path::PathBuf,
         &'static crate::image_library::Look,
         String,
+        std::path::PathBuf,
     ),
     String,
 > {
@@ -711,7 +713,7 @@ fn picture_target(
         .unwrap_or_else(|| reader.document().style.clone());
     let look = crate::image_library::look_for(&crate::style::store::resolve(&style_name));
     let aspect = reader.document().layout.aspect_ratio.clone();
-    Ok((dir, look, aspect))
+    Ok((dir, look, aspect, reader.root().to_path_buf()))
 }
 
 /// A screenshot or a picture of the user's at `file` brought into graphic `asset_id`
@@ -724,7 +726,7 @@ pub fn project_graphic_picture_file_impl(
     file: &std::path::Path,
     source: String,
 ) -> Result<PictureBrought, String> {
-    let (dir, _, _) = picture_target(state, &project_handle, &asset_id)?;
+    let (dir, _, _, _) = picture_target(state, &project_handle, &asset_id)?;
     let raw = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
     let (bytes, ext, (width, height)) = graphics::pictures::take(&raw)?;
     let name = file
@@ -793,12 +795,14 @@ fn picture_draw_with(
     model: Option<String>,
     draw: &dyn crate::publish::generate::Draw,
 ) -> Result<PictureBrought, String> {
-    let (dir, look, aspect) = picture_target(state, &project_handle, &asset_id)?;
+    let (dir, look, aspect, root) = picture_target(state, &project_handle, &asset_id)?;
     let model = model
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(|| crate::publish::generate::DEFAULT_MODEL.into());
     // The drawing (seconds) runs without locks; the revision check catches an edit meanwhile.
     let made = graphics::pictures::draw(brief, look, &aspect, &model, draw)?;
+    // Paid once drawn, whether or not it can still be kept.
+    crate::spend::record(&root, "Drawn picture", "OpenRouter", made.cost_usd, brief);
     let src = graphics::pictures::free_path(&dir, "drawn", brief, "jpg");
     let picture = graphics::pictures::Picture {
         file: src.clone(),

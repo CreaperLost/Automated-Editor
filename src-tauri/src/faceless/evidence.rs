@@ -708,6 +708,35 @@ impl PageFetch for WebPages {
 pub struct WithTreg {
     pub own: WebPages,
     pub treg: super::treg::Web,
+    /// What the pages Treg read cost so far, in micro-dollars, and how many it read.
+    pub spent: std::sync::atomic::AtomicU64,
+    pub reads: std::sync::atomic::AtomicU64,
+}
+
+impl WithTreg {
+    pub fn new(own: WebPages, treg: super::treg::Web) -> Self {
+        Self {
+            own,
+            treg,
+            spent: Default::default(),
+            reads: Default::default(),
+        }
+    }
+
+    /// Records what Treg's reads cost in the project at `root`, if it read any.
+    pub fn record_spend(&self, root: &Path, step: &str) {
+        use std::sync::atomic::Ordering;
+        let reads = self.reads.load(Ordering::Relaxed);
+        if reads > 0 {
+            crate::spend::record(
+                root,
+                step,
+                "Treg",
+                Some(crate::spend::from_micro(self.spent.load(Ordering::Relaxed))),
+                &format!("{reads} page(s) the app couldn't read itself"),
+            );
+        }
+    }
 }
 
 /// Whether Treg should try a page the app couldn't read.
@@ -721,7 +750,13 @@ impl PageFetch for WithTreg {
     fn page(&self, url: &str) -> Page {
         match self.own.page(url) {
             Page::Unreadable(reason) if treg_can_help(&reason) => {
-                match super::treg::extract(&self.treg, url) {
+                let read = super::treg::extract(&self.treg, url);
+                if let Ok((_, _, cost)) = &read {
+                    use std::sync::atomic::Ordering;
+                    self.spent.fetch_add(*cost, Ordering::Relaxed);
+                    self.reads.fetch_add(1, Ordering::Relaxed);
+                }
+                match read {
                     Ok((text, final_url, cost)) if text.chars().count() >= 200 => Page::Text {
                         text,
                         published_on: None,

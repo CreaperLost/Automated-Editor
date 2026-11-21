@@ -52,6 +52,7 @@ mod smoke;
 pub mod sound_effects;
 pub mod sound_library;
 pub mod source_search;
+pub mod spend;
 pub mod style;
 pub mod take_short;
 pub mod telemetry;

@@ -662,6 +662,9 @@ pub struct StatusArgs {
     /// installed, and what is unavailable and why. Always given when no project is open.
     #[serde(default)]
     pub readiness: bool,
+    /// Also list what this video's paid calls cost, by provider and step.
+    #[serde(default)]
+    pub spend: bool,
 }
 
 fn status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
@@ -680,11 +683,18 @@ fn status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         }
         Err(error) => return Err(error),
     };
-    text(if args.readiness {
-        format!("{project}\n{}", readiness_text())
-    } else {
-        project
-    })
+    let mut out = project;
+    if args.spend {
+        let root = with_reader(ctx.state, |reader| Ok(reader.root().to_path_buf()))?;
+        out = format!(
+            "{out}\n{}",
+            crate::spend::report(&crate::spend::load(&root)).text()
+        );
+    }
+    if args.readiness {
+        out = format!("{out}\n{}", readiness_text());
+    }
+    text(out)
 }
 
 /// What this computer is ready for, a line a part: what's missing says why and where to fix it.
@@ -933,6 +943,13 @@ fn status_text(ctx: &Ctx) -> Result<String, String> {
         }
         if let Some(line) = crate::style::request::status_line(&ctx.host.config_dir()) {
             lines.push(line);
+        }
+        let spent = crate::spend::report(&crate::spend::load(reader.root()));
+        if spent.total.calls > 0 {
+            lines.push(format!(
+                "Paid calls for this video: {} (`spend: true` lists them).",
+                spent.short()
+            ));
         }
         if let Ok(Some(plan)) = super::plan::load(reader.root()) {
             lines.push(format!(
@@ -6158,6 +6175,32 @@ mod tests {
         assert!(back.contains("Length 0:03"), "{back}");
         let captions = through_the_server("settings", json!({ "area": "captions" })).unwrap();
         assert!(captions.contains("\"enabled\":false"), "{captions}");
+    }
+
+    #[test]
+    fn status_says_what_this_video_spent_and_lists_it_when_asked() {
+        if !crate::media::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (host, _) = lesson(dir.path());
+        let ctx = Ctx::new(&host, "claude-code", false);
+        let status = call(&ctx, "status", json!({})).unwrap();
+        assert!(!status.contains("Paid calls"), "{status}");
+        let root = with_reader(ctx.state, |r| Ok(r.root().to_path_buf())).unwrap();
+        crate::spend::record(&root, "Narration", "OpenRouter", Some(0.02), "4 scenes");
+        crate::spend::record(&root, "Transcription", "ElevenLabs", None, "");
+        let status = call(&ctx, "status", json!({})).unwrap();
+        assert!(
+            status.contains("Paid calls for this video: $0.020 spent, 1 call of unknown cost"),
+            "{status}"
+        );
+        let listed = call(&ctx, "status", json!({ "spend": true })).unwrap();
+        assert!(
+            listed.contains("- Narration: $0.020 over 1 call"),
+            "{listed}"
+        );
+        assert!(listed.contains("Not counted"), "{listed}");
     }
 
     #[test]

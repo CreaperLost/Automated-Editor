@@ -283,7 +283,7 @@ fn thumbnail_generate_with(
     draw: &dyn publish::generate::Draw,
 ) -> Result<ThumbnailGenerated, String> {
     // The style is read while the project is open; the drawing (seconds) runs without locks.
-    let style = {
+    let (style, root) = {
         let guard = state.opened_project.lock();
         let reader = guard
             .as_ref()
@@ -291,13 +291,17 @@ fn thumbnail_generate_with(
         if reader.summary.project_handle != project_handle {
             return Err(OTHER_PROJECT.into());
         }
-        crate::style::of(reader.document())
+        (
+            crate::style::of(reader.document()),
+            reader.root().to_path_buf(),
+        )
     };
     let model = model
         .filter(|m| !m.trim().is_empty())
         .unwrap_or_else(|| publish::generate::DEFAULT_MODEL.into());
     let folder = crate::style::store::folder_of(&style);
     let made = publish::generate::generate(brief, &style, folder.as_deref(), &model, draw)?;
+    crate::spend::record(&root, "Thumbnail", "OpenRouter", made.cost_usd, brief);
     // Kept only if the project is still the one it was drawn for (GAP-011).
     let view = save_thumbnail(state, project_handle, &target, &made.bytes)?;
     Ok(ThumbnailGenerated {
@@ -408,13 +412,18 @@ fn release_check(root: &Path, package: &Package, release: &Release) -> Result<()
     }
     let own = crate::faceless::evidence::WebPages::new()?;
     let problems = match crate::faceless::treg::Web::from_keychain() {
-        Some(treg) => crate::faceless::release::check(
-            root,
-            &package.title,
-            &package.description,
-            release_at,
-            &crate::faceless::evidence::WithTreg { own, treg },
-        ),
+        Some(treg) => {
+            let pages = crate::faceless::evidence::WithTreg::new(own, treg);
+            let problems = crate::faceless::release::check(
+                root,
+                &package.title,
+                &package.description,
+                release_at,
+                &pages,
+            );
+            pages.record_spend(root, "Release check");
+            problems
+        }
         None => crate::faceless::release::check(
             root,
             &package.title,
@@ -556,6 +565,8 @@ mod tests {
         assert_eq!(made.view.thumbnail_size, Some((1280, 720)));
         assert_eq!(made.model, publish::generate::DEFAULT_MODEL);
         assert_eq!(made.cost_usd, Some(0.07));
+        let spent = crate::spend::report(&crate::spend::load(&root));
+        assert_eq!(spent.by_step["Thumbnail"].calls, 1);
         assert!(publish::thumbnail_path(&root, &publish::package(&root, "video")).is_some());
         let stale = thumbnail_generate_with(
             state,
