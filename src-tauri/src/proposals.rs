@@ -93,6 +93,9 @@ pub enum Change {
         rule: String,
         example: String,
     },
+    /// Stock footage or photos to download and import (FTG-6). Only the user accepts it
+    /// (never autopilot): nothing is downloaded before.
+    Stock { items: Vec<crate::stock::StockItem> },
 }
 
 const MAX_RULE_CHARS: usize = 400;
@@ -873,6 +876,69 @@ pub fn rule_accepted(proposals: &mut Proposals, id: &str, saved_in: &str) -> Res
     Ok(())
 }
 
+/// Stock for the user to accept: downloaded and imported only then.
+pub fn propose_stock(
+    reader: &ProjectReader,
+    proposals: &mut Proposals,
+    agent: &str,
+    items: Vec<crate::stock::StockItem>,
+    reason: &str,
+) -> Result<String, String> {
+    if items.is_empty() {
+        return Err("Name at least one stock id".into());
+    }
+    let mut summary: Vec<String> = items.iter().map(|i| i.line()).collect();
+    summary.push(format!(
+        "Pexels licence ({}): free to use, no credit needed. Downloaded into the project only \
+         when accepted.",
+        crate::stock::LICENCE_URL
+    ));
+    proposals.add(Batch {
+        id: String::new(),
+        agent: agent.to_string(),
+        reason: check_reason(reason)?,
+        created_at: now(),
+        base_revision: reader.document().revision,
+        change: Change::Stock { items },
+        status: Status::Pending,
+        decided_at: None,
+        auto: false,
+        applied_revision: None,
+        summary,
+    })
+}
+
+/// The stock of batch `id` when it is stock waiting for the user.
+pub fn pending_stock(
+    proposals: &Proposals,
+    id: &str,
+) -> Result<Option<Vec<crate::stock::StockItem>>, String> {
+    let batch = proposals.get(id)?;
+    let Change::Stock { items } = &batch.change else {
+        return Ok(None);
+    };
+    if batch.status != Status::Pending {
+        return Err(format!("{id} is already decided"));
+    }
+    Ok(Some(items.clone()))
+}
+
+/// Stock batch `id` was imported at `revision`; `lines` say as what.
+pub fn stock_accepted(
+    proposals: &mut Proposals,
+    id: &str,
+    revision: u64,
+    lines: Vec<String>,
+) -> Result<(), String> {
+    let batch = proposals.get_mut(id)?;
+    batch.status = Status::Accepted;
+    batch.decided_at = Some(now());
+    batch.applied_revision = Some(revision);
+    batch.summary.extend(lines);
+    proposals.prune();
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------------------
 // Deciding.
 
@@ -930,6 +996,11 @@ pub fn accept(
         }
         Change::Rule { .. } => {
             return Err(format!("{id} is a rule: it is accepted in the Agent panel"))
+        }
+        Change::Stock { .. } => {
+            return Err(format!(
+                "{id} is stock: it is downloaded when the user accepts it in the Agent panel"
+            ))
         }
         Change::Edits { edits } => {
             if batch.status != Status::Pending {
@@ -1020,7 +1091,7 @@ pub fn accept(
         batch.applied_revision = revision;
     }
     match &mut batch.change {
-        Change::Action { .. } | Change::Rule { .. } => {}
+        Change::Action { .. } | Change::Rule { .. } | Change::Stock { .. } => {}
         Change::Edits { .. } => {
             batch.status = Status::Accepted;
             batch.decided_at = Some(now());
@@ -1055,17 +1126,19 @@ pub fn reject(
     }
     match &mut batch.change {
         Change::Action { .. } => return Err(format!("{id} was already applied; undo it instead")),
-        Change::Edits { .. } | Change::Rule { .. } => match (batch.status, rejected) {
-            (Status::Pending, true) => {
-                batch.status = Status::Rejected;
-                batch.decided_at = Some(now());
+        Change::Edits { .. } | Change::Rule { .. } | Change::Stock { .. } => {
+            match (batch.status, rejected) {
+                (Status::Pending, true) => {
+                    batch.status = Status::Rejected;
+                    batch.decided_at = Some(now());
+                }
+                (Status::Rejected, false) => {
+                    batch.status = Status::Pending;
+                    batch.decided_at = None;
+                }
+                _ => return Err(format!("{id} is already decided")),
             }
-            (Status::Rejected, false) => {
-                batch.status = Status::Pending;
-                batch.decided_at = None;
-            }
-            _ => return Err(format!("{id} is already decided")),
-        },
+        }
         Change::Cuts { items, .. } => {
             let (from, to) = if rejected {
                 (ItemState::Pending, ItemState::Rejected)
@@ -1231,7 +1304,9 @@ fn set_undone(batch: &mut Batch, undone: impl Fn(u64) -> bool, by_agent: bool) {
     batch.auto = false;
     match &mut batch.change {
         // A rule changes no revision, so no undo of the edit reaches it.
-        Change::Action { .. } | Change::Rule { .. } => batch.status = Status::Undone,
+        Change::Action { .. } | Change::Rule { .. } | Change::Stock { .. } => {
+            batch.status = Status::Undone
+        }
         Change::Edits { .. } => batch.status = Status::Pending,
         Change::Cuts { items, .. } => {
             for item in items.iter_mut() {
@@ -1369,6 +1444,7 @@ pub fn view(reader: &ProjectReader, proposals: &Proposals) -> ProposalsView {
                     out.kind = "rule";
                     out.preset = Some(preset.clone());
                 }
+                Change::Stock { .. } => out.kind = "stock",
                 Change::Edits { edits } => {
                     out.edits = Some(edits.clone());
                     out.stale =

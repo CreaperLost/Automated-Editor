@@ -48,6 +48,7 @@ function kindLabel(batch: ProposalBatch) {
   if (batch.kind === "cuts") return "Cuts";
   if (batch.kind === "edits") return "Edits";
   if (batch.kind === "rule") return "Rule";
+  if (batch.kind === "stock") return "Stock";
   return ACTION_LABEL[batch.action ?? ""] ?? batch.action ?? "Action";
 }
 
@@ -166,6 +167,11 @@ const BatchCard: React.FC<{
         {batch.kind === "rule" && waiting && (
           <p className="text-meta text-studio-400">
             Accepting adds it to {batch.preset}'s rules for every project (a built-in preset gets a copy). Rejecting changes nothing.
+          </p>
+        )}
+        {batch.kind === "stock" && waiting && (
+          <p className="text-meta text-studio-400">
+            Accepting downloads these from Pexels into the project's media and imports them. Rejecting downloads nothing.
           </p>
         )}
         {batch.stale && waiting && (
@@ -294,7 +300,9 @@ export const AgentPanel: React.FC = () => {
     if (!openedProject || !shownHere) return;
     void run(
       () => api.proposalAccept(openedProject.projectHandle, openedProject.revision, batch.id, itemIds, true),
-      batch.kind === "rule"
+      batch.kind === "stock"
+        ? `Downloaded and imported ${batch.id}. Undo takes the import back.`
+        : batch.kind === "rule"
         ? `Added the rule to ${batch.preset}'s rules, or to its copy when ${batch.preset} is built in (the batch says which). Edit them in the Library to take it back.`
         : `Applied ${batch.id}. Undo takes it back.`,
     );

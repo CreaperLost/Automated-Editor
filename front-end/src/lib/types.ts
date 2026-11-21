@@ -2292,7 +2292,8 @@ export interface ProposalBatch {
   createdAt: string;
   baseRevision: number;
   /** `action`: one of the app's own actions the agent ran, applied at once. */
-  kind: "cuts" | "edits" | "action" | "rule";
+  /** `stock`: Pexels files to download and import, only once the user accepts. */
+  kind: "cuts" | "edits" | "action" | "rule" | "stock";
   /** For an action: which (`silence`, `fillers`, ...). */
   action?: string;
   /** For cuts on a take short's own timeline: that short. */

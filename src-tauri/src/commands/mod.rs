@@ -2374,6 +2374,17 @@ pub fn project_media_import_impl(
     expected_revision: u64,
     paths: Vec<String>,
 ) -> Result<OpenedProject, String> {
+    project_media_import_licensed(state, project_handle, expected_revision, paths, |_| None)
+}
+
+/// [`project_media_import_impl`], each file with the licence `licence_of` gives it.
+pub(crate) fn project_media_import_licensed(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    paths: Vec<String>,
+    licence_of: impl Fn(&std::path::Path) -> Option<crate::sequence::Licence>,
+) -> Result<OpenedProject, String> {
     if paths.is_empty() || paths.len() > 64 {
         return Err("Choose between 1 and 64 files to import".into());
     }
@@ -2395,7 +2406,12 @@ pub fn project_media_import_impl(
     let mut assets = Vec::with_capacity(paths.len());
     for path in &paths {
         match crate::media_bin::import(&root, path) {
-            Ok(asset) => assets.push(asset),
+            Ok(mut asset) => {
+                if let Some(licence) = licence_of(path) {
+                    asset.licence = Some(licence);
+                }
+                assets.push(asset)
+            }
             Err(error) => {
                 for asset in &assets {
                     crate::media_bin::remove_files(&root, asset);
