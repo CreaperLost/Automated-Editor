@@ -23,7 +23,8 @@ pub const DESCRIPTION: &str = "Layouts: how the screen and the camera share the 
     `fromS`-`toS`; `remove` `ids`; `clear` `fromS`-`toS` (or all, or `autoOnly`); `base` \
     `layout`; `switch` to `layout` from `atS` to the next change (number-key switching); `pick` \
     from the recording, no AI (camera while the mouse rests as you talk, screen while busy, \
-    the opening line in a short; `settings` changes the rules first, `apply: false` only \
+    the opening line in a short; `settings` changes the rules first, e.g. `paced` holds \
+    shots 2-8 s, camera 2-5 s, then a punch-in, at most `shotsPerMinute`; `apply: false` only \
     reports; sections made by hand stay); `settings` (`transitionMs`, rules); `save` a \
     favourite `name` from `id`, `layout` or the base; `forget` a favourite. Transitions: auto \
     (a cut between full-frame shots and on cuts, else a short move), cut or move. Seconds are \
@@ -345,14 +346,22 @@ pub fn run_pick(
         "Nothing to pick: the base layout shows throughout.".to_string()
     } else {
         format!(
-            "{} {}: {} with the camera alone, {} with the screen alone, {} in all.",
+            "{} {}: {} with the camera alone ({} punched in), {} with the screen alone, {} in all.",
             if apply { "Picked" } else { "Would pick" },
             plural(found.sections.len(), "section"),
             counts(|l| matches!(l, Layout::CameraOnly(_))),
+            counts(|l| matches!(l, Layout::CameraOnly(c) if c.punch_in > 1.0)),
             counts(|l| matches!(l, Layout::ScreenOnly(_))),
             clock(total)
         )
     }];
+    if !found.sections.is_empty() {
+        lines.push(
+            "Once applied, check them with `storyboard` (a tile at each change); one undo \
+             takes them back."
+                .into(),
+        );
+    }
     lines.extend(found.diagnostics.iter().cloned());
     if apply {
         commands::layouts_store_impl(

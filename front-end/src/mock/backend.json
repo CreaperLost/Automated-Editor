@@ -1682,7 +1682,7 @@
     "config": null,
     "diagnostics": [],
     "guarded": false,
-    "key": "rec-a2a4b297090e.mic",
+    "key": "rec-1fe3a1ced134.mic",
     "noises": [],
     "revision": 0
   },
@@ -1691,7 +1691,7 @@
       {
         "durationUs": 6000000,
         "height": 180,
-        "id": "rec-a2a4b297090e",
+        "id": "rec-1fe3a1ced134",
         "kind": "recording",
         "name": "smoke",
         "path": "/home/george/AeroEdits/smoke.aero",
@@ -1798,10 +1798,12 @@
         "hook": false,
         "idleMs": 30000,
         "minRestMs": 2500,
+        "paced": false,
         "pauseToleranceMs": 800,
         "requireSpeech": true,
         "rest": true,
         "restSizePct": 100.0,
+        "shotsPerMinute": 3,
         "speechThresholdDb": -38.0
       },
       "sections": [],
@@ -1810,7 +1812,7 @@
     "name": "Smoke",
     "noiseMutes": {},
     "previewAvailable": false,
-    "projectHandle": "14a86e5a-0101-472c-abf3-a5b57e61706a",
+    "projectHandle": "6f9f7a3c-c7d1-4d47-9fa4-1f0c2c7826fe",
     "projectPath": "/home/george/AeroEdits/Smoke",
     "redoAvailable": false,
     "revision": 0,
@@ -1820,7 +1822,7 @@
         {
           "clips": [
             {
-              "asset": "rec-a2a4b297090e",
+              "asset": "rec-1fe3a1ced134",
               "durationUs": 6000000,
               "id": "c1",
               "inUs": 0,
@@ -1835,7 +1837,7 @@
         {
           "clips": [
             {
-              "asset": "rec-a2a4b297090e",
+              "asset": "rec-1fe3a1ced134",
               "durationUs": 6000000,
               "id": "c2",
               "inUs": 0,
@@ -1871,7 +1873,7 @@
     "generation": 1,
     "positionUs": 0,
     "previewAvailable": false,
-    "projectHandle": "14a86e5a-0101-472c-abf3-a5b57e61706a",
+    "projectHandle": "6f9f7a3c-c7d1-4d47-9fa4-1f0c2c7826fe",
     "speed": 1.0,
     "state": "ready"
   },
@@ -1961,10 +1963,12 @@
           "hook": false,
           "idleMs": 30000,
           "minRestMs": 2500,
+          "paced": false,
           "pauseToleranceMs": 800,
           "requireSpeech": true,
           "rest": true,
           "restSizePct": 100.0,
+          "shotsPerMinute": 3,
           "speechThresholdDb": -38.0
         },
         "sections": [],
@@ -2240,7 +2244,7 @@
         "endUs": 2350000,
         "startUs": 100000,
         "text": "Today we cut the pauses out.",
-        "trackId": "rec-a2a4b297090e.mic",
+        "trackId": "rec-1fe3a1ced134.mic",
         "wordIds": [
           "w-0",
           "w-1",
@@ -2262,7 +2266,7 @@
         "endUs": 5300000,
         "startUs": 4100000,
         "text": "Like this.",
-        "trackId": "rec-a2a4b297090e.mic",
+        "trackId": "rec-1fe3a1ced134.mic",
         "wordIds": [
           "w-6",
           "w-7"
@@ -2273,7 +2277,7 @@
         ]
       }
     ],
-    "trackId": "rec-a2a4b297090e.mic"
+    "trackId": "rec-1fe3a1ced134.mic"
   },
   "project_check": {
     "durationUs": 6000000,
@@ -2920,7 +2924,7 @@
       106,
       107
     ],
-    "trackId": "rec-a2a4b297090e.mic"
+    "trackId": "rec-1fe3a1ced134.mic"
   },
   "project_zoom_suggestions": {
     "config": {
@@ -2953,7 +2957,7 @@
   },
   "proposals_list": {
     "batches": [],
-    "projectHandle": "14a86e5a-0101-472c-abf3-a5b57e61706a",
+    "projectHandle": "6f9f7a3c-c7d1-4d47-9fa4-1f0c2c7826fe",
     "revision": 0
   },
   "publish_package": {
@@ -3174,13 +3178,13 @@
     }
   ],
   "transcript_get": {
-    "createdAt": "2026-11-21T11:02:07.481229188+00:00",
+    "createdAt": "2026-11-21T16:18:29.842864146+00:00",
     "language": "en",
     "model": "parakeet-tdt-0.6b-v3",
     "provider": "parakeet",
     "revision": 0,
-    "trackId": "rec-a2a4b297090e.mic",
-    "wordStamp": "66a2cfe82e1307a3",
+    "trackId": "rec-1fe3a1ced134.mic",
+    "wordStamp": "b77f8538945d0ea5",
     "words": [
       {
         "editedEndUs": 450000,

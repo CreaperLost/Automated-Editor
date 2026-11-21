@@ -373,6 +373,10 @@ export const LayoutsSection: React.FC = () => {
             )}
             <Switch checked={pick.busy} onChange={(busy) => setPick({ busy })} label="Screen only while I click and type a lot" />
             <Switch checked={pick.hook} onChange={(hook) => setPick({ hook })} label="Camera for the opening line" />
+            <Switch checked={pick.paced} onChange={(paced) => setPick({ paced })} label="Short shots: screen 2-8 s, camera 2-5 s, then a punch-in" />
+            {pick.paced && (
+              <RangeRow label="Shots a minute" value={pick.shotsPerMinute} min={1} max={10} step={1} unit="" onChange={(shotsPerMinute) => setPick({ shotsPerMinute })} />
+            )}
           </div>
         )}
       </div>

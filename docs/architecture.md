@@ -141,7 +141,10 @@ fillers/retakes, then graphics and chapters. Reanalyse after edits; stale sugges
   arrangements for moves. One drawing path for the video and shorts in
   `export::SceneEvaluator::scene_at`. `pick` rules: rest (camera while the mouse rests and you
   talk), busy (screen while clicks/typing come fast), hook (camera on a short's opening line),
-  no-footage (take shorts). Plan and follow-ups: [roadmap](ROADMAP.md#lay-3).
+  no-footage (take shorts). `paced` (LAY-3) bounds what they give: screen 2–8 s, camera
+  2–5 s, a long rest carried on as a 1.4× punch-in 1.5–4 s, and at most `shotsPerMinute`
+  shots starting in any minute (opening line, then busy, then rests, then punch-ins). A shot
+  that meets the next may run up to a second past its bound. [Roadmap](ROADMAP.md#lay-3).
 - **Zooms** from clicks, dwell, click clusters and typing (`zoom/`), eased in recording time.
 - **Telemetry** (`telemetry/`): `events.jsonl` + `geometry.jsonl` (mouse), `keys.jsonl`
   ([contract](#keyboard-telemetry)), `windows.jsonl`

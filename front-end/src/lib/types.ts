@@ -221,6 +221,8 @@ export interface PickSettings {
   minRestMs: number;
   cursorMovesAreActivity: boolean;
   restSizePct: number;
+  paced: boolean;
+  shotsPerMinute: number;
 }
 
 export interface LayoutTrack {
@@ -292,6 +294,8 @@ export const DEFAULT_PICK_SETTINGS: PickSettings = {
   minRestMs: 2500,
   cursorMovesAreActivity: true,
   restSizePct: 100,
+  paced: false,
+  shotsPerMinute: 3,
 };
 
 export const DEFAULT_LAYOUT_TRACK: LayoutTrack = {
