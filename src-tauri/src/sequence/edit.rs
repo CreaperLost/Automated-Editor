@@ -115,6 +115,12 @@ pub enum SequenceEdit {
         #[serde(default)]
         clip_ids: Vec<String>,
     },
+    /// Copies clips with their partners (sound, look and speed too) to right after them, on
+    /// the same tracks; what is there moves along when the timeline is magnetic, else is
+    /// covered.
+    Duplicate {
+        clip_ids: Vec<String>,
+    },
     /// Removes clips with their partners.
     Delete {
         clip_ids: Vec<String>,
@@ -707,6 +713,7 @@ impl<'a> Editor<'a> {
                 ripple,
             } => self.trim(clip_id, *edge, *to_us, ripple.unwrap_or(magnetic)),
             SequenceEdit::Split { at_us, clip_ids } => self.split(*at_us, clip_ids),
+            SequenceEdit::Duplicate { clip_ids } => self.duplicate(clip_ids),
             SequenceEdit::Delete { clip_ids, ripple } => {
                 let ids = self.with_partners(clip_ids)?;
                 let mut gone = Vec::new();
@@ -1328,6 +1335,61 @@ impl<'a> Editor<'a> {
         Ok(())
     }
 
+    fn duplicate(&mut self, clip_ids: &[String]) -> Result<(), String> {
+        let ids = self.with_partners(clip_ids)?;
+        if ids.is_empty() {
+            return Err("Choose clips to duplicate".into());
+        }
+        let mut copies: Vec<(String, Clip)> = Vec::new(); // (track id, clip)
+        for track in &self.seq.tracks {
+            for clip in track.clips.iter().filter(|c| ids.contains(&c.id)) {
+                if track.locked {
+                    return Err("That track is locked".into());
+                }
+                copies.push((track.id.clone(), clip.clone()));
+            }
+        }
+        let start = copies.iter().map(|(_, c)| c.start_us).min().unwrap_or(0);
+        let end = copies.iter().map(|(_, c)| c.end_us()).max().unwrap_or(0);
+        let len = end - start;
+        let mut new_links: HashMap<String, String> = HashMap::new();
+        let mut placed = Vec::new();
+        for (track, mut clip) in copies {
+            clip.id = self.clip_id();
+            if let Some(old) = clip.link.take() {
+                let link = match new_links.get(&old) {
+                    Some(link) => link.clone(),
+                    None => {
+                        let link = self.link_id();
+                        new_links.insert(old, link.clone());
+                        link
+                    }
+                };
+                clip.link = Some(link);
+            }
+            clip.start_us += len;
+            placed.push((self.track_index(&track)?, clip));
+        }
+        let mut links = HashMap::new();
+        let occupied = placed
+            .iter()
+            .any(|(t, c)| !self.seq.tracks[*t].is_free(c.start_us, c.end_us()));
+        if occupied {
+            if self.seq.magnetic {
+                self.insert_time(end, len, &mut links);
+            } else {
+                for (t, c) in &placed {
+                    self.clear(*t, c.start_us, c.end_us(), &mut links);
+                }
+            }
+        }
+        for (t, clip) in placed {
+            self.seq.tracks[t].clips.push(clip);
+            self.seq.tracks[t].clips.sort_by_key(|c| c.start_us);
+        }
+        Ok(())
+    }
+
     fn trim(&mut self, clip_id: &str, edge: Edge, to: u64, ripple: bool) -> Result<(), String> {
         let (t, c) = self.find(clip_id)?;
         if self.seq.tracks[t].locked {
@@ -1909,6 +1971,49 @@ mod tests {
         let right: BTreeSet<_> = seq.tracks.iter().map(|t| t.clips[1].link.clone()).collect();
         assert_eq!((left.len(), right.len()), (1, 1));
         assert_ne!(left, right);
+    }
+
+    #[test]
+    fn a_duplicate_follows_its_clips_with_their_sound_and_partners() {
+        let (assets, seq) = rec_project();
+        // Keep 2 s to 4 s, with its sound turned down, and duplicate it.
+        let seq = run(&seq, &assets, cut(&[(0, 2 * S), (4 * S, 10 * S)]));
+        let picture = clip_on(&seq, "V1", 0);
+        let seq = run(
+            &seq,
+            &assets,
+            SequenceEdit::SetSound {
+                clip_ids: vec![picture.clone()],
+                gain_db: Some(-6.0),
+                fade_in_us: None,
+                fade_out_us: None,
+            },
+        );
+        let twice = run(
+            &seq,
+            &assets,
+            SequenceEdit::Duplicate {
+                clip_ids: vec![picture.clone()],
+            },
+        );
+        assert_eq!(twice.duration_us(), 4 * S);
+        let copies: Vec<&Clip> = twice
+            .clips()
+            .map(|(_, c)| c)
+            .filter(|c| c.start_us == 2 * S)
+            .collect();
+        assert_eq!(copies.len(), seq.clips().count(), "every partner is copied");
+        assert!(copies
+            .iter()
+            .all(|c| c.in_us == 2 * S && c.duration_us == 2 * S));
+        assert!(copies.iter().all(|c| c.id != picture && c.link.is_some()));
+        let first_link = seq.clip(&picture).unwrap().1.link.clone();
+        for (old, new) in seq
+            .clips()
+            .zip(twice.clips().filter(|(_, c)| c.start_us == 2 * S))
+        {
+            assert_eq!(old.1.mix, new.1.mix, "the sound is copied too");
+        }
     }
 
     #[test]

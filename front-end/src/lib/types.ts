@@ -1387,6 +1387,7 @@ export type SequenceEdit =
   | { kind: "moveClips"; clipIds: string[]; deltaUs: number; trackId?: string | null; anchorId?: string | null }
   | { kind: "trimClip"; clipId: string; edge: "start" | "end"; toUs: number; ripple?: boolean | null }
   | { kind: "split"; atUs: number; clipIds: string[] }
+  | { kind: "duplicate"; clipIds: string[] }
   | { kind: "delete"; clipIds: string[]; ripple?: boolean | null }
   | { kind: "deleteRange"; ranges: EditedSpan[]; ripple?: boolean | null }
   | { kind: "rippleTrim"; atUs: number; side: TrimSide }
