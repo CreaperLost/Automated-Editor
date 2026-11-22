@@ -65,6 +65,7 @@ pub mod telemetry;
 pub mod timeline;
 pub mod transcript;
 pub mod under_take;
+pub mod web_video;
 pub mod window_crop;
 pub mod zoom;
 
@@ -938,6 +939,31 @@ async fn project_media_import(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         commands::project_media_import_impl(&state, project_handle, expected_revision, paths)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+async fn project_media_from_link(
+    app: tauri::AppHandle,
+    project_handle: String,
+    url: String,
+    from_s: Option<f64>,
+    to_s: Option<f64>,
+) -> Result<project::OpenedProject, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let request = web_video::Request { url, from_s, to_s };
+        commands::project_media_from_link_impl(
+            &state,
+            project_handle,
+            &request,
+            &|_, _| {},
+            &|| false,
+        )
+        .map(|(project, _, _)| project)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -3644,6 +3670,7 @@ pub fn run() {
             project_ripple_cuts,
             project_sequence_edit,
             project_media_import,
+            project_media_from_link,
             project_media_roles,
             project_media_licence,
             image_library_list,

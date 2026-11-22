@@ -219,7 +219,8 @@ pub static ACTIONS: [ToolDef; 36] = [
             another preset was read already. Answers each new media id and its streams. `roles` \
             (`media`, `stream`, `role`) sets what streams stand for, after importing or on media \
             already in the project; music and sound effects get `music` / `effects` and their \
-            `licences` (music must need no credit). `stock`: proposes Pexels stock to import.",
+            `licences` (music must need no credit). `stock`: proposes Pexels stock to import. \
+            `url` (with `fromS`/`toS` for part of it): downloads a video the user linked.",
         schema: schema::<MediaImportArgs>,
         read_only: false,
         run: media_import,
@@ -3423,6 +3424,17 @@ pub struct MediaImportArgs {
     /// Stock: what it is for, in a sentence the user reads.
     #[serde(default)]
     pub reason: Option<String>,
+    /// Instead: a video's link (YouTube, archive.org and most video sites), downloaded with
+    /// yt-dlp into the project's `media/downloads/` and imported with the licence the site
+    /// states.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// With `url`: only from this second of it.
+    #[serde(default)]
+    pub from_s: Option<f64>,
+    /// With `url`: only up to this second of it.
+    #[serde(default)]
+    pub to_s: Option<f64>,
 }
 
 /// Proposes stock `ids` (looked up with `fetch`) for the user to accept.
@@ -3542,6 +3554,48 @@ pub struct MediaRoleArgs {
 
 fn media_import(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let args: MediaImportArgs = params(args)?;
+    if let Some(url) = args.url.as_deref() {
+        if !args.paths.is_empty() || !args.stock.is_empty() {
+            return Err("Give `url` on its own, without `paths` or `stock`".into());
+        }
+        let request = crate::web_video::Request {
+            url: url.trim().to_string(),
+            from_s: args.from_s,
+            to_s: args.to_s,
+        };
+        let before = opened(ctx)?;
+        let (project, got, id) = commands::project_media_from_link_impl(
+            ctx.state,
+            before.handle.clone(),
+            &request,
+            &|fraction, message| ctx.progress(fraction, message),
+            &|| ctx.stopped(),
+        )?;
+        let asset = id.and_then(|id| project.assets.iter().find(|a| a.id == id));
+        let by = got
+            .uploader
+            .as_deref()
+            .map(|u| format!(" by {u}"))
+            .unwrap_or_default();
+        let mut lines = vec![match asset {
+            Some(asset) => format!(
+                "Downloaded \"{}\"{by} and imported it as {} ({}); licence {:?}, {}.",
+                got.title,
+                asset.id,
+                clock(asset.duration_us),
+                got.licence.kind,
+                got.licence.source.as_deref().unwrap_or(&got.page_url)
+            ),
+            None => format!(
+                "Downloaded \"{}\"{by}; it was already in the project ({}).",
+                got.title,
+                got.path.display()
+            ),
+        }];
+        lines.extend(set_roles(ctx, args.roles)?);
+        lines.extend(set_licences(ctx, args.licences)?);
+        return text(applied(ctx, "media_import", &before, lines)?);
+    }
     if !args.stock.is_empty() {
         let web = crate::stock::Web::from_keychain()?;
         return propose_stock(ctx, &web, &args.stock, args.reason.as_deref());

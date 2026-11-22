@@ -68,7 +68,7 @@ fn exe_name(base: &str) -> String {
     }
 }
 
-fn locate(env_key: &str, base: &str) -> Option<PathBuf> {
+pub(crate) fn locate(env_key: &str, base: &str) -> Option<PathBuf> {
     if let Some(value) = env::var_os(env_key) {
         let path = PathBuf::from(value);
         if path.is_file() {
