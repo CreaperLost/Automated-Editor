@@ -10,6 +10,7 @@ export const DEFAULT_SHORT_LAYOUT: ShortLayout = {
   cameraClips: {},
   screenZoom: 1,
   followZooms: true,
+  followAction: true,
   screenPanX: 0,
   screenPanY: 0,
   captions: true,
