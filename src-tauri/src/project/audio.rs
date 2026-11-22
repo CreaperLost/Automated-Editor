@@ -46,6 +46,13 @@ pub struct AudioSettings {
     /// How far steady background noise is pushed down, in dB.
     #[serde(default = "default_noise_reduction_db")]
     pub noise_reduction_db: f32,
+    /// How noise reduction works: `spectral` against the recording's steady noise, or
+    /// `neural` (RNNoise), which also takes out noise that changes (keys, fans).
+    #[serde(default)]
+    pub noise_model: NoiseModel,
+    /// High-pass, compressor and de-esser on speech (SND-7).
+    #[serde(default)]
+    pub voice_chain: bool,
     /// Lower system audio while the microphone has speech.
     #[serde(default)]
     pub duck_system_audio: bool,
@@ -66,6 +73,16 @@ pub struct AudioSettings {
     /// The sound effects lane: clicks and whooshes from the recording's telemetry.
     #[serde(default)]
     pub sound_effects: crate::sound_effects::SoundEffects,
+}
+
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum NoiseModel {
+    #[default]
+    Spectral,
+    Neural,
 }
 
 /// One audio track's mix, kept under the track's id. Muting is the track's own switch.
@@ -100,6 +117,8 @@ impl Default for AudioSettings {
             target_lufs: DEFAULT_TARGET_LUFS,
             noise_reduction: false,
             noise_reduction_db: DEFAULT_NOISE_REDUCTION_DB,
+            noise_model: NoiseModel::Spectral,
+            voice_chain: false,
             duck_system_audio: false,
             duck_db: DEFAULT_DUCK_DB,
             music_under_speech_db: None,

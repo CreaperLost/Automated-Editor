@@ -362,6 +362,7 @@ fn prepare_analyses<'a>(
     root: &Path,
     settings: &crate::project::AudioSettings,
     lanes: &'a [Lane],
+    clean: &super::declick::CleanFiles,
 ) -> HashMap<&'a str, Arc<SegmentAnalysis>> {
     let ducking = lanes
         .iter()
@@ -390,8 +391,13 @@ fn prepare_analyses<'a>(
             }
         }
     }
-    let analyze = |relative| {
-        safe_path(root, relative)
+    // A cleaned copy is what plays, so it is what is measured.
+    let analyze = |relative: &'a str| {
+        clean
+            .iter()
+            .find(|((_, path), _)| path == relative)
+            .map(|(_, file)| Ok(file.path().to_path_buf()))
+            .unwrap_or_else(|| safe_path(root, relative))
             .and_then(|path| analyze_cached(&path))
             .ok()
             .map(|analysis| (relative, analysis))
@@ -555,10 +561,21 @@ impl PolishPlan {
         lanes: &[Lane],
         duration_us: u64,
     ) -> Option<Self> {
+        Self::build_with(root, settings, lanes, duration_us, &Default::default())
+    }
+
+    /// [`Self::build`], measuring the `clean` copies where lanes play them.
+    pub fn build_with(
+        root: &Path,
+        settings: &crate::project::AudioSettings,
+        lanes: &[Lane],
+        duration_us: u64,
+        clean: &super::declick::CleanFiles,
+    ) -> Option<Self> {
         if !settings.any_enabled() {
             return None;
         }
-        let analyses = prepare_analyses(root, settings, lanes);
+        let analyses = prepare_analyses(root, settings, lanes, clean);
         let analyze =
             |segment: &SegmentSummary| analyses.get(segment.relative_path.as_str()).cloned();
         // Noise reduction where a lane has it on (speech by default when switched on).
@@ -567,6 +584,10 @@ impl PolishPlan {
             let Some(db) = settings.lane_denoise_db(&lane.id, lane.speech) else {
                 continue;
             };
+            // Neural noise removal is in the lane's cleaned copy already.
+            if settings.noise_model == crate::project::audio::NoiseModel::Neural {
+                continue;
+            }
             // Only the segments a clip plays: a short clip of a long recording does not
             // need the rest of it analyzed.
             for segment in lane.clips.iter().flat_map(|c| {
@@ -1015,7 +1036,7 @@ mod tests {
             noise_reduction: true,
             ..Default::default()
         };
-        let analyses = prepare_analyses(dir.path(), &settings, &lanes);
+        let analyses = prepare_analyses(dir.path(), &settings, &lanes, &Default::default());
         assert_eq!(analyses.len(), 2);
         assert!(analyses.contains_key("first.wav") && analyses.contains_key("second.wav"));
         // Results remain usable throughout the build without reopening their files.

@@ -1280,7 +1280,10 @@ pub fn project_audio_update_impl(
     audio.validate()?;
     // Prepare outside the project/command locks, then let the revision check fence the
     // commit. A failed repair never saves an enabled effect that cannot be played.
-    let prepared = if audio.mouth_clicks {
+    let prepared = if audio.mouth_clicks
+        || audio.voice_chain
+        || audio.noise_model == crate::project::audio::NoiseModel::Neural
+    {
         let (root, document) = {
             let opened = state.opened_project.lock();
             let reader = opened.as_ref().ok_or("No opened project")?;

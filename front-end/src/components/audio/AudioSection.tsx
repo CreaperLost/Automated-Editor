@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ArrowDownToLine, Mic, MousePointerClick, Music, Sparkles, Volume2, VolumeX, Wand2, Wind } from "lucide-react";
 import { InspectorSection, MoreSettings, RangeRow } from "../inspector/InspectorSection";
 import { PresetMarks } from "../presets/PresetMarks";
-import { Button, Notice, Switch } from "../ui";
+import { Button, Notice, Segmented, Switch } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { saveTrackMix } from "../../lib/trackMix";
@@ -455,6 +455,36 @@ export const AudioSection: React.FC = () => {
         </div>
       )}
       {lanes.some((lane) => lane.role === "mic") && <MouthClickCleanup />}
+      {lanes.some((lane) => lane.role === "mic") && (
+        <div className="space-y-2 pb-3 border-b border-studio-800">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-label text-studio-200" title="Cuts rumble under 80 Hz, evens out loud words and softens harsh s sounds on Speech tracks.">
+              Voice chain
+            </span>
+            <Switch
+              checked={!!draft.voiceChain}
+              onChange={(voiceChain) => update({ voiceChain })}
+              title="High-pass, compressor and de-esser on speech"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-label text-studio-200" title="Steady removes a constant hiss or hum. Neural (RNNoise) also removes noise that changes, like keys and fans.">
+              Noise reduction
+            </span>
+            <Segmented<"spectral" | "neural">
+              label="Noise reduction method"
+              size="sm"
+              value={draft.noiseModel ?? "spectral"}
+              onChange={(noiseModel) => update({ noiseModel })}
+              options={[
+                { value: "spectral", label: "Steady" },
+                { value: "neural", label: "Neural" },
+              ]}
+            />
+          </div>
+          <p className="text-meta text-studio-500">Applies where noise reduction is on (the track's noise button).</p>
+        </div>
+      )}
       {lanes.some((lane) => lane.track.role === "music" || (openedProject && lane.track.clips.some((c) => clipRole(openedProject, lane.track, c) === "music"))) && (
         <EffectRow
           label="Music under speech"

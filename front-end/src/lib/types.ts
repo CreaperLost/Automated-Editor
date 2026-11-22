@@ -401,6 +401,10 @@ export interface AudioSettings {
   noiseReduction: boolean;
   /** How far background noise is lowered, 3 to 30 dB. */
   noiseReductionDb: number;
+  /** spectral: a steady noise profile; neural: RNNoise, also noise that changes. */
+  noiseModel?: "spectral" | "neural";
+  /** High-pass, compressor and de-esser on speech. */
+  voiceChain?: boolean;
   duckSystemAudio: boolean;
   /** How far system audio is lowered under speech, 3 to 30 dB. */
   duckDb: number;
