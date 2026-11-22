@@ -3,7 +3,7 @@ import { Check, ClipboardCopy, Loader2, Plus, Sparkles, Trash2 } from "lucide-re
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
 import { clipAt, clipSourceAt, soundSources } from "../../lib/sequence";
-import type { Chapter, OpenedProject } from "../../lib/types";
+import type { Chapter, Marker, OpenedProject } from "../../lib/types";
 import { errorMessage } from "../../lib/format";
 
 /** YouTube's rules for description chapters. */
@@ -236,6 +236,73 @@ export const ChaptersPanel: React.FC = () => {
         </ul>
       )}
 
+      <MarkerNotes markers={openedProject.markers ?? []} busy={!!busy} run={run} seek={seek} />
     </div>
+  );
+};
+
+/// The timeline's markers (M on the timeline drops one), each with a note to say what to come
+/// back for. Cut ones are listed last; they show again if the cut is undone.
+const MarkerNotes: React.FC<{
+  markers: Marker[];
+  busy: boolean;
+  run: (label: string, work: (project: OpenedProject) => Promise<OpenedProject>) => Promise<void>;
+  seek: (us: number) => void;
+}> = ({ markers, busy, run, seek }) => {
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  if (markers.length === 0) return null;
+  const save = (next: Marker[]) =>
+    run("Saving markers", (project) => api.projectMarkersSet(project.projectHandle, project.revision, next));
+  const commit = (marker: Marker) => {
+    const note = (notes[marker.id] ?? marker.note ?? "").trim();
+    setNotes(({ [marker.id]: _, ...rest }) => rest);
+    if (note !== (marker.note ?? "")) void save(markers.map((m) => (m.id === marker.id ? { ...m, note } : m)));
+  };
+  const shown = [...markers].sort((a, b) => (a.editedUs ?? Infinity) - (b.editedUs ?? Infinity));
+  return (
+    <section className="space-y-1 pt-2 border-t border-studio-800" aria-label="Markers">
+      <h3 className="text-meta font-semibold text-studio-300">Markers</h3>
+      <ul className="space-y-1">
+        {shown.map((marker) => {
+          const at = marker.editedUs ?? null;
+          return (
+            <li key={marker.id} className="flex items-center gap-1.5 rounded-md border border-studio-800 bg-studio-850 px-2 py-1">
+              <button
+                type="button"
+                disabled={at === null}
+                onClick={() => at !== null && seek(at)}
+                className={`w-12 shrink-0 text-left font-mono ${at === null ? "text-studio-600 line-through" : "text-studio-400 hover:text-accent-fg"}`}
+                title={at === null ? "This moment was cut" : "Jump here"}
+              >
+                {at === null ? "cut" : formatChapterTime(at)}
+              </button>
+              <input
+                aria-label="Marker note"
+                placeholder="Note"
+                value={notes[marker.id] ?? marker.note ?? ""}
+                maxLength={100}
+                disabled={busy}
+                onChange={(e) => setNotes({ ...notes, [marker.id]: e.target.value })}
+                onBlur={() => commit(marker)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") e.currentTarget.blur();
+                  if (e.key === "Escape") setNotes(({ [marker.id]: _, ...rest }) => rest);
+                }}
+                className="flex-1 min-w-0 bg-transparent border border-transparent hover:border-studio-700 focus:border-accent-hover rounded px-1 py-0.5 text-studio-100 outline-none"
+              />
+              <button
+                type="button"
+                aria-label="Remove marker"
+                disabled={busy}
+                onClick={() => void save(markers.filter((m) => m.id !== marker.id))}
+                className="p-1 rounded text-studio-500 hover:text-danger-fg hover:bg-studio-700 disabled:opacity-40"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 };

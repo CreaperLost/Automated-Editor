@@ -2185,7 +2185,7 @@ export const TimelineStudio: React.FC = () => {
                     type="button"
                     className="absolute top-0 z-20 -translate-x-1/2 text-accent hover:text-accent-hover"
                     style={{ left: pct(m.editedUs) }}
-                    title={`${m.note || "Marker"}: click to go there${hint("marker") ? `; at the playhead${hint("marker")} removes it` : ""}`}
+                    title={`${m.note || "Marker"}: click to go there${hint("marker") ? `; at the playhead${hint("marker")} removes it` : ""}; notes in the Chapters tab`}
                     aria-label={m.note || "Marker"}
                     onPointerDown={(event) => event.stopPropagation()}
                     onClick={() => seekToUs(m.editedUs)}
