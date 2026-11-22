@@ -218,6 +218,12 @@ export const ShortLookPanel: React.FC = () => {
               label="Follow the video's zooms"
               title="The screen part follows the zooms of the video (clicks and manual zooms)"
             />
+            <Switch
+              checked={layout.followAction}
+              onChange={(followAction) => changeLayout({ followAction })}
+              label="Follow the work"
+              title="Where the screen part shows only some of the recording, it moves to the clicks, the typing and the pointer, and holds still to read"
+            />
           </InspectorSection>
 
           <p className="px-3 py-2 text-meta text-studio-500 leading-relaxed border-b border-studio-800">

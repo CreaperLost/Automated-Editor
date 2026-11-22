@@ -2446,6 +2446,8 @@ export interface ShortLayout {
   /** Zoom on the screen part, 0.3 to 3: 1 fills its part, below 1 shows all of it smaller. */
   screenZoom: number;
   followZooms: boolean;
+  /** Where the screen is narrower than the recording, the view goes where the work is (clicks, typing, the pointer). */
+  followAction: boolean;
   /** Moves the screen view, -1 to 1 each way, on top of where the zooms point. */
   screenPanX: number;
   screenPanY: number;

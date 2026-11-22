@@ -50,6 +50,9 @@ pub struct ShortLayout {
     pub screen_zoom: f32,
     /// Move the screen view to where the project's zooms point.
     pub follow_zooms: bool,
+    /// Where the screen is narrower than the recording, move the view to where the work is
+    /// (clicks, typing, the pointer), holding still to read (DLV-5, [`crate::reframe`]).
+    pub follow_action: bool,
     /// Moves the screen view sideways and up or down: -1 to 1, as a share of how far it can
     /// go inside the crop. Added to where the zooms point when following them.
     pub screen_pan_x: f32,
@@ -264,6 +267,7 @@ impl Default for ShortLayout {
             camera_clips: Default::default(),
             screen_zoom: 1.0,
             follow_zooms: true,
+            follow_action: true,
             screen_pan_x: 0.0,
             screen_pan_y: 0.0,
             // A short is watched on a phone, often muted: captions on unless turned off.

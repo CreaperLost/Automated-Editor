@@ -256,6 +256,11 @@ impl ExportInputs {
 }
 
 type Zooms = std::sync::Arc<Vec<crate::zoom::ZoomSuggestion>>;
+/// Planned views by (recording, view width and height in hundredths).
+type ViewPaths =
+    std::collections::HashMap<(String, u32, u32), Option<std::sync::Arc<crate::reframe::ViewPath>>>;
+/// A zoom this far in (1 + this) has the view wholly where it points.
+const ZOOM_TAKES_OVER: f32 = 0.15;
 
 /// A cut that skips at most this much of what is playing reads on through it on the open
 /// decoder (a few frames); a longer one gets a decoder of its own, started ahead.
@@ -306,6 +311,9 @@ pub struct SceneEvaluator {
     prefetched: std::cell::RefCell<(u64, std::collections::BTreeSet<u64>)>,
     /// Zooms by recording, with the camera paths that follow the mouse, worked out once.
     zooms: std::cell::RefCell<std::collections::HashMap<String, Zooms>>,
+    /// Where a narrow view of each recording looks (DLV-5), by recording and view size in
+    /// hundredths, planned once.
+    view_paths: std::cell::RefCell<ViewPaths>,
     /// What plays each stream, by asset and stream, looked up once: a lookup checks the
     /// recording's files on disk, too slow to repeat for every layer of every frame.
     sources: std::cell::RefCell<Sources>,
@@ -596,6 +604,7 @@ impl SceneEvaluator {
             cursors: Default::default(),
             prefetched: Default::default(),
             zooms: Default::default(),
+            view_paths: Default::default(),
             sources: Default::default(),
             cursor_images: Default::default(),
             graphic_specs: Default::default(),
@@ -859,19 +868,29 @@ impl SceneEvaluator {
     ) -> (crate::layouts::arrange::Rect, (f32, f32, f32, f32)) {
         let short = self.document.short_layout.clone().unwrap_or_default();
         let crop = self.screen_crop_at(asset, local, style);
+        // Where the work is, when the view is narrower than the screen (DLV-5); else the
+        // crop's middle.
+        let base = short
+            .follow_action
+            .then(|| self.view_path(asset, frame, rect, short.screen_zoom, style))
+            .flatten()
+            .and_then(|path| path.at(local))
+            .unwrap_or((crop.0 + crop.2 / 2.0, crop.1 + crop.3 / 2.0));
         let (center, zoom) = if short.follow_zooms {
             let zooms = self.zooms_for(asset);
             let config = crate::zoom::eval_config_for(&self.document.zooms);
             let camera = crate::zoom::evaluate_at_source(&zooms, local, &config);
+            // Into a zoom the view goes from where it was to where the zoom points.
+            let k = ((camera.scale as f32 - 1.0) / ZOOM_TAKES_OVER).clamp(0.0, 1.0);
             (
-                (camera.center_x as f32, camera.center_y as f32),
+                (
+                    base.0 + (camera.center_x as f32 - base.0) * k,
+                    base.1 + (camera.center_y as f32 - base.1) * k,
+                ),
                 short.screen_zoom * camera.scale.max(1.0) as f32,
             )
         } else {
-            (
-                (crop.0 + crop.2 / 2.0, crop.1 + crop.3 / 2.0),
-                short.screen_zoom,
-            )
+            (base, short.screen_zoom)
         };
         let (placed, uv) = crate::shorts::screen_placement(
             frame.0,
@@ -883,6 +902,52 @@ impl SceneEvaluator {
             (short.screen_pan_x, short.screen_pan_y),
         );
         (crate::layouts::arrange::Rect::of(placed), uv)
+    }
+
+    /// The planned view of `asset` in `rect` at `zoom` (no project zoom), when that view is
+    /// narrower than the screen and the recording has telemetry.
+    fn view_path(
+        &self,
+        asset: &str,
+        frame: (u32, u32),
+        rect: crate::layouts::arrange::Rect,
+        zoom: f32,
+        style: &EditLayout,
+    ) -> Option<std::sync::Arc<crate::reframe::ViewPath>> {
+        let crop = style.screen_crop_uv();
+        let (_, uv) = crate::shorts::screen_placement(
+            frame.0,
+            frame.1,
+            crop,
+            rect.pixels(self.width, self.height),
+            zoom,
+            (crop.0 + crop.2 / 2.0, crop.1 + crop.3 / 2.0),
+            (0.0, 0.0),
+        );
+        let key = (
+            asset.to_string(),
+            (uv.2 * 100.0).round() as u32,
+            (uv.3 * 100.0).round() as u32,
+        );
+        if let Some(found) = self.view_paths.borrow().get(&key) {
+            return found.clone();
+        }
+        let planned = self
+            .document
+            .asset(asset)
+            .filter(|a| a.is_recording())
+            .map(|a| crate::telemetry::activity::recording_activity(Path::new(&a.path)))
+            .map(|activity| {
+                crate::reframe::plan(
+                    &activity,
+                    (key.1 as f64 / 100.0, key.2 as f64 / 100.0),
+                    (crop.0 as f64, crop.1 as f64, crop.2 as f64, crop.3 as f64),
+                )
+            })
+            .filter(|path| !path.keys.is_empty())
+            .map(std::sync::Arc::new);
+        self.view_paths.borrow_mut().insert(key, planned.clone());
+        planned
     }
 
     /// An evaluator that composes scenes but never draws them (no GPU): for asking where
@@ -5197,6 +5262,53 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(stretch, base);
+    }
+
+    #[test]
+    fn a_portrait_screen_looks_where_the_clicks_are() {
+        let dir = tempfile::tempdir().unwrap();
+        // A click near the left at 0.2 s, one near the right at 1.6 s.
+        let (left, right) = (
+            click_line(0, 200_000, 0.1, 0.5),
+            click_line(1, 1_600_000, 0.9, 0.5),
+        );
+        let (folder, mut document) = telemetry_project(
+            dir.path(),
+            &[
+                ("geometry.jsonl", &[GEOMETRY]),
+                ("events.jsonl", &[left.as_str(), right.as_str()]),
+            ],
+        );
+        document.layout.aspect_ratio = "9:16".into();
+        document.layout.window_crop = false;
+        document.layout.screen_crop_bottom = 0.0;
+        document.layouts.base = crate::layouts::Layout::ScreenOnly(Default::default());
+        let uv = |document: &EditDocument, t: u64| {
+            screen_uv(
+                &scenes(&folder, document.clone(), 180, 320)
+                    .scene_at(t)
+                    .unwrap(),
+            )
+        };
+        // Filled, the square screen shows a little over half its width.
+        let at_first = uv(&document, 500_000);
+        assert!((at_first.2 - 0.5625).abs() < 0.01, "{at_first:?}");
+        assert!(at_first.0 < 0.01, "on the left click: {at_first:?}");
+        let at_second = uv(&document, 1_700_000);
+        assert!(
+            at_second.0 + at_second.2 > 0.99,
+            "on the right click: {at_second:?}"
+        );
+        // Off, the middle throughout.
+        let mut still = document.clone();
+        still.short_layout = Some(crate::shorts::ShortLayout {
+            follow_action: false,
+            ..Default::default()
+        });
+        for t in [500_000, 1_700_000] {
+            let middle = uv(&still, t);
+            assert!((middle.0 + middle.2 / 2.0 - 0.5).abs() < 0.01, "{middle:?}");
+        }
     }
 
     /// A click at (x, y) of the source at `t_us`, as an old recorder wrote it.

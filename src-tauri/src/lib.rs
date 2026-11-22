@@ -45,6 +45,7 @@ pub mod project;
 pub mod proposals;
 pub mod publish;
 pub mod ranges;
+pub mod reframe;
 pub mod render;
 pub mod render_cli;
 pub mod secrets;
