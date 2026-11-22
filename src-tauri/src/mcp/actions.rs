@@ -220,7 +220,7 @@ pub static ACTIONS: [ToolDef; 36] = [
             (`media`, `stream`, `role`) sets what streams stand for, after importing or on media \
             already in the project; music and sound effects get `music` / `effects` and their \
             `licences` (music must need no credit). `stock`: proposes Pexels stock to import. \
-            `url` (with `fromS`/`toS` for part of it): downloads a video the user linked.",
+            `url`: downloads a linked video.",
         schema: schema::<MediaImportArgs>,
         read_only: false,
         run: media_import,
@@ -1991,6 +1991,9 @@ pub struct SilenceArgs {
     /// Silence: set the level from each sound instead of thresholdDb, 0 to 1 (higher cuts more).
     #[serde(default)]
     pub auto_level: Option<f32>,
+    /// Silence: keep quiet speech a model hears.
+    #[serde(default)]
+    pub speech_guard: Option<bool>,
     /// Pauses (or gaps) shorter than this stay, ms.
     #[serde(default)]
     pub min_duration_ms: Option<u32>,
@@ -2077,6 +2080,7 @@ fn run_silence(ctx: &Ctx, args: SilenceArgs) -> Result<String, String> {
                 step_ms: None,
                 channel_policy: None,
                 below_speech_db: None,
+                speech_guard: args.speech_guard,
             };
             let key = match args.stream {
                 Some(key) if key == ALL_SPEECH => key,
@@ -3424,15 +3428,14 @@ pub struct MediaImportArgs {
     /// Stock: what it is for, in a sentence the user reads.
     #[serde(default)]
     pub reason: Option<String>,
-    /// Instead: a video's link (YouTube, archive.org and most video sites), downloaded with
-    /// yt-dlp into the project's `media/downloads/` and imported with the licence the site
-    /// states.
+    /// Instead: a video link (YouTube, most sites), downloaded and imported with the site's
+    /// licence.
     #[serde(default)]
     pub url: Option<String>,
-    /// With `url`: only from this second of it.
+    /// `url`: from this second.
     #[serde(default)]
     pub from_s: Option<f64>,
-    /// With `url`: only up to this second of it.
+    /// `url`: to this second.
     #[serde(default)]
     pub to_s: Option<f64>,
 }

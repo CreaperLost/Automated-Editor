@@ -42,6 +42,10 @@ pub struct SilenceConfig {
     /// the sounding windows): a quiet microphone's word tails are not silence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub below_speech_db: Option<f32>,
+    /// Keeps what a speech model (RNNoise's voice probability) hears as speech, however
+    /// quiet (SND-6). Off unless set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speech_guard: Option<bool>,
 }
 
 impl Default for SilenceConfig {
@@ -55,6 +59,7 @@ impl Default for SilenceConfig {
             step_ms: None,
             channel_policy: None,
             below_speech_db: None,
+            speech_guard: None,
         }
     }
 }
