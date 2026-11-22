@@ -47,6 +47,11 @@ pub struct EditLayout {
     pub shadow_blur_px: u32,
     #[serde(skip)]
     pub shadow_opacity: f32,
+    /// The style's 3D tilt of a fitted screen, degrees (FX-6).
+    #[serde(skip)]
+    pub screen_turn_deg: f32,
+    #[serde(skip)]
+    pub screen_lean_deg: f32,
     #[serde(skip)]
     pub webcam_border_color: String,
     #[serde(skip)]
@@ -105,6 +110,8 @@ impl Default for EditLayout {
             corner_radius_px: 17,
             shadow_blur_px: 0,
             shadow_opacity: 0.5,
+            screen_turn_deg: 0.0,
+            screen_lean_deg: 0.0,
             wallpaper_asset: None,
             background_preset: "forest".into(),
             screen_crop_left: 0.0,

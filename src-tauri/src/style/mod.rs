@@ -21,6 +21,9 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT: &str = "Light";
 
 /// What `style.json` holds. Every part may be left out and takes the Light style's.
+/// The most a screen may be tilted in 3D, degrees (FX-6).
+pub const MAX_TILT_DEG: f32 = 25.0;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Style {
@@ -306,6 +309,11 @@ pub struct ScreenLook {
     /// 0 (no shadow) to 40.
     pub shadow_blur_px: u32,
     pub shadow_opacity: f32,
+    /// A 3D tilt of a fitted screen, in degrees (FX-6), -25 to 25: `turn` about the
+    /// vertical axis (positive takes the right edge away), `lean` about the horizontal one
+    /// (positive takes the top edge away). The screen flattens as a zoom comes in.
+    pub turn_deg: f32,
+    pub lean_deg: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -423,6 +431,8 @@ impl Default for ScreenLook {
             corner_radius_px: 17,
             shadow_blur_px: 0,
             shadow_opacity: 0.5,
+            turn_deg: 0.0,
+            lean_deg: 0.0,
         }
     }
 }
@@ -727,6 +737,13 @@ impl Style {
         if !f.screen.shadow_opacity.is_finite() || !(0.0..=1.0).contains(&f.screen.shadow_opacity) {
             return Err("The screen's shadow opacity must be 0 to 1".into());
         }
+        for (name, value) in [("turn", f.screen.turn_deg), ("lean", f.screen.lean_deg)] {
+            if !value.is_finite() || value.abs() > MAX_TILT_DEG {
+                return Err(format!(
+                    "The screen's 3D {name} must be -{MAX_TILT_DEG} to {MAX_TILT_DEG} degrees"
+                ));
+            }
+        }
         if f.camera.border_width > MAX_BORDER_WIDTH {
             return Err(format!(
                 "The camera border must be 0 to {MAX_BORDER_WIDTH} wide"
@@ -933,6 +950,8 @@ pub fn dress_with(document: &mut EditDocument, style: &Style) {
     layout.corner_radius_px = frame.screen.corner_radius_px;
     layout.shadow_blur_px = frame.screen.shadow_blur_px;
     layout.shadow_opacity = frame.screen.shadow_opacity;
+    layout.screen_turn_deg = frame.screen.turn_deg;
+    layout.screen_lean_deg = frame.screen.lean_deg;
     layout.webcam_border_color = frame.camera.border_color.clone();
     layout.webcam_border_width = frame.camera.border_width;
     layout.webcam_shadow = frame.camera.shadow;
