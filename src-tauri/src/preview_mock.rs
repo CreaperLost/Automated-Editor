@@ -71,6 +71,19 @@ fn preview_mock_writes_the_front_end_answers() {
     )
     .unwrap();
     put("open_project", json(&opened));
+    // Two paid calls, so the Export page's Spent line shows.
+    crate::spend::record(
+        &folder,
+        "Thumbnail",
+        "OpenRouter",
+        Some(0.07),
+        "robot mid-stride",
+    );
+    crate::spend::record(&folder, "Web search", "Treg", None, "gpt-5 launch");
+    put(
+        "project_spend",
+        json(crate::commands::project_spend_impl(&state, handle.clone()).unwrap()),
+    );
     put(
         "presets",
         json(preset::presets_impl(&state, Some(handle.clone())).unwrap()),
