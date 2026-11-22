@@ -1706,7 +1706,9 @@ impl H264Encoder {
                     VideoQuality::High => "17",
                     VideoQuality::Max => "14",
                 };
-                ["-preset", "fast", "-crf", crf].map(String::from).to_vec()
+                // `medium`, as HandBrake's quality presets: 7% smaller than `fast` at the same
+                // SSIM on an upscaled screen recording, about as fast (22 Nov).
+                ["-preset", "medium", "-crf", crf].map(String::from).to_vec()
             }
             (family, rate) => {
                 let bps = rate.target_bps(width, height, fps);
