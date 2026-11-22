@@ -20,6 +20,9 @@ pub const HYPERFRAMES_VERSION: &str = "0.8.228";
 /// npm onto this computer when a graphic first uses it, never shipped with the app.
 pub const GSAP_VERSION: &str = "3.15.0";
 const GSAP_SHA256: &str = "d2e33ad202d4811e9084883f7ff9a27967ac4095caef51ca4c9d20697a253b1c";
+/// three.js for 3D graphics (MIT): fetched from npm when a graphic first loads it (4.8 MB).
+pub const THREE_VERSION: &str = "0.187.0";
+const THREE_SHA256: &str = "ff540832ded0cfe919764d24a3d88f3e2a05f23303f876423e4f893841e90728";
 
 const PACKAGE_JSON: &str = include_str!("../../graphics/runtime/package.json");
 const PACKAGE_LOCK: &str = include_str!("../../graphics/runtime/package-lock.json");
@@ -322,6 +325,31 @@ pub fn gsap_dist(cancel: &AtomicBool) -> Result<PathBuf, String> {
     fetch_unpacked(&download, &dir, &target, "GSAP", cancel, &mut |_| {})
         .map_err(|e| format!("GSAP is needed by this graphic and could not be fetched: {e}"))?;
     Ok(dist)
+}
+
+/// The three.js package folder (`build/three.module.js`, `examples/jsm/` for its addons),
+/// fetched once if missing. Graphics rendering at once wait for one fetch.
+pub fn three_package(cancel: &AtomicBool) -> Result<PathBuf, String> {
+    static FETCHING: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+    let dir = runtime_dir();
+    let target = dir.join("three").join(THREE_VERSION);
+    let ready = |t: &Path| t.join("build").join("three.core.js").is_file();
+    if ready(&target) {
+        return Ok(target);
+    }
+    let _one = FETCHING.lock();
+    if ready(&target) {
+        return Ok(target);
+    }
+    std::fs::create_dir_all(dir.join("three")).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let download = Download {
+        url: format!("https://registry.npmjs.org/three/-/three-{THREE_VERSION}.tgz"),
+        sha256: THREE_SHA256,
+        folder: "package".into(),
+    };
+    fetch_unpacked(&download, &dir, &target, "three.js", cancel, &mut |_| {})
+        .map_err(|e| format!("three.js is needed by this graphic and could not be fetched: {e}"))?;
+    Ok(target)
 }
 
 /// Removes the whole runtime.

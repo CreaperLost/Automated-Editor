@@ -182,6 +182,22 @@ static TEMPLATES: &[Template] = &[
          `kind: image` `use` or `draw` into it sets `picture`. For what something looks like."
     ),
     template!(
+        "scene-title",
+        "3D title",
+        5000,
+        "A section opener with depth: the label, title and subtitle set flat over rounded \
+         blocks in the look's colours that turn slowly while the camera drifts in (three.js)."
+    ),
+    template!(
+        "device",
+        "Device",
+        6000,
+        "A picture (a frame of the recording, a screenshot) on a 3D laptop's screen, or a \
+         phone's when it is portrait, turning to face the viewer by `cue`; kicker, title and \
+         caption beside it. `library` `kind: image` `use` sets `picture`. For \"this is the \
+         app\", a result on screen (three.js)."
+    ),
+    template!(
         "blank",
         "Blank",
         4000,

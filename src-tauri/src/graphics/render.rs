@@ -1120,8 +1120,9 @@ fn stage_render(
             }
         }
     }
-    // GSAP, when the composition loads it, beside it (fetched once).
+    // GSAP and three.js, when the composition loads them, beside it (fetched once).
     super::gsap::stage(stage, cancel)?;
+    super::three::stage(stage, cancel)?;
     let source = super::read_source(&spec.dir)?;
     // The style's brand fills the colours the graphic left to it and sets the fonts.
     let style = spec.style();
