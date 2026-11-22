@@ -996,7 +996,14 @@ export interface Style {
   };
   frame: {
     background: StyleBackground;
-    screen: { cornerRadiusPx: number; shadowBlurPx: number; shadowOpacity: number };
+    screen: {
+      cornerRadiusPx: number;
+      shadowBlurPx: number;
+      shadowOpacity: number;
+      /** 3D tilt of a fitted screen, degrees (-25 to 25): about the vertical and horizontal axes. */
+      turnDeg: number;
+      leanDeg: number;
+    };
     camera: {
       borderColor: string;
       borderWidth: number;

@@ -725,3 +725,72 @@ fn smoke_portrait_export_draws_captions() {
         written.display()
     );
 }
+
+/// FX-6 by eye: a project in a style with the screen tilted in 3D and a zoom from 3.5 s to
+/// 5.5 s, rendered with six stills and a contact sheet into `AEROEDITS_SMOKE_DIR` (or a
+/// temporary folder). The screen should be tilted before the zoom and flat at its height.
+/// Sets `AEROEDITS_STYLES_DIR`, so run it alone:
+/// `cargo test --lib probe_tilted_screen -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn probe_tilted_screen_flattens_into_a_zoom() {
+    if let Some(reason) = missing_tools() {
+        eprintln!("SKIPPED: {reason}");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    std::env::set_var("AEROEDITS_STYLES_DIR", dir.path().join("styles"));
+    let style = crate::style::Style::default()
+        .patched(&serde_json::json!({
+            "frame": { "screen": { "turnDeg": 16, "leanDeg": 5, "shadowBlurPx": 28 } }
+        }))
+        .unwrap();
+    crate::style::store::save(&crate::style::store::StyleInput {
+        name: "Tilted".into(),
+        previous: None,
+        style,
+    })
+    .unwrap();
+    let recording = recording(dir.path());
+    let (state, opened, folder, _) = open(dir.path(), &recording);
+    let handle = opened.project_handle.clone();
+    let styled = crate::commands::style::project_style_set_impl(
+        &state,
+        handle.clone(),
+        opened.revision,
+        "Tilted".into(),
+    )
+    .unwrap();
+    crate::commands::project_zoom_add_impl(
+        &state,
+        handle,
+        styled.revision,
+        crate::commands::ManualZoomInput {
+            edited_start_us: 3_500_000,
+            edited_end_us: 5_500_000,
+            center_x: 0.5,
+            center_y: 0.5,
+            scale: 1.8,
+        },
+    )
+    .unwrap();
+    drop(state);
+    let out = output(dir.path(), "tilted-screen");
+    let request = crate::render_cli::parse(&[
+        folder.to_string_lossy().into(),
+        "--out".into(),
+        out.to_string_lossy().into(),
+        "--size".into(),
+        "1280x720".into(),
+        "--frames".into(),
+        "6".into(),
+    ])
+    .unwrap();
+    let rendered = crate::render_cli::render(&request, |_, _| {}).unwrap();
+    crate::media::release_decoders();
+    eprintln!(
+        "tilted screen: {} stills, sheet {:?}",
+        rendered.stills.len(),
+        rendered.contact_sheet
+    );
+}

@@ -29,7 +29,8 @@ const CAMERA_BLUR_BLOCK: f32 = 1.0 / 14.0;
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Vertex {
-    pos: [f32; 2],
+    /// Clip space, with `w` for a tilted layer's perspective (1 when flat).
+    pos: [f32; 4],
     uv: [f32; 2],
     local: [f32; 2],
 }
@@ -137,6 +138,104 @@ pub struct Layer {
     /// The person in this camera picture: [`crate::face::matte::SIZE`]² bytes over the whole
     /// picture, 255 the person (with [`LayerEffect::Backdrop`]).
     pub matte: Option<std::sync::Arc<Vec<u8>>>,
+    /// Turned in 3D and drawn in perspective (FX-6); `None` is flat.
+    pub tilt: Option<Tilt>,
+}
+
+/// A turn in 3D about a point of the canvas, seen in perspective (FX-6). Every layer of a
+/// tilted screen (its picture, shadow, cursor and effects) carries the same one, so they stay
+/// together.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tilt {
+    /// Radians about the vertical axis; positive takes the right edge away.
+    pub turn: f32,
+    /// Radians about the horizontal axis; positive takes the top edge away.
+    pub lean: f32,
+    /// The point turned about, canvas pixels.
+    pub pivot: [f32; 2],
+    /// The viewer's distance from the canvas, pixels.
+    pub focal: f32,
+}
+
+impl Tilt {
+    /// The tilt for a screen at `rect` (x, y, w, h) on a `canvas_w` x `canvas_h` canvas,
+    /// `turn` and `lean` in degrees; `None` when both are 0.
+    pub fn about(
+        rect: [f32; 4],
+        canvas_w: u32,
+        canvas_h: u32,
+        turn: f32,
+        lean: f32,
+    ) -> Option<Self> {
+        if turn.abs() < 0.01 && lean.abs() < 0.01 {
+            return None;
+        }
+        Some(Self {
+            turn: turn.to_radians(),
+            lean: lean.to_radians(),
+            pivot: [rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0],
+            focal: canvas_w.max(canvas_h) as f32 * 1.6,
+        })
+    }
+
+    /// The homography taking canvas point `(x, y, 1)` of the flat plane to homogeneous
+    /// projected canvas coordinates, row-major.
+    fn matrix(&self) -> [[f64; 3]; 3] {
+        // Canvas y runs down and depth away from the viewer, so the turns are taken negated
+        // for the right and top edges to go away.
+        let (sa, ca) = (-self.turn as f64).sin_cos();
+        let (sp, cp) = (-self.lean as f64).sin_cos();
+        let f = self.focal as f64;
+        let (px, py) = (self.pivot[0] as f64, self.pivot[1] as f64);
+        // A point (dx, dy, 0) from the pivot turns to r = (dx ca + dy sp sa, dy cp,
+        // -dx sa + dy sp ca); it projects to pivot + f r.xy / (f + r.z).
+        let rx = [ca, sp * sa];
+        let ry = [0.0, cp];
+        let rz = [-sa, sp * ca];
+        // Homogeneous rows over (dx, dy, 1).
+        let w = [rz[0], rz[1], f];
+        let xh = [px * rz[0] + f * rx[0], px * rz[1] + f * rx[1], px * f];
+        let yh = [py * rz[0] + f * ry[0], py * rz[1] + f * ry[1], py * f];
+        // Over (x, y, 1): dx = x - px, dy = y - py.
+        let shift = |row: [f64; 3]| [row[0], row[1], row[2] - row[0] * px - row[1] * py];
+        [shift(xh), shift(yh), shift(w)]
+    }
+
+    /// Where canvas point `(x, y)` of the flat plane lands, and its perspective `w`
+    /// (1 at the pivot's depth).
+    pub fn project(&self, x: f32, y: f32) -> (f32, f32, f32) {
+        let m = self.matrix();
+        let (x, y) = (x as f64, y as f64);
+        let at = |r: [f64; 3]| r[0] * x + r[1] * y + r[2];
+        let w = at(m[2]);
+        let f = self.focal as f64;
+        ((at(m[0]) / w) as f32, (at(m[1]) / w) as f32, (w / f) as f32)
+    }
+
+    /// The flat-plane point that lands on canvas point `(x, y)`, the inverse of
+    /// [`Tilt::project`]; `None` behind the viewer.
+    fn unproject(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+        let inverse = invert3(self.matrix())?;
+        let (x, y) = (x as f64, y as f64);
+        let at = |r: [f64; 3]| r[0] * x + r[1] * y + r[2];
+        let w = at(inverse[2]);
+        (w.abs() > 1e-12).then(|| ((at(inverse[0]) / w) as f32, (at(inverse[1]) / w) as f32))
+    }
+}
+
+fn invert3(m: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
+    let c =
+        |r0: usize, c0: usize, r1: usize, c1: usize| m[r0][c0] * m[r1][c1] - m[r0][c1] * m[r1][c0];
+    let det = m[0][0] * c(1, 1, 2, 2) - m[0][1] * c(1, 0, 2, 2) + m[0][2] * c(1, 0, 2, 1);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let inv = [
+        [c(1, 1, 2, 2), -c(0, 1, 2, 2), c(0, 1, 1, 2)],
+        [-c(1, 0, 2, 2), c(0, 0, 2, 2), -c(0, 0, 1, 2)],
+        [c(1, 0, 2, 1), -c(0, 0, 2, 1), c(0, 0, 1, 1)],
+    ];
+    Some(inv.map(|row| row.map(|v| v / det)))
 }
 
 impl Layer {
@@ -162,6 +261,7 @@ impl Layer {
             effect: LayerEffect::None,
             shares: None,
             matte: None,
+            tilt: None,
         }
     }
 
@@ -510,6 +610,27 @@ impl Scene {
             .position(|l| l.role != LayerRole::Background)
             .unwrap_or(self.layers.len());
         self.layers.insert(at, layer);
+    }
+
+    /// Tilts the screen in 3D (FX-6) by `turn` and `lean` degrees about its middle, with
+    /// everything on it: call right after the screen, its cursor and its effects are pushed,
+    /// when they are the only layers over the background.
+    pub fn tilt_screen(&mut self, turn: f32, lean: f32) {
+        let Some(screen) = self.layers.iter().find(|l| l.role == LayerRole::Screen) else {
+            return;
+        };
+        let rect = [
+            screen.x as f32,
+            screen.y as f32,
+            screen.width as f32,
+            screen.height as f32,
+        ];
+        let tilt = Tilt::about(rect, self.width, self.height, turn, lean);
+        for layer in &mut self.layers {
+            if layer.role != LayerRole::Background {
+                layer.tilt = tilt;
+            }
+        }
     }
 
     /// The camera in `slot`, showing `uv` of the picture (before mirroring), under the
@@ -1184,7 +1305,7 @@ impl Compositor {
                     array_stride: std::mem::size_of::<Vertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x2,
+                        0 => Float32x4,
                         1 => Float32x2,
                         2 => Float32x2
                     ],
@@ -2477,30 +2598,89 @@ fn blit_shadow(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
     if layer.width == 0 || layer.height == 0 {
         return Err("Layer size is empty".into());
     }
-    let pad = shadow_pad(layer).ceil() as i32;
-    let x0 = layer.x as i32 - pad;
-    let y0 = layer.y as i32 - pad;
-    let x1 = layer.x as i32 + layer.width as i32 + pad;
-    let y1 = layer.y as i32 + layer.height as i32 + pad;
-    for y in y0.max(0)..y1.min(dest.height as i32) {
-        for x in x0.max(0)..x1.min(dest.width as i32) {
-            let local_x = (x as f32 + 0.5 - layer.x as f32) / layer.width as f32;
-            let local_y = (y as f32 + 0.5 - layer.y as f32) / layer.height as f32;
+    let pad = shadow_pad(layer).ceil();
+    let stride = dest.stride;
+    let data = &mut dest.data;
+    layer_pixels(
+        dest.width,
+        dest.height,
+        layer,
+        pad,
+        |x, y, local_x, local_y| {
             let sdf = layer_sdf(layer, local_x, local_y, true);
             let alpha = layer.shadow_opacity
                 * layer.opacity.clamp(0.0, 1.0)
                 * shadow_coverage(sdf, layer.shadow_blur_px);
             if alpha <= 0.0 {
+                return;
+            }
+            let di = (y * stride + x * 4) as usize;
+            let keep = 1.0 - alpha.clamp(0.0, 1.0);
+            data[di] = (data[di] as f32 * keep).round() as u8;
+            data[di + 1] = (data[di + 1] as f32 * keep).round() as u8;
+            data[di + 2] = (data[di + 2] as f32 * keep).round() as u8;
+        },
+    );
+    Ok(())
+}
+
+/// Calls `each` with every canvas pixel a layer may cover (and `pad` pixels round it) and
+/// where that pixel's centre falls in the layer (0 to 1 across, outside in the pad), through
+/// the layer's tilt when it has one: the CPU twin of the GPU's quad (FX-6).
+fn layer_pixels(
+    dest_w: u32,
+    dest_h: u32,
+    layer: &Layer,
+    pad: f32,
+    mut each: impl FnMut(u32, u32, f32, f32),
+) {
+    let (lx, ly) = (layer.x as f32, layer.y as f32);
+    let (w, h) = (layer.width as f32, layer.height as f32);
+    let (left, top, right, bottom) = (lx - pad, ly - pad, lx + w + pad, ly + h + pad);
+    let (x0, y0, x1, y1) = match layer.tilt {
+        None => (left, top, right, bottom),
+        Some(tilt) => {
+            let corners = [(left, top), (right, top), (left, bottom), (right, bottom)]
+                .map(|(x, y)| tilt.project(x, y));
+            let fold = |pick: fn(&(f32, f32, f32)) -> f32, min: bool| {
+                corners.iter().map(pick).fold(
+                    if min {
+                        f32::INFINITY
+                    } else {
+                        f32::NEG_INFINITY
+                    },
+                    |a, b| if min { a.min(b) } else { a.max(b) },
+                )
+            };
+            (
+                fold(|c| c.0, true),
+                fold(|c| c.1, true),
+                fold(|c| c.0, false),
+                fold(|c| c.1, false),
+            )
+        }
+    };
+    let (lo_x, lo_y) = (-pad / w, -pad / h);
+    let (hi_x, hi_y) = (1.0 + pad / w, 1.0 + pad / h);
+    let rows = (y0.floor().max(0.0) as u32)..(y1.ceil().min(dest_h as f32).max(0.0) as u32);
+    let columns = (x0.floor().max(0.0) as u32)..(x1.ceil().min(dest_w as f32).max(0.0) as u32);
+    for y in rows {
+        for x in columns.clone() {
+            let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+            let (px, py) = match layer.tilt {
+                None => (cx, cy),
+                Some(tilt) => match tilt.unproject(cx, cy) {
+                    Some(point) => point,
+                    None => continue,
+                },
+            };
+            let (local_x, local_y) = ((px - lx) / w, (py - ly) / h);
+            if local_x < lo_x || local_x > hi_x || local_y < lo_y || local_y > hi_y {
                 continue;
             }
-            let di = (y as u32 * dest.stride + x as u32 * 4) as usize;
-            let keep = 1.0 - alpha.clamp(0.0, 1.0);
-            dest.data[di] = (dest.data[di] as f32 * keep).round() as u8;
-            dest.data[di + 1] = (dest.data[di + 1] as f32 * keep).round() as u8;
-            dest.data[di + 2] = (dest.data[di + 2] as f32 * keep).round() as u8;
+            each(x, y, local_x, local_y);
         }
     }
-    Ok(())
 }
 
 /// Samples `frame` at normalized `(u, v)` like a clamp-to-edge bilinear GPU sampler.
@@ -2546,48 +2726,44 @@ fn blit_bilinear(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
     if layer.width == 0 || layer.height == 0 {
         return Err("Layer size is empty".into());
     }
-    for dy in 0..layer.height {
-        let y = layer.y + dy;
-        if y >= dest.height {
-            continue;
-        }
-        let local_y = (dy as f32 + 0.5) / layer.height as f32;
-        let v = layer.uv_y + layer.uv_h * local_y;
-        for dx in 0..layer.width {
-            let x = layer.x + dx;
-            if x >= dest.width {
-                continue;
-            }
-            let local_x = (dx as f32 + 0.5) / layer.width as f32;
+    let stride = dest.stride;
+    let data = &mut dest.data;
+    layer_pixels(
+        dest.width,
+        dest.height,
+        layer,
+        0.0,
+        |x, y, local_x, local_y| {
             if layer_sdf(layer, local_x, local_y, false) > 0.0 {
-                continue;
+                return;
             }
             let u = layer.uv_x + layer.uv_w * local_x;
+            let v = layer.uv_y + layer.uv_h * local_y;
             let src = sample_bilinear(&layer.frame, u, v);
-            let di = (y * dest.stride + x * 4) as usize;
+            let di = (y * stride + x * 4) as usize;
             let opacity = layer.opacity.clamp(0.0, 1.0);
             if opacity < 1.0 {
                 // A fading layer: its picture is opaque except where it carries alpha.
                 let straight = matches!(layer.role, LayerRole::Caption | LayerRole::Overlay);
                 let alpha = if straight { src[3] as f32 / 255.0 } else { 1.0 } * opacity;
-                for (dst, s) in dest.data[di..di + 3].iter_mut().zip(src) {
+                for (dst, s) in data[di..di + 3].iter_mut().zip(src) {
                     *dst = (s as f32 * alpha + *dst as f32 * (1.0 - alpha)).round() as u8;
                 }
-                continue;
+                return;
             }
             if matches!(layer.role, LayerRole::Caption | LayerRole::Overlay) {
                 // Same blend as the GPU pipeline: source over, straight alpha.
                 let alpha = src[3] as u32;
                 for c in 0..3 {
-                    let dst = dest.data[di + c] as u32;
-                    dest.data[di + c] =
+                    let dst = data[di + c] as u32;
+                    data[di + c] =
                         ((src[c] as u32 * alpha + dst * (255 - alpha) + 127) / 255) as u8;
                 }
-                continue;
+                return;
             }
-            dest.data[di..di + 4].copy_from_slice(&src);
-        }
-    }
+            data[di..di + 4].copy_from_slice(&src);
+        },
+    );
     Ok(())
 }
 
@@ -2613,22 +2789,18 @@ fn blit_effect(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
         sum.map(|s| s / 16.0)
     };
     let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
-    for dy in 0..layer.height {
-        let y = layer.y + dy;
-        if y >= dest.height {
-            continue;
-        }
-        let local_y = (dy as f32 + 0.5) / h;
-        let v = layer.uv_y + layer.uv_h * local_y;
-        for dx in 0..layer.width {
-            let x = layer.x + dx;
-            if x >= dest.width {
-                continue;
-            }
-            let local_x = (dx as f32 + 0.5) / w;
+    let stride = dest.stride;
+    let data = &mut dest.data;
+    layer_pixels(
+        dest.width,
+        dest.height,
+        layer,
+        0.0,
+        |x, y, local_x, local_y| {
             if layer_sdf(layer, local_x, local_y, false) > 0.0 {
-                continue;
+                return;
             }
+            let v = layer.uv_y + layer.uv_h * local_y;
             let u = layer.uv_x + layer.uv_w * local_x;
             let blurred = |block: [f32; 2]| {
                 let (gx, gy) = (u / block[0] - 0.5, v / block[1] - 0.5);
@@ -2693,16 +2865,16 @@ fn blit_effect(dest: &mut VideoFrame, layer: &Layer) -> Result<(), String> {
                     }
                     ([0.0; 3], alpha * opacity)
                 }
-                LayerEffect::None => continue,
+                LayerEffect::None => return,
             };
-            let di = (y * dest.stride + x * 4) as usize;
-            for (dst, s) in dest.data[di..di + 3].iter_mut().zip(color) {
+            let di = (y * stride + x * 4) as usize;
+            for (dst, s) in data[di..di + 3].iter_mut().zip(color) {
                 *dst = (s * alpha + *dst as f32 * (1.0 - alpha))
                     .round()
                     .clamp(0.0, 255.0) as u8;
             }
-        }
-    }
+        },
+    );
     Ok(())
 }
 
@@ -2716,10 +2888,22 @@ fn aligned_row(bytes: u32) -> u32 {
 }
 
 fn quad_vertices(canvas_w: u32, canvas_h: u32, layer: &Layer, pad: f32) -> [Vertex; 6] {
-    let x0 = (layer.x as f32 - pad) / canvas_w as f32 * 2.0 - 1.0;
-    let x1 = (layer.x as f32 + layer.width as f32 + pad) / canvas_w as f32 * 2.0 - 1.0;
-    let y0 = 1.0 - (layer.y as f32 - pad) / canvas_h as f32 * 2.0;
-    let y1 = 1.0 - (layer.y as f32 + layer.height as f32 + pad) / canvas_h as f32 * 2.0;
+    // A corner of the (padded) layer in clip space, through its tilt when it has one: the
+    // GPU divides by `w`, so the picture and `local` follow the perspective.
+    let corner = |x: f32, y: f32| -> [f32; 4] {
+        let (x, y, w) = match layer.tilt {
+            Some(tilt) => tilt.project(x, y),
+            None => (x, y, 1.0),
+        };
+        let nx = x / canvas_w as f32 * 2.0 - 1.0;
+        let ny = 1.0 - y / canvas_h as f32 * 2.0;
+        [nx * w, ny * w, 0.0, w]
+    };
+    let (left, top) = (layer.x as f32 - pad, layer.y as f32 - pad);
+    let right = layer.x as f32 + layer.width as f32 + pad;
+    let bottom = layer.y as f32 + layer.height as f32 + pad;
+    let (p00, p10) = (corner(left, top), corner(right, top));
+    let (p01, p11) = (corner(left, bottom), corner(right, bottom));
     let u0 = layer.uv_x;
     let v0 = layer.uv_y;
     let u1 = layer.uv_x + layer.uv_w;
@@ -2730,32 +2914,32 @@ fn quad_vertices(canvas_w: u32, canvas_h: u32, layer: &Layer, pad: f32) -> [Vert
     let ly1 = 1.0 + pad / layer.height as f32;
     [
         Vertex {
-            pos: [x0, y0],
+            pos: p00,
             uv: [u0, v0],
             local: [lx0, ly0],
         },
         Vertex {
-            pos: [x1, y0],
+            pos: p10,
             uv: [u1, v0],
             local: [lx1, ly0],
         },
         Vertex {
-            pos: [x0, y1],
+            pos: p01,
             uv: [u0, v1],
             local: [lx0, ly1],
         },
         Vertex {
-            pos: [x1, y0],
+            pos: p10,
             uv: [u1, v0],
             local: [lx1, ly0],
         },
         Vertex {
-            pos: [x1, y1],
+            pos: p11,
             uv: [u1, v1],
             local: [lx1, ly1],
         },
         Vertex {
-            pos: [x0, y1],
+            pos: p01,
             uv: [u0, v1],
             local: [lx0, ly1],
         },
@@ -4112,6 +4296,119 @@ mod tests {
             assert!(
                 mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE + 1.0,
                 "{kind:?}: GPU vs CPU mean {mean} max {max}"
+            );
+        }
+    }
+
+    /// A screen at the middle of a 96x64 canvas with a gradient picture, a shadow, a blur
+    /// on part of it and a cursor-sized overlay, all tilted together.
+    fn tilted_scene(turn: f32, lean: f32) -> Scene {
+        let mut picture = VideoFrame::solid(64, 40, 0, 0, 0, 0).unwrap();
+        let mut data = picture.data.clone().into_vec();
+        for y in 0..40u32 {
+            for x in 0..64u32 {
+                let i = (y * picture.stride + x * 4) as usize;
+                data[i..i + 4].copy_from_slice(&[(x * 4) as u8, (y * 6) as u8, 200, 255]);
+            }
+        }
+        picture.data = crate::media::PixelBuffer::from(data);
+        let mut scene = Scene {
+            width: 96,
+            height: 64,
+            background: [0.1, 0.1, 0.1, 1.0],
+            layers: Vec::new(),
+        };
+        let screen = Layer::placed(picture.clone(), 16, 12, 64, 40)
+            .with_clip(ClipMode::RoundedRect, 4.0)
+            .with_shadow(6.0, 0.6);
+        scene.layers.push(screen);
+        let dot = VideoFrame::solid(4, 4, 255, 255, 255, 255).unwrap();
+        scene
+            .layers
+            .push(Layer::placed(dot, 40, 30, 4, 4).with_role(LayerRole::Overlay));
+        scene
+            .push_screen_effect(
+                crate::effects::EffectKind::Blur,
+                [0.1, 0.1, 0.3, 0.3],
+                1.0,
+                1.0,
+                1.0,
+            )
+            .unwrap();
+        scene.tilt_screen(turn, lean);
+        scene
+    }
+
+    #[test]
+    fn a_tilt_projects_and_comes_back() {
+        let tilt = Tilt::about([16.0, 12.0, 64.0, 40.0], 96, 64, 20.0, -10.0).unwrap();
+        // The pivot stays put, at the canvas's depth.
+        let (x, y, w) = tilt.project(48.0, 32.0);
+        assert!((x - 48.0).abs() < 1e-3 && (y - 32.0).abs() < 1e-3 && (w - 1.0).abs() < 1e-4);
+        for (px, py) in [
+            (16.0, 12.0),
+            (80.0, 12.0),
+            (16.0, 52.0),
+            (80.0, 52.0),
+            (30.0, 40.0),
+        ] {
+            let (x, y, _) = tilt.project(px, py);
+            let (bx, by) = tilt.unproject(x, y).unwrap();
+            assert!(
+                (bx - px).abs() < 1e-2 && (by - py).abs() < 1e-2,
+                "{px},{py} -> {bx},{by}"
+            );
+        }
+        // Turned right edge away: the right edge is farther (w > 1) and shorter.
+        let height = |x: f32| tilt.project(x, 52.0).1 - tilt.project(x, 12.0).1;
+        assert!(tilt.project(80.0, 32.0).2 > 1.0);
+        assert!(height(80.0) < height(16.0));
+        assert_eq!(Tilt::about([0.0, 0.0, 10.0, 10.0], 96, 64, 0.0, 0.0), None);
+    }
+
+    #[test]
+    fn a_tilted_screen_narrows_on_its_far_side_and_carries_what_is_on_it() {
+        let flat = Compositor::composite_cpu(&tilted_scene(0.0, 0.0)).unwrap();
+        let tilted = Compositor::composite_cpu(&tilted_scene(20.0, 0.0)).unwrap();
+        // How many rows the screen's blue covers in a column.
+        let covered = |frame: &VideoFrame, x: u32| {
+            (0..frame.height)
+                .filter(|&y| pixel(frame, x, y)[2] > 150)
+                .count()
+        };
+        assert_eq!(covered(&flat, 20), covered(&flat, 76));
+        assert!(
+            covered(&tilted, 22) > covered(&tilted, 72) + 2,
+            "near {} far {}",
+            covered(&tilted, 22),
+            covered(&tilted, 72)
+        );
+        assert_ne!(flat.data, tilted.data);
+        // Every layer over the background took the screen's tilt.
+        let scene = tilted_scene(20.0, 0.0);
+        assert!(scene.layers.iter().all(|l| l.tilt.is_some()));
+        assert!(tilted_scene(0.0, 0.0)
+            .layers
+            .iter()
+            .all(|l| l.tilt.is_none()));
+    }
+
+    #[test]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        ignore = "needs a GPU adapter; run with --ignored on a machine that has one"
+    )]
+    fn gpu_cpu_tilted_screen_within_tolerance() {
+        let compositor = Compositor::new().expect("GPU compositor required for contract tests");
+        for (turn, lean) in [(18.0, 0.0), (-12.0, 8.0), (0.0, -20.0)] {
+            let scene = tilted_scene(turn, lean);
+            let cpu = Compositor::composite_cpu(&scene).unwrap();
+            let gpu = compositor.composite(&scene).unwrap();
+            let (max, mean) = crate::media::compare_frames(&gpu, &cpu).unwrap();
+            assert!(
+                mean <= crate::media::COMPOSITOR_MEAN_TOLERANCE
+                    && max <= crate::media::COMPOSITOR_MAX_TOLERANCE,
+                "turn {turn} lean {lean}: GPU vs CPU mean {mean} max {max}"
             );
         }
     }

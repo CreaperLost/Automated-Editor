@@ -23,6 +23,14 @@ size in vw/vh). Move things with transforms (`x`, `y`, `xPercent`, `scale`), nev
 `top`: HyperFrames refuses those. The Web Animations API works too, with
 `data-no-timeline` on the root. Nothing else may reach the network.
 
+3D: three.js 0.187 works offline too. Map it in an import map (`"three": "./three.module.js"`,
+`"three/addons/": "./three-addons/"`; a CDN link becomes that name), import it in a `<script
+type="module">` and set `window.THREE = THREE` (the render then waits for its textures). Draw
+each frame in `window.addEventListener("hf-seek", e => draw(e.detail.time))`, never on a clock
+(`requestAnimationFrame`, `Clock`, `Date.now`). Keep words in HTML over the canvas, not in the 3D
+world. Move the camera in one eased move between two poses, at an even speed. `scene-title` and
+`device` start that way.
+
 Before the first graphic, read the project's style once (`library` `kind: style` `op: show`):
 pick each graphic's kind from its kinds, start from its examples' source (read their files),
 follow its motion and look rules. Its sound only when the user asks for sounds on graphics (or
@@ -41,7 +49,7 @@ speaker on screen where nothing adds to the words, and give an action the time i
 
 The list below has the bundled templates and the user's library, each library item with when
 to use it: use one when it shows the idea, filling in its variables. The bundled demonstrations
-(`timeline-cut`, `prompt-reply`, `count-up`, `before-after`, `app-click`, `steps-link`, `items-stack`) have a `cue`: the second into the
+(`timeline-cut`, `prompt-reply`, `count-up`, `before-after`, `app-click`, `steps-link`, `items-stack`, `device`) have a `cue`: the second into the
 graphic their change (or first step) happens; set it from the word that says it (its time minus the graphic's start). They are starting points,
 not a limit: when none can show the idea, write a composition of your own (`graphic_add` with
 `blank`, then `graphic_write_file`; change it with `graphic_write_file` `edits`). Its folder in the project holds its only copy: write no copies, drafts or notes into

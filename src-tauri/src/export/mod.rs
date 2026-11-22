@@ -261,6 +261,8 @@ type ViewPaths =
     std::collections::HashMap<(String, u32, u32), Option<std::sync::Arc<crate::reframe::ViewPath>>>;
 /// A zoom this far in (1 + this) has the view wholly where it points.
 const ZOOM_TAKES_OVER: f32 = 0.15;
+/// The zoom (scale over 1) by which a tilted screen is flat again (FX-6).
+const TILT_FLAT_AT: f32 = 0.5;
 
 /// A cut that skips at most this much of what is playing reads on through it on the open
 /// decoder (a few frames); a longer one gets a decoder of its own, started ahead.
@@ -1106,6 +1108,14 @@ impl SceneEvaluator {
                     unit,
                 )?;
             }
+            // The style's 3D tilt of a fitted screen (FX-6), flattening as a zoom comes in.
+            if !slot.fill {
+                let flat = 1.0 - self.zoom_weight(&clip.asset, local);
+                scene.tilt_screen(
+                    screen_style.screen_turn_deg * flat,
+                    screen_style.screen_lean_deg * flat,
+                );
+            }
         }
         if let (Some(picture), Some(slot)) = (webcam, parts.camera) {
             let (focus, offset) = shown
@@ -1693,6 +1703,18 @@ impl SceneEvaluator {
 
     /// What of `asset`'s screen shows at `local` (UV of the full picture) framed by `style`:
     /// the crop with any zoom inside it.
+    /// How far into a zoom the screen is at `local`, 0 (none) to 1 (zoomed by
+    /// [`TILT_FLAT_AT`] or more): a tilted screen is flat by then.
+    fn zoom_weight(&self, asset: &str, local: u64) -> f32 {
+        let zooms = self.zooms_for(asset);
+        if zooms.is_empty() {
+            return 0.0;
+        }
+        let config = crate::zoom::eval_config_for(&self.document.zooms);
+        let camera = crate::zoom::evaluate_at_source(&zooms, local, &config);
+        ((camera.scale as f32 - 1.0) / TILT_FLAT_AT).clamp(0.0, 1.0)
+    }
+
     fn screen_view(&self, asset: &str, local: u64, style: &EditLayout) -> (f32, f32, f32, f32) {
         let crop = self.screen_crop_at(asset, local, style);
         let zooms = self.zooms_for(asset);
