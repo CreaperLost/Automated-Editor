@@ -558,6 +558,22 @@ export const StylePanel: React.FC = () => {
             onChange={(shadowBlurPx) => set("frame", { screen: { ...s.frame.screen, shadowBlurPx } })}
           />
           <RangeRow
+            label="Screen 3D turn"
+            value={s.frame.screen.turnDeg}
+            min={-25}
+            max={25}
+            unit="°"
+            onChange={(turnDeg) => set("frame", { screen: { ...s.frame.screen, turnDeg } })}
+          />
+          <RangeRow
+            label="Screen 3D lean"
+            value={s.frame.screen.leanDeg}
+            min={-25}
+            max={25}
+            unit="°"
+            onChange={(leanDeg) => set("frame", { screen: { ...s.frame.screen, leanDeg } })}
+          />
+          <RangeRow
             label="Camera border"
             value={s.frame.camera.borderWidth}
             min={0}

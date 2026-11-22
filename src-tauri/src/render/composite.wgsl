@@ -77,12 +77,13 @@ fn blurred(uv: vec2<f32>) -> vec4<f32> {
 
 @vertex
 fn vs_main(
-    @location(0) pos: vec2<f32>,
+    // Clip space; `w` is a tilted layer's perspective (1 when flat).
+    @location(0) pos: vec4<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) local: vec2<f32>,
 ) -> VsOut {
     var out: VsOut;
-    out.clip = vec4<f32>(pos, 0.0, 1.0);
+    out.clip = pos;
     out.uv = uv;
     out.local = local;
     return out;
