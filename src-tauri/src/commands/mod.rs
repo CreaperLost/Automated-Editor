@@ -2294,9 +2294,59 @@ pub fn project_short_export_impl(
         short_id: Some(short_id),
         settings: settings.clone(),
         file: None,
+        vertical: false,
     };
     match crate::export::prepare_job(&root, &name, document, settings, &mut owner) {
         Ok(captured) => Ok(owner.start(captured, &label, request, queue, gate)),
+        Err(status) => {
+            owner.install_failed(status.clone());
+            Ok(status)
+        }
+    }
+}
+
+/// Exports the whole video as a 9:16 version (DLV-5): the same edit stacked and framed as a
+/// short is, as "<project> (vertical).mp4" beside the project unless `settings` names a file.
+pub fn project_vertical_export_impl(
+    state: &AppState,
+    project_handle: String,
+    settings: crate::export::ExportSettings,
+    queue: bool,
+) -> Result<crate::export::ExportStatus, String> {
+    let _guard = state.command_lock.lock();
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    let document =
+        crate::shorts::vertical_document(&reader.history().current, has_speech_transcript(reader));
+    let root = reader.root().to_path_buf();
+    // A colon can't go in a file name.
+    let stem = format!("{} (vertical)", reader.summary.name);
+    drop(opened);
+    let waiting = state.export.lock().waiting_destinations(&root);
+    let name = (1..1000)
+        .map(|n| {
+            if n == 1 {
+                stem.clone()
+            } else {
+                format!("{stem} ({n})")
+            }
+        })
+        .find(|name| {
+            let dest = crate::export::default_destination(&root, name, 0);
+            settings.destination.is_some() || (!dest.exists() && !waiting.contains(&dest))
+        })
+        .ok_or("Too many 9:16 exports of this video already exist")?;
+    let gate = Arc::clone(&state.encoder_gate);
+    let mut owner = state.export.lock();
+    let request = crate::export::deliveries::Request {
+        short_id: None,
+        settings: settings.clone(),
+        file: None,
+        vertical: true,
+    };
+    match crate::export::prepare_job(&root, &name, document, settings, &mut owner) {
+        Ok(captured) => Ok(owner.start(captured, "Video (9:16)", request, queue, gate)),
         Err(status) => {
             owner.install_failed(status.clone());
             Ok(status)
@@ -2847,6 +2897,7 @@ pub fn export_start_impl(
         short_id: None,
         settings: settings.clone(),
         file: None,
+        vertical: false,
     };
     match crate::export::prepare_job(&root, &name, document, settings, &mut owner) {
         Ok(captured) => Ok(owner.start(captured, "Video", request, queue, gate)),
@@ -2879,6 +2930,7 @@ struct DeliveryKey {
     revision: u64,
     short_id: Option<String>,
     file: bool,
+    vertical: bool,
     transcripts: u64,
     graphics: u64,
 }
@@ -2905,6 +2957,7 @@ pub fn export_deliveries_impl(
             revision: base.revision,
             short_id: request.short_id.clone(),
             file: request.file.is_some(),
+            vertical: request.vertical,
             transcripts: crate::transcript::store::changes(),
             graphics: crate::graphics::render::generation(),
         };
@@ -2916,6 +2969,7 @@ pub fn export_deliveries_impl(
             return found.clone();
         }
         let document = match &request.short_id {
+            None if request.vertical => Some(crate::shorts::vertical_document(base, transcribed)),
             None => Some(base.clone()),
             Some(id) => base
                 .shorts
@@ -2986,6 +3040,9 @@ pub fn export_again_impl(
     let started = match old.request.short_id {
         Some(short_id) => {
             project_short_export_impl(state, project_handle, short_id, settings, true)?
+        }
+        None if old.request.vertical => {
+            project_vertical_export_impl(state, project_handle, settings, true)?
         }
         None => export_start_impl(state, project_handle, settings, true)?,
     };
@@ -3173,6 +3230,7 @@ pub fn export_file_impl(
                 short_id,
                 settings: Default::default(),
                 file: Some(kind),
+                vertical: false,
             },
             state: crate::export::ExportState::Completed,
             revision,
@@ -3276,6 +3334,7 @@ pub fn export_graphics_impl(
                 short_id,
                 settings: Default::default(),
                 file: Some(crate::export::files::FileKind::Graphics),
+                vertical: false,
             },
             state: crate::export::ExportState::Completed,
             revision,

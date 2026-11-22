@@ -900,6 +900,9 @@ export const api = {
     invokeTauri<OpenedProject>("project_shorts_generate", { projectHandle, trackId }),
   projectShortExport: (projectHandle: string, shortId: string, settings: ExportSettings, queue = false) =>
     invokeTauri<ExportStatus>("project_short_export", { projectHandle, shortId, settings, queue }),
+  /** Exports the whole video as a 9:16 version: stacked as a short, the screen following the work. */
+  projectVerticalExport: (projectHandle: string, settings: ExportSettings, queue = false) =>
+    invokeTauri<ExportStatus>("project_vertical_export", { projectHandle, settings, queue }),
   /** Saves subtitles, the transcript or the sound of the video (or a short); answers with the
    *  path. Next to the project unless `destination`. */
   exportFile: (projectHandle: string, kind: ExportFileKind, shortId: string | null, destination: string | null) =>

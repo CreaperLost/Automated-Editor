@@ -2027,6 +2027,18 @@ fn project_short_export(
     )
 }
 
+/// Exports the whole video as a 9:16 version (DLV-5).
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_vertical_export(
+    state: State<'_, AppState>,
+    project_handle: String,
+    settings: export::ExportSettings,
+    queue: Option<bool>,
+) -> Result<export::ExportStatus, String> {
+    commands::project_vertical_export_impl(&state, project_handle, settings, queue.unwrap_or(false))
+}
+
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
 async fn short_preview_frame(
@@ -3739,6 +3751,7 @@ pub fn run() {
             project_short_footage,
             project_shorts_generate,
             project_short_export,
+            project_vertical_export,
             short_preview_frame,
             project_current,
             transcript_get,

@@ -29,6 +29,9 @@ pub struct Request {
     /// A file beside the video instead (subtitles, transcript, sound).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file: Option<super::files::FileKind>,
+    /// The whole video as a 9:16 version ([`crate::shorts::vertical_document`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vertical: bool,
 }
 
 /// One export in the list: waiting, running or done.
@@ -252,6 +255,7 @@ impl ExportOwner {
                 short_id: None,
                 settings: ExportSettings::default(),
                 file: None,
+                vertical: false,
             },
             state: status.state,
             revision: status.captured_revision,
@@ -451,9 +455,13 @@ pub fn list(
         .collect();
     // What each kind of request would be made from now, worked out once per list and only
     // for outputs that ended (GAP-007).
-    let mut known: Vec<((Option<String>, bool), Option<String>)> = Vec::new();
+    let mut known: Vec<((Option<String>, bool, bool), Option<String>)> = Vec::new();
     let mut now_for = |request: &Request| {
-        let key = (request.short_id.clone(), request.file.is_some());
+        let key = (
+            request.short_id.clone(),
+            request.file.is_some(),
+            request.vertical,
+        );
         if let Some((_, found)) = known.iter().find(|(k, _)| *k == key) {
             return found.clone();
         }
@@ -496,6 +504,7 @@ mod tests {
                 short_id: None,
                 settings: ExportSettings::default(),
                 file: None,
+                vertical: false,
             },
             state: ExportState::Completed,
             revision,
@@ -530,6 +539,7 @@ mod tests {
             short_id: None,
             settings: ExportSettings::default(),
             file: None,
+            vertical: false,
         };
         let gate = Arc::new(EncoderGate::new());
         let mut owner = ExportOwner::new();

@@ -1307,11 +1307,70 @@ pub fn short_document(
     Ok(document)
 }
 
+/// The whole video as a 9:16 version (DLV-5): the same edit, its screen following the work
+/// ([`crate::reframe`]) and framed with a short's default look. Where the video shows both
+/// pictures by default (a bubble, side by side) they are stacked as in a short; its sections
+/// (camera only, screen only, presenter...) stay. Captions on when the speech is transcribed:
+/// a phone is often muted.
+pub fn vertical_document(base: &EditDocument, captions: bool) -> EditDocument {
+    let mut document = base.clone();
+    let look = ShortLayout::default();
+    document.layout.aspect_ratio = "9:16".into();
+    document.captions.enabled = captions && look.captions;
+    document.captions.max_lines = look.caption_lines.clamp(1, 3);
+    if document.layouts.base.shows_camera() && document.layouts.base.shows_screen() {
+        document.layouts.base = crate::layouts::LayoutTrack::for_short().base;
+    }
+    document.short_layout = Some(look);
+    document.shorts.clear();
+    document
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
 
     const S: u64 = 1_000_000;
+
+    /// The whole video at 9:16: the same edit, both pictures stacked as in a short, its
+    /// sections kept, captions on when transcribed, and no shorts of its own.
+    #[test]
+    fn the_video_turns_vertical_with_its_edit_and_sections() {
+        let mut base = EditDocument::default();
+        base.layouts
+            .sections
+            .push(crate::layouts::LayoutSection::new(
+                "s1".into(),
+                None,
+                0,
+                2 * S,
+                Some(crate::layouts::Layout::CameraOnly(Default::default())),
+            ));
+        base.shorts.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "x", "title": "x", "sourceStartUs": 0, "sourceEndUs": 5_000_000
+            }))
+            .unwrap(),
+        );
+        let vertical = vertical_document(&base, true);
+        assert_eq!(vertical.layout.aspect_ratio, "9:16");
+        assert_eq!(
+            vertical.layouts.base,
+            crate::layouts::LayoutTrack::for_short().base
+        );
+        assert_eq!(vertical.layouts.sections, base.layouts.sections);
+        assert_eq!(vertical.sequence, base.sequence);
+        assert!(vertical.captions.enabled);
+        assert!(vertical.short_layout.as_ref().unwrap().follow_action);
+        assert!(vertical.shorts.is_empty());
+        assert!(!vertical_document(&base, false).captions.enabled);
+        // A video that shows only the screen stays that way.
+        base.layouts.base = crate::layouts::Layout::ScreenOnly(Default::default());
+        assert_eq!(
+            vertical_document(&base, true).layouts.base,
+            base.layouts.base
+        );
+    }
 
     /// Camera push-ins (FX-3): off unless asked; on, each jump cut goes in or back out, a take
     /// carrying straight on keeps its framing, and a gap starts over.

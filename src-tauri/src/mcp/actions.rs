@@ -277,8 +277,7 @@ pub static ACTIONS: [ToolDef; 36] = [
         description: "Exports the video (the canvas size and frame rate unless given; next to the \
             project unless `destination`). Waits until done and reports progress unless `wait: \
             false`, which returns a job id for export_status; `cancel` with that id stops it. \
-            `file` saves subtitles, the transcript, the sound alone or each graphic see-through \
-            (`graphics`: a folder of ProRes 4444 MOVs named by start time) instead.",
+            `file` saves another file instead (`graphics`: a folder of see-through MOVs).",
         schema: schema::<ExportArgs>,
         // Writes the video file (over `destination` if it exists).
         read_only: false,
@@ -4195,10 +4194,13 @@ pub struct ExportArgs {
     pub cancel: Option<String>,
     /// Save another file instead of the video, of the video or of `short`: subtitles (`srt`,
     /// `vtt`, from the captions as cut, hidden words left out), the transcript (`txt`, `md`
-    /// with the chapters as headings), the sound alone (`wav`) or each graphic on its own with
-    /// its alpha (`graphics`, a folder, for another editor). `settings` don't apply.
+    /// with the chapters as headings), the sound alone (`wav`) or each graphic with its alpha
+    /// (`graphics`). `settings` don't apply.
     #[serde(default)]
     pub file: Option<crate::export::files::FileKind>,
+    /// The whole video at 9:16, stacked as a short.
+    #[serde(default)]
+    pub vertical: bool,
 }
 
 /// The project's export settings (from its preset unless changed here).
@@ -4235,6 +4237,21 @@ fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     }
     if args.destination.is_some() {
         settings.destination = args.destination;
+    }
+    if args.vertical {
+        let started =
+            commands::project_vertical_export_impl(ctx.state, open.handle, settings, false)?;
+        if started.state == crate::export::ExportState::Failed {
+            return Err(export_failure(&started).replace("stopped", "did not start"));
+        }
+        ctx.host.export_started(&started, false);
+        let status = wait_for_export(ctx, &started.job_id, "Exporting the 9:16 version")?;
+        return text(format!(
+            "Exported the 9:16 version, {}x{}, to {}.",
+            status.width,
+            status.height,
+            status.output_path.unwrap_or_default()
+        ));
     }
     let stale = chapters_stale(ctx)
         .map(|w| format!("\n{w}"))
@@ -8463,6 +8480,21 @@ mod tests {
         assert!(call(&ctx, "export_status", json!({}))
             .unwrap()
             .contains("done"));
+        // The whole video at 9:16, named after the project beside it.
+        let vertical = call(
+            &ctx,
+            "export",
+            json!({ "vertical": true, "settings": { "width": 1280, "height": 720 } }),
+        )
+        .unwrap();
+        assert!(
+            vertical.starts_with("Exported the 9:16 version, 720x1280, to"),
+            "{vertical}"
+        );
+        assert!(
+            dir.path().join("Lesson (vertical).mp4").is_file(),
+            "{vertical}"
+        );
         assert!(
             call(&ctx, "export", json!({ "settings": { "widht": 640 } }))
                 .unwrap_err()
