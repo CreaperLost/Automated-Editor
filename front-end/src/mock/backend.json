@@ -1682,7 +1682,7 @@
     "config": null,
     "diagnostics": [],
     "guarded": false,
-    "key": "rec-eb280aa4c12b.mic",
+    "key": "rec-d21f68ac2144.mic",
     "noises": [],
     "revision": 1
   },
@@ -1691,7 +1691,7 @@
       {
         "durationUs": 6000000,
         "height": 180,
-        "id": "rec-eb280aa4c12b",
+        "id": "rec-d21f68ac2144",
         "kind": "recording",
         "name": "smoke",
         "path": "/home/george/AeroEdits/smoke.aero",
@@ -1827,7 +1827,7 @@
     "name": "Smoke",
     "noiseMutes": {},
     "previewAvailable": false,
-    "projectHandle": "3bdd8f6f-ba00-4fd6-acaa-d36bb4be6ed3",
+    "projectHandle": "4b58e0de-43fa-4891-9e0b-b55636750f09",
     "projectPath": "/home/george/AeroEdits/Smoke",
     "redoAvailable": false,
     "revision": 1,
@@ -1837,7 +1837,7 @@
         {
           "clips": [
             {
-              "asset": "rec-eb280aa4c12b",
+              "asset": "rec-d21f68ac2144",
               "durationUs": 6000000,
               "id": "c1",
               "inUs": 0,
@@ -1852,7 +1852,7 @@
         {
           "clips": [
             {
-              "asset": "rec-eb280aa4c12b",
+              "asset": "rec-d21f68ac2144",
               "durationUs": 6000000,
               "id": "c2",
               "inUs": 0,
@@ -1871,6 +1871,7 @@
     "undoLabel": "Markers",
     "zoomSettings": {
       "clickScale": 1.6,
+      "curve": "smooth",
       "follow": true,
       "followMs": 700,
       "hoverScale": 1.4,
@@ -1889,7 +1890,7 @@
     "generation": 4,
     "positionUs": 0,
     "previewAvailable": false,
-    "projectHandle": "3bdd8f6f-ba00-4fd6-acaa-d36bb4be6ed3",
+    "projectHandle": "4b58e0de-43fa-4891-9e0b-b55636750f09",
     "speed": 1.0,
     "state": "paused"
   },
@@ -1994,6 +1995,7 @@
       },
       "zoomSettings": {
         "clickScale": 1.6,
+        "curve": "smooth",
         "follow": true,
         "followMs": 700,
         "hoverScale": 1.4,
@@ -2007,7 +2009,7 @@
       {
         "builtin": true,
         "folder": null,
-        "method": "# Preset: Tutorial\n\nA screen-recorded tutorial, long form (16:9): clean speech, steady pacing, zooms where they\nhelp, no captions, chapters at the end. Run the steps in order, with one line to the user after\neach action.\n\n<!-- steps -->\nStep by step by default; automatic (the rules' Automatically) when the user says so, at the\nstart or at any point (\"same as last time\" too). Two depths of review, the choices' `review`\n(asked with the first questions only when the choices have none; automatic: fast):\n\n- **Fast (the default).** The cleanup passes and their reviews only look where the rules\n  flagged something (an um, a \"so\", a phrase said twice). Quick and cheap, but a sentence the\n  speaker gave up on, a restart in other words or a tangent nobody flagged is never looked at.\n- **Thorough.** Also reads the whole kept transcript for those, proposes cuts for them, and\n  looks at the joins (step 3b). Takes minutes and more of your tokens; worth it for a video\n  that matters. Ask: \"Review: fast / thorough (reads every word and checks the joins, slower)\".\n<!-- /steps -->\n<!-- auto -->\nYou are running it automatically (the rules' Automatically); also stop and ask when a result\nlooks wrong (step 4). The review is fast unless the choices say thorough.\n<!-- /auto -->\n\n## 1. Project (automatic)\n\n- Given a recording (a `.aero` folder): `create` with the project name and `recording`.\n  Otherwise work on the open project.\n- `status`. Tell the user the length and what the recording has.\n\n## 2. Transcription (automatic)\n\n- `scan` gives an overview: the microphones, cameras and mouse data. Tell the user what the\n  recording has in a line or two.\n- Don't ask the language: `transcribe` (default `provider: auto`) runs online with Scribe,\n  which detects it (English, Greek, ...), ElevenLabs first and OpenRouter when ElevenLabs has\n  no key or credits; the later passes follow what it heard. Use `provider: parakeet` (on this computer, free, English only) only when the user asks\n  for a local or free transcription of an English video.\n<!-- steps -->\n- Only when the choices have no `review`: ask the review depth, fast (default) or thorough\n  (see the top).\n- Two or more microphones, and the choices' `silence.microphones` unset: ask which to\n  transcribe: the presenter's (default), or all of them (needed to cut gaps between words\n  across all of them).\n<!-- /steps -->\n- `transcribe` (with `stream` for each microphone). It can take a few minutes, so tell the\n  user, and pass on the language it heard.\n\n## 3. Cleanup, one pass at a time\n\nThe passes below, in this order: each changes what the next finds (muted noises count as\nsilence; cut silence changes the gaps), so each is measured right before it runs. A pass the\nchoices hold runs as set (or is skipped), the gap pass and zooms included.\n<!-- steps -->\nFor every other pass, the rules' one pass at a time, asked like \"Silence (balanced): 112\npauses, 1:42 in all, 12:04 → 10:22. Cut? yes / gentler / tighter / skip\", always offering \"do\nthe rest automatically\". Other settings picked: dry-run those and ask again in one line, unless\nthey said to just do it.\n<!-- /steps -->\n\nAutomatic: `guard: true` on `mouth_noises`, `silence` and `fillers` applies nothing that fails\nsection 4's first or last rule; layouts and zooms apply directly.\n\nThe passes:\n\n1. **Mouth noises:** `mouth_noises` with `sensitivity` (gentle 0.35, balanced 0.5 default,\n   tight 0.6), after transcribing (the transcript's words are never muted). Mutes the clicks,\n   pops and breaths clear of words; the length stays. Noises close together count as one\n   place; give the places and how many are left next to words. The user reviews and unmutes\n   them in the app's Mouth noises panel. Choices: yes / gentle / tight / skip.\n2. **Silence from the audio:** `silence` with `preset` (gentle / balanced default / tight /\n   aggressive). Two or more microphones: ask once whether to listen to all of them (default,\n   `stream: speech`: cuts only where every one is quiet) or the presenter's only (that\n   sound's key). Choices: yes / gentler / tighter / skip.\n3. **Gaps between words:** `silence` with `mode: gaps` and `preset`: cuts the breaths and\n   noises between transcribed words that the audio pass left. Choices: no (default) / yes /\n   gentler / tighter.\n4. **Fillers and retakes (rules and AI):** always both, in English or Greek: the rules and the\n   review follow the language the track was transcribed in. `status` says whether an AI key is\n   set.\n   - **Always `review: auto` (leave `review` out)**, fast or thorough alike: `fillers` runs the\n     rules with the app's OpenRouter review when a key is set, else with its built-in local\n     model when it is downloaded. Don't review the words yourself unless the user asks you to\n     or `fillers` says no review could run: the app's review costs you nothing.\n   - **The OpenRouter review ran** (`fillers` names it): its fillers are cut without asking.\n     Run `fillers` with `kinds: [\"filler\", \"drink\"]` (and `guard: true`), then dry-run the retakes\n     (`kinds: [\"retake\"]`, `apply: false`): how many, the seconds they would cut and a few\n     examples. Read the transcript around a flagged retake only when it looks like content\n     (a full sentence or an item of a list). Choices for the retakes: yes / skip.\n   - **The local review ran:** dry-run both (`apply: false`) the same way, and then offer\n     \"fillers only\".\n   - **No review could run** (`fillers` says so): you are the AI review.\n     By default `fillers_review` shows only windows of about 15 words either side of what the\n     app's local pass flagged (a \"like\" or \"so\" that may be filler, a phrase said again); um\n     and uh are cut by the rules already. Read every page (`page: 0`, 1, ...), mark the\n     fillers and retakes by the criteria it gives (a flag that carries meaning stays), then\n     save them in one `fillers_review` call with `cuts` and the pages' `stamp`. With a\n     thorough review (or when the windows miss things the user points out), read every word\n     with `review: \"thorough\"` instead. Then dry-run `fillers` the same way.\n   Choices (local or in-house review): yes / fillers only (`kinds: [\"filler\", \"drink\"]`) / skip. Then\n   `fillers`. When the user\n   wants nothing sent to OpenRouter, use `review: local`.\n5. **Layouts: only when the user talks about layouts or the camera.** Otherwise skip this pass\n   and don't mention it. When they do (`layouts` is behind `more`): the base layout, keep the camera bubble (default) / side\n   by side / no camera (`layouts` `op: base` with `layout` \"Side by side\" or \"Screen only\");\n   **picked sections**, `layouts` `op: pick` with `apply: false` first (the camera alone where\n   the speaker talks and the mouse rests: sections and their total). Choices: yes (`op: pick`) /\n   skip.\n6. **Zooms** (only with mouse data): `zooms` with `apply: false` (count, average length, how\n   far in; add `settings` to try others: nothing is saved). Choices: yes / fewer and longer /\n   shorter / skip. \"Fewer and longer\" raises `minHoldMs` and `mergeGapMs` (default 5000 each),\n   \"shorter\" lowers them; how far in is `clickScale` (1.6 default). Then `zooms` with the\n   same `settings`. A cut never makes a zoom jump: its glide plays whole on the edited video.\n\n<!-- thorough -->\n### 3b. Thorough review (only when the user chose thorough)\n\nAfter the passes, on the cut edit:\n\n1. **Read every kept word.** `transcript_get` in stretches of about two minutes (`fromUs`,\n   `toUs`) until the end. Look for what the rules can't see: a sentence the speaker gave up on\n   (\"so what you want to- okay, let's open the settings\"), a restart in other words, a tangent,\n   the same explanation given twice. Keep what teaches: a deliberate repeat (\"human in the\n   loop. Human in the loop means...\"), items of a list, and pauses while something loads or the\n   viewer reads the screen. Words the transcriber got wrong are not mistakes of the speaker:\n   fix them with `transcript_fix` when you are sure, never cut them.\n2. **Propose those cuts** in one `propose_cuts` batch, by word id, each with a short reason\n   (\"abandoned sentence\", \"said again at 4:12\"). Tell the user how many and how many seconds;\n   they accept or reject each in the Agent panel.\n3. **Look at the joins.** `timeline_view` (`fromUs`/`toUs` about 2 s either side) at every\n   retake cut and every gap still over a second: look for a word cut short, a breath or click\n   left at the join, a jump in loudness. You can see the waveform; you cannot hear it.\n4. **Make a listening list** for the user: the joins you looked at that might sound wrong,\n   each with its time and why, at most ten, worst first.\n<!-- /thorough -->\n<!-- steps -->\n<!-- nochoices -->\nAfter the passes, save the user's answers as the preset's choices with `library` (`kind:\npreset`, `op: set`, `set: {\"choices\": {...}}`), in this shape (a built-in preset goes into a\ncopy the project then follows):\n\n```json\n{\n  \"review\": \"fast\",\n  \"mouthNoises\": { \"apply\": true, \"preset\": \"balanced\" },\n  \"silence\": { \"apply\": true, \"preset\": \"balanced\", \"microphones\": \"all\" },\n  \"gaps\": { \"apply\": false, \"preset\": \"balanced\" },\n  \"fillers\": { \"apply\": true },\n  \"zooms\": { \"apply\": true, \"settings\": { \"minHoldMs\": 5000, \"mergeGapMs\": 5000, \"clickScale\": 1.6 } },\n  \"graphics\": { \"apply\": false },\n  \"export\": { \"resolution\": \"1080p\", \"quality\": \"high\" }\n}\n```\n<!-- /nochoices -->\n<!-- /steps -->\n\n## 4. When a result looks wrong (also in automatic)\n\nStop and ask before running a pass when its dry run:\n- would cut more than a quarter of the video, or the passes together more than a third;\n- finds nothing where `scan` found plenty, or far more than `scan` estimated;\n- reports an error or a warning.\n\n## 5. Captions (automatic)\n\nTutorials have no captions: if `status` shows them on, `settings` `area: captions`,\n`set: {\"enabled\": false}`. Turn them on only if the user says this is a short or vertical video.\nWhen captions are on (the user asked), pick each line's emphasis word with `more` `tool:\ncaptions` (it lists the lines; then `emphasis`: per line the one word that makes a viewer keep\nwatching, never a small word, none on a flat line), after the cuts.\n\n## 6. Graphics (ask)\n\nGraphics come after the cuts, on the final timeline (`graphics` gives their rules with its\nlist). The choices' `graphics.apply` decides without a question (false: skip, and say so in a line); with\nno choice, ask whether the user wants graphics (automatic: no). If yes:\n\n1. `graphics`: the templates, the user's library and their variables. If the renderer is not\n   installed, ask before `graphics_install` (a 200 MB download). The project's style\n   (`status`; `library` `kind: style`) gives every graphic its colours, fonts and look, so\n   leave `background`, `text` and `accent` unset. If the user has styles of their own and the\n   project wears a built-in one, ask which (`library` `op: use`).\n2. Read `transcript_get` and propose them as a table, one row each (the graphics rules say how\n   to pick between showing and a card; `graphic_add` with `plan: true` checks the items and\n   gives the times and words):\n\n   | Start | End | Kind, from | What the viewer sees | Said there |\n   |---|---|---|---|---|\n   | 2:14 | 2:22 | state change, own | A chat full of messages clears; three saved files stay and slide into a fresh chat on \"still has the plan\" | \"...you can clear the chat and it still has the plan...\" |\n   | 3:05 | 3:09 | statement card, key-point | \"Reset the chat. Keep the plan.\" | \"...so reset the chat, keep the plan...\" |\n\n   An item of the user's library whose `useWhen` fits beats a bundled template. Bundled cards: a\n   `title` where a new section starts, `step` cards for numbered steps, `shortcut` when a key\n   combination is named, `key-point` for a rule worth remembering, `recap` near the end,\n   `end-card` last. Bundled demonstrations: `timeline-cut` when a cut is described,\n   `prompt-reply` when the speaker asks an agent or app something, `count-up` for a number\n   worth seeing, `before-after` for a result or two states, `app-click` for a click the\n   screen doesn't show clearly, `steps-link` for a process told step by step, `items-stack` for\n   things that add up. Few (about one a minute at most), cards 3–5 s, a demonstration as long as\n   its action needs; never over a part where the screen must be seen. Ask: add them all / pick\n   / skip.\n3. One `graphic_add` with `items`, each with `atWord` (the word it starts at) and its\n   `variables` (`library` with the item's name for a library one), then `graphic_render`, and\n   look at one or two with `frame_render` `graphic` (a sheet across each). Report one line.\n4. If you wrote a graphic of your own and the user likes it, offer to keep it in their library\n   (the graphics rules say how).\n\n## 7. Chapters (automatic, last edit)\n\nOnce everything else is cut, write the chapters as the rules' Chapters say.\n\n## 8. Check, status and summary (automatic)\n\nRun `check`. Errors and warnings with a fix: apply them in automatic mode (`fix` with their\nids), otherwise list them and ask. Notes (such as loudness) are the\nuser's call: list them, fix only at the user's word. Then `storyboard` (the rules' Looking at\nthe edit) and say what you would do about a tile that looks wrong. Then `status`, and sum\nup the edit. Keep four kinds of claim apart, under these headings, and never let one stand in\nfor another (a storyboard is not a review of the whole edit; a clean `check` reads the edit, not\nthe sound):\n\n- **Done:** what each step cut or changed, with seconds where it cut; length from → to; what\n  the check fixed.\n- **Looked at:** what you actually read or saw, and how much of it: every kept word (thorough)\n  or only the flagged windows (fast); the joins you viewed with `timeline_view`; the storyboard;\n  any frames.\n- **Not heard:** you cannot listen, so no join has been heard yet. List the ones to play first\n  (the listening list from 3b, or with fast review: the first and last ten seconds and each\n  retake cut), with times.\n- **Approved by you:** which passes and proposal batches the user said yes to, and which ran\n  automatically on the preset's choices.\n\nThen **Still open:** what the check left (with times), proposals still waiting in the Agent\npanel, and anything you were unsure about. Any step can be undone from the Agent panel's\nhistory.\n\n## 9. Export (ask)\n\nAsk before exporting; on the go, `preset` with this `name` and `part: \"export\"` gives the\nexport steps.\n\n## 10. Keep what worked (ask, once)\n\nWhen the user is happy with the edit, ask once: \"Save this as a workflow for the next tutorial?\"\nOn a yes: `library` (`kind: preset`, `op: save`, with `saveAs` a name of theirs unless they follow\ntheir own already), `exceptions` and `checks` in their words from what they corrected or asked\nfor here, and `note`: what they approved. Show them the summary it answers. Never save one unasked.\n",
+        "method": "# Preset: Tutorial\n\nA screen-recorded tutorial, long form (16:9): clean speech, steady pacing, zooms where they\nhelp, no captions, chapters at the end. Run the steps in order, with one line to the user after\neach action.\n\n<!-- steps -->\nStep by step by default; automatic (the rules' Automatically) when the user says so, at the\nstart or at any point (\"same as last time\" too). Two depths of review, the choices' `review`\n(asked with the first questions only when the choices have none; automatic: fast):\n\n- **Fast (the default).** The cleanup passes and their reviews only look where the rules\n  flagged something (an um, a \"so\", a phrase said twice). Quick and cheap, but a sentence the\n  speaker gave up on, a restart in other words or a tangent nobody flagged is never looked at.\n- **Thorough.** Also reads the whole kept transcript for those, proposes cuts for them, and\n  looks at the joins (step 3b). Takes minutes and more of your tokens; worth it for a video\n  that matters. Ask: \"Review: fast / thorough (reads every word and checks the joins, slower)\".\n<!-- /steps -->\n<!-- auto -->\nYou are running it automatically (the rules' Automatically); also stop and ask when a result\nlooks wrong (step 4). The review is fast unless the choices say thorough.\n<!-- /auto -->\n\n## 1. Project (automatic)\n\n- Given a recording (a `.aero` folder): `create` with the project name and `recording`.\n  Otherwise work on the open project.\n- `status`. Tell the user the length and what the recording has.\n\n## 2. Transcription (automatic)\n\n- `scan` gives an overview: the microphones, cameras and mouse data. Tell the user what the\n  recording has in a line or two.\n- Don't ask the language: `transcribe` (default `provider: auto`) runs online with Scribe,\n  which detects it (English, Greek, ...), ElevenLabs first and OpenRouter when ElevenLabs has\n  no key or credits; the later passes follow what it heard. Use `provider: parakeet` (on this computer, free, English only) only when the user asks\n  for a local or free transcription of an English video.\n<!-- steps -->\n- Only when the choices have no `review`: ask the review depth, fast (default) or thorough\n  (see the top).\n- Two or more microphones, and the choices' `silence.microphones` unset: ask which to\n  transcribe: the presenter's (default), or all of them (needed to cut gaps between words\n  across all of them).\n<!-- /steps -->\n- `transcribe` (with `stream` for each microphone). It can take a few minutes, so tell the\n  user, and pass on the language it heard.\n\n## 3. Cleanup, one pass at a time\n\nThe passes below, in this order: each changes what the next finds (muted noises count as\nsilence; cut silence changes the gaps), so each is measured right before it runs. A pass the\nchoices hold runs as set (or is skipped), the gap pass and zooms included.\n<!-- steps -->\nFor every other pass, the rules' one pass at a time, asked like \"Silence (balanced): 112\npauses, 1:42 in all, 12:04 → 10:22. Cut? yes / gentler / tighter / skip\", always offering \"do\nthe rest automatically\". Other settings picked: dry-run those and ask again in one line, unless\nthey said to just do it.\n<!-- /steps -->\n\nAutomatic: `guard: true` on `mouth_noises`, `silence` and `fillers` applies nothing that fails\nsection 4's first or last rule; layouts and zooms apply directly.\n\nThe passes:\n\n1. **Mouth noises:** `mouth_noises` with `sensitivity` (gentle 0.35, balanced 0.5 default,\n   tight 0.6), after transcribing (the transcript's words are never muted). Mutes the clicks,\n   pops and breaths clear of words; the length stays. Noises close together count as one\n   place; give the places and how many are left next to words. The user reviews and unmutes\n   them in the app's Mouth noises panel. Choices: yes / gentle / tight / skip.\n2. **Silence from the audio:** `silence` with `preset` (gentle / balanced default / tight /\n   aggressive). Two or more microphones: ask once whether to listen to all of them (default,\n   `stream: speech`: cuts only where every one is quiet) or the presenter's only (that\n   sound's key). Choices: yes / gentler / tighter / skip.\n3. **Gaps between words:** `silence` with `mode: gaps` and `preset`: cuts the breaths and\n   noises between transcribed words that the audio pass left. Choices: no (default) / yes /\n   gentler / tighter.\n4. **Fillers and retakes (rules and AI):** always both, in English or Greek: the rules and the\n   review follow the language the track was transcribed in. `status` says whether an AI key is\n   set.\n   - **Always `review: auto` (leave `review` out)**, fast or thorough alike: `fillers` runs the\n     rules with the app's OpenRouter review when a key is set, else with its built-in local\n     model when it is downloaded. Don't review the words yourself unless the user asks you to\n     or `fillers` says no review could run: the app's review costs you nothing.\n   - **The OpenRouter review ran** (`fillers` names it): its fillers are cut without asking.\n     Run `fillers` with `kinds: [\"filler\", \"drink\"]` (and `guard: true`), then dry-run the retakes\n     (`kinds: [\"retake\"]`, `apply: false`): how many, the seconds they would cut and a few\n     examples. Read the transcript around a flagged retake only when it looks like content\n     (a full sentence or an item of a list). Choices for the retakes: yes / skip.\n   - **The local review ran:** dry-run both (`apply: false`) the same way, and then offer\n     \"fillers only\".\n   - **No review could run** (`fillers` says so): you are the AI review.\n     By default `fillers_review` shows only windows of about 15 words either side of what the\n     app's local pass flagged (a \"like\" or \"so\" that may be filler, a phrase said again); um\n     and uh are cut by the rules already. Read every page (`page: 0`, 1, ...), mark the\n     fillers and retakes by the criteria it gives (a flag that carries meaning stays), then\n     save them in one `fillers_review` call with `cuts` and the pages' `stamp`. With a\n     thorough review (or when the windows miss things the user points out), read every word\n     with `review: \"thorough\"` instead. Then dry-run `fillers` the same way.\n   Choices (local or in-house review): yes / fillers only (`kinds: [\"filler\", \"drink\"]`) / skip. Then\n   `fillers`. When the user\n   wants nothing sent to OpenRouter, use `review: local`.\n5. **Layouts: only when the user talks about layouts or the camera.** Otherwise skip this pass\n   and don't mention it. When they do (`layouts` is behind `more`): the base layout, keep the camera bubble (default) / side\n   by side / no camera (`layouts` `op: base` with `layout` \"Side by side\" or \"Screen only\");\n   **picked sections**, `layouts` `op: pick` with `apply: false` first (the camera alone where\n   the speaker talks and the mouse rests: sections and their total). Choices: yes (`op: pick`) /\n   skip.\n6. **Zooms** (only with mouse data): `zooms` with `apply: false` (count, average length, how\n   far in; add `settings` to try others: nothing is saved). Choices: yes / fewer and longer /\n   shorter / skip. \"Fewer and longer\" raises `minHoldMs` and `mergeGapMs` (default 5000 each),\n   \"shorter\" lowers them; how far in is `clickScale` (1.6 default); with a `transitionMs`, the\n   glide is `curve` (smooth, snappy, gentle or linear). Then `zooms` with the\n   same `settings`. A cut never makes a zoom jump: its glide plays whole on the edited video.\n\n<!-- thorough -->\n### 3b. Thorough review (only when the user chose thorough)\n\nAfter the passes, on the cut edit:\n\n1. **Read every kept word.** `transcript_get` in stretches of about two minutes (`fromUs`,\n   `toUs`) until the end. Look for what the rules can't see: a sentence the speaker gave up on\n   (\"so what you want to- okay, let's open the settings\"), a restart in other words, a tangent,\n   the same explanation given twice. Keep what teaches: a deliberate repeat (\"human in the\n   loop. Human in the loop means...\"), items of a list, and pauses while something loads or the\n   viewer reads the screen. Words the transcriber got wrong are not mistakes of the speaker:\n   fix them with `transcript_fix` when you are sure, never cut them.\n2. **Propose those cuts** in one `propose_cuts` batch, by word id, each with a short reason\n   (\"abandoned sentence\", \"said again at 4:12\"). Tell the user how many and how many seconds;\n   they accept or reject each in the Agent panel.\n3. **Look at the joins.** `timeline_view` (`fromUs`/`toUs` about 2 s either side) at every\n   retake cut and every gap still over a second: look for a word cut short, a breath or click\n   left at the join, a jump in loudness. You can see the waveform; you cannot hear it.\n4. **Make a listening list** for the user: the joins you looked at that might sound wrong,\n   each with its time and why, at most ten, worst first.\n<!-- /thorough -->\n<!-- steps -->\n<!-- nochoices -->\nAfter the passes, save the user's answers as the preset's choices with `library` (`kind:\npreset`, `op: set`, `set: {\"choices\": {...}}`), in this shape (a built-in preset goes into a\ncopy the project then follows):\n\n```json\n{\n  \"review\": \"fast\",\n  \"mouthNoises\": { \"apply\": true, \"preset\": \"balanced\" },\n  \"silence\": { \"apply\": true, \"preset\": \"balanced\", \"microphones\": \"all\" },\n  \"gaps\": { \"apply\": false, \"preset\": \"balanced\" },\n  \"fillers\": { \"apply\": true },\n  \"zooms\": { \"apply\": true, \"settings\": { \"minHoldMs\": 5000, \"mergeGapMs\": 5000, \"clickScale\": 1.6 } },\n  \"graphics\": { \"apply\": false },\n  \"export\": { \"resolution\": \"1080p\", \"quality\": \"high\" }\n}\n```\n<!-- /nochoices -->\n<!-- /steps -->\n\n## 4. When a result looks wrong (also in automatic)\n\nStop and ask before running a pass when its dry run:\n- would cut more than a quarter of the video, or the passes together more than a third;\n- finds nothing where `scan` found plenty, or far more than `scan` estimated;\n- reports an error or a warning.\n\n## 5. Captions (automatic)\n\nTutorials have no captions: if `status` shows them on, `settings` `area: captions`,\n`set: {\"enabled\": false}`. Turn them on only if the user says this is a short or vertical video.\nWhen captions are on (the user asked), pick each line's emphasis word with `more` `tool:\ncaptions` (it lists the lines; then `emphasis`: per line the one word that makes a viewer keep\nwatching, never a small word, none on a flat line), after the cuts.\n\n## 6. Graphics (ask)\n\nGraphics come after the cuts, on the final timeline (`graphics` gives their rules with its\nlist). The choices' `graphics.apply` decides without a question (false: skip, and say so in a line); with\nno choice, ask whether the user wants graphics (automatic: no). If yes:\n\n1. `graphics`: the templates, the user's library and their variables. If the renderer is not\n   installed, ask before `graphics_install` (a 200 MB download). The project's style\n   (`status`; `library` `kind: style`) gives every graphic its colours, fonts and look, so\n   leave `background`, `text` and `accent` unset. If the user has styles of their own and the\n   project wears a built-in one, ask which (`library` `op: use`).\n2. Read `transcript_get` and propose them as a table, one row each (the graphics rules say how\n   to pick between showing and a card; `graphic_add` with `plan: true` checks the items and\n   gives the times and words):\n\n   | Start | End | Kind, from | What the viewer sees | Said there |\n   |---|---|---|---|---|\n   | 2:14 | 2:22 | state change, own | A chat full of messages clears; three saved files stay and slide into a fresh chat on \"still has the plan\" | \"...you can clear the chat and it still has the plan...\" |\n   | 3:05 | 3:09 | statement card, key-point | \"Reset the chat. Keep the plan.\" | \"...so reset the chat, keep the plan...\" |\n\n   An item of the user's library whose `useWhen` fits beats a bundled template. Bundled cards: a\n   `title` where a new section starts, `step` cards for numbered steps, `shortcut` when a key\n   combination is named, `key-point` for a rule worth remembering, `recap` near the end,\n   `end-card` last. Bundled demonstrations: `timeline-cut` when a cut is described,\n   `prompt-reply` when the speaker asks an agent or app something, `count-up` for a number\n   worth seeing, `before-after` for a result or two states, `app-click` for a click the\n   screen doesn't show clearly, `steps-link` for a process told step by step, `items-stack` for\n   things that add up. Few (about one a minute at most), cards 3–5 s, a demonstration as long as\n   its action needs; never over a part where the screen must be seen. Ask: add them all / pick\n   / skip.\n3. One `graphic_add` with `items`, each with `atWord` (the word it starts at) and its\n   `variables` (`library` with the item's name for a library one), then `graphic_render`, and\n   look at one or two with `frame_render` `graphic` (a sheet across each). Report one line.\n4. If you wrote a graphic of your own and the user likes it, offer to keep it in their library\n   (the graphics rules say how).\n\n## 7. Chapters (automatic, last edit)\n\nOnce everything else is cut, write the chapters as the rules' Chapters say.\n\n## 8. Check, status and summary (automatic)\n\nRun `check`. Errors and warnings with a fix: apply them in automatic mode (`fix` with their\nids), otherwise list them and ask. Notes (such as loudness) are the\nuser's call: list them, fix only at the user's word. Then `storyboard` (the rules' Looking at\nthe edit) and say what you would do about a tile that looks wrong. Then `status`, and sum\nup the edit. Keep four kinds of claim apart, under these headings, and never let one stand in\nfor another (a storyboard is not a review of the whole edit; a clean `check` reads the edit, not\nthe sound):\n\n- **Done:** what each step cut or changed, with seconds where it cut; length from → to; what\n  the check fixed.\n- **Looked at:** what you actually read or saw, and how much of it: every kept word (thorough)\n  or only the flagged windows (fast); the joins you viewed with `timeline_view`; the storyboard;\n  any frames.\n- **Not heard:** you cannot listen, so no join has been heard yet. List the ones to play first\n  (the listening list from 3b, or with fast review: the first and last ten seconds and each\n  retake cut), with times.\n- **Approved by you:** which passes and proposal batches the user said yes to, and which ran\n  automatically on the preset's choices.\n\nThen **Still open:** what the check left (with times), proposals still waiting in the Agent\npanel, and anything you were unsure about. Any step can be undone from the Agent panel's\nhistory.\n\n## 9. Export (ask)\n\nAsk before exporting; on the go, `preset` with this `name` and `part: \"export\"` gives the\nexport steps.\n\n## 10. Keep what worked (ask, once)\n\nWhen the user is happy with the edit, ask once: \"Save this as a workflow for the next tutorial?\"\nOn a yes: `library` (`kind: preset`, `op: save`, with `saveAs` a name of theirs unless they follow\ntheir own already), `exceptions` and `checks` in their words from what they corrected or asked\nfor here, and `note`: what they approved. Show them the summary it answers. Never save one unasked.\n",
         "name": "Tutorial",
         "preset": {
           "choices": {
@@ -2055,7 +2057,7 @@
           }
         },
         "rules": "",
-        "summary": "Tutorial (built in)\nFor: A screen-recorded tutorial, long form (16:9): clean speech, steady pacing, zooms where they help, no captions, chapters.\nLook: style Light\nSteps: export quality high, resolution 1080p; fillers on; gaps off; graphics off; mouth noises on (preset balanced); review fast; silence on (microphones all, preset balanced); zooms on (click scale 1.6, merge gap ms 5000, min hold ms 5000)\nSettings: audio match takes on, normalize on\nMethod: 211 lines; the user's rules: 0 lines"
+        "summary": "Tutorial (built in)\nFor: A screen-recorded tutorial, long form (16:9): clean speech, steady pacing, zooms where they help, no captions, chapters.\nLook: style Light\nSteps: export quality high, resolution 1080p; fillers on; gaps off; graphics off; mouth noises on (preset balanced); review fast; silence on (microphones all, preset balanced); zooms on (click scale 1.6, merge gap ms 5000, min hold ms 5000)\nSettings: audio match takes on, normalize on\nMethod: 212 lines; the user's rules: 0 lines"
       },
       {
         "builtin": true,
@@ -2264,7 +2266,7 @@
         "endUs": 2350000,
         "startUs": 100000,
         "text": "Today we cut the pauses out.",
-        "trackId": "rec-eb280aa4c12b.mic",
+        "trackId": "rec-d21f68ac2144.mic",
         "wordIds": [
           "w-0",
           "w-1",
@@ -2286,7 +2288,7 @@
         "endUs": 5300000,
         "startUs": 4100000,
         "text": "Like this.",
-        "trackId": "rec-eb280aa4c12b.mic",
+        "trackId": "rec-d21f68ac2144.mic",
         "wordIds": [
           "w-6",
           "w-7"
@@ -2297,7 +2299,7 @@
         ]
       }
     ],
-    "trackId": "rec-eb280aa4c12b.mic"
+    "trackId": "rec-d21f68ac2144.mic"
   },
   "project_check": {
     "durationUs": 6000000,
@@ -2337,6 +2339,57 @@
   },
   "project_effects_at": [],
   "project_sound_effects": [],
+  "project_spend": {
+    "latest": [
+      {
+        "at": "2026-11-22T18:07:27.149109092+00:00",
+        "note": "gpt-5 launch",
+        "provider": "Treg",
+        "step": "Web search"
+      },
+      {
+        "at": "2026-11-22T18:07:27.149042181+00:00",
+        "costUsd": 0.07,
+        "note": "robot mid-stride",
+        "provider": "OpenRouter",
+        "step": "Thumbnail"
+      }
+    ],
+    "notCounted": "Not counted: your agent's own tokens, story discovery before the video was made, and the AI review passes (fillers, chapters, clips).",
+    "report": {
+      "byProvider": {
+        "OpenRouter": {
+          "calls": 1,
+          "knownUsd": 0.07,
+          "unknown": 0
+        },
+        "Treg": {
+          "calls": 1,
+          "knownUsd": 0.0,
+          "unknown": 1
+        }
+      },
+      "byStep": {
+        "Thumbnail": {
+          "calls": 1,
+          "knownUsd": 0.07,
+          "unknown": 0
+        },
+        "Web search": {
+          "calls": 1,
+          "knownUsd": 0.0,
+          "unknown": 1
+        }
+      },
+      "firstAt": "2026-11-22T18:07:27.149042181+00:00",
+      "lastAt": "2026-11-22T18:07:27.149109092+00:00",
+      "total": {
+        "calls": 2,
+        "knownUsd": 0.07,
+        "unknown": 1
+      }
+    }
+  },
   "project_waveform_overview": {
     "diagnostics": [],
     "durationUs": 6000000,
@@ -2944,7 +2997,7 @@
       106,
       107
     ],
-    "trackId": "rec-eb280aa4c12b.mic"
+    "trackId": "rec-d21f68ac2144.mic"
   },
   "project_zoom_suggestions": {
     "config": {
@@ -2977,7 +3030,7 @@
   },
   "proposals_list": {
     "batches": [],
-    "projectHandle": "3bdd8f6f-ba00-4fd6-acaa-d36bb4be6ed3",
+    "projectHandle": "4b58e0de-43fa-4891-9e0b-b55636750f09",
     "revision": 1
   },
   "publish_package": {
@@ -3198,13 +3251,13 @@
     }
   ],
   "transcript_get": {
-    "createdAt": "2026-11-22T16:45:35.370076234+00:00",
+    "createdAt": "2026-11-22T18:07:27.142748708+00:00",
     "language": "en",
     "model": "parakeet-tdt-0.6b-v3",
     "provider": "parakeet",
     "revision": 1,
-    "trackId": "rec-eb280aa4c12b.mic",
-    "wordStamp": "fe1c856b275698bb",
+    "trackId": "rec-d21f68ac2144.mic",
+    "wordStamp": "8dd93be1a001f5ea",
     "words": [
       {
         "editedEndUs": 450000,

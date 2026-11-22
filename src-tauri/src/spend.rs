@@ -154,6 +154,25 @@ impl Report {
     }
 }
 
+/// What the UI shows: the report, the latest calls (newest first) and what is never counted.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct View {
+    pub report: Report,
+    pub latest: Vec<Entry>,
+    pub not_counted: &'static str,
+}
+
+/// The project's spending as the UI shows it, with at most `latest` calls listed.
+pub fn view(root: &Path, latest: usize) -> View {
+    let entries = load(root);
+    View {
+        report: report(&entries),
+        latest: entries.iter().rev().take(latest).cloned().collect(),
+        not_counted: NOT_COUNTED,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,6 +213,18 @@ mod tests {
         assert!((r.total.known_usd - 0.0485).abs() < 1e-9);
         assert_eq!(r.by_provider["Treg"].calls, 2);
         assert!((r.by_step["Web search"].known_usd - 0.0065).abs() < 1e-9);
+        // The UI's view: newest first, as many as asked, the same totals.
+        let v = view(dir.path(), 2);
+        assert_eq!(v.report, r);
+        assert_eq!(v.latest.len(), 2);
+        assert_eq!(v.latest[0].step, "Web search");
+        assert_eq!(v.latest[1].provider, "ElevenLabs");
+        let json = serde_json::to_value(&v).unwrap();
+        assert!(json["report"]["byProvider"]["Treg"]["knownUsd"].is_number());
+        assert!(json["notCounted"]
+            .as_str()
+            .unwrap()
+            .starts_with("Not counted"));
         let text = r.text();
         assert!(
             text.contains("Spent on this video: $0.049 over 4 calls (1 of unknown cost)."),

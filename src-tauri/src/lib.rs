@@ -978,6 +978,15 @@ async fn project_media_from_link(
     .map_err(|error| error.to_string())?
 }
 
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_spend(
+    state: State<'_, AppState>,
+    project_handle: String,
+) -> Result<spend::View, String> {
+    commands::project_spend_impl(&state, project_handle)
+}
+
 /// Set to stop the link download that is running.
 #[cfg(feature = "tauri-app")]
 static LINK_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -3703,6 +3712,7 @@ pub fn run() {
             project_media_import,
             project_media_from_link,
             project_media_link_stop,
+            project_spend,
             project_media_roles,
             project_media_licence,
             image_library_list,
