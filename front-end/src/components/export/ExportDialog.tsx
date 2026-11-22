@@ -7,6 +7,7 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { CheckPanel } from "./CheckPanel";
 import { DeliveryList } from "./DeliveryList";
+import { SpendSummary } from "./SpendSummary";
 import { PackageEditor, packageGaps } from "./PackageEditor";
 import { ExportLog } from "./ExportLog";
 import { Button, IconButton, Segmented, cn, DialogBackdrop } from "../ui";
@@ -498,6 +499,11 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
           )}
           {projectHandle && (
             <DeliveryList projectHandle={projectHandle} revision={revision} refreshKey={`${exportJob?.jobId}:${exportJob?.state}:${saved?.path}`} />
+          )}
+          {projectHandle && (
+            <div className="px-6 pb-6">
+              <SpendSummary projectHandle={projectHandle} refreshKey={`${revision}:${exportJob?.state}`} />
+            </div>
           )}
         </div>
 

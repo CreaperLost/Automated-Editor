@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   AlertTriangle,
   Clapperboard,
@@ -16,6 +16,7 @@ import {
 import { Badge, Button, IconButton, Notice, Segmented, Tabs } from "../ui";
 import { useProjectStore } from "../../stores/projectStore";
 import { api } from "../../lib/ipc";
+import { listenTo } from "../../lib/windowSync";
 import type { Asset } from "../../lib/types";
 import { GraphicsPanel } from "../graphics/GraphicsPanel";
 import { useBusyRun } from "../../hooks/useBusyRun";
@@ -82,15 +83,22 @@ const MediaList: React.FC = () => {
     });
   const [linkOpen, setLinkOpen] = useState(false);
   const [link, setLink] = useState("");
+  const [linkProgress, setLinkProgress] = useState<{ fraction: number; message: string } | null>(null);
+  useEffect(() => listenTo<{ fraction: number; message: string }>("media-link-progress", setLinkProgress), []);
   /** Downloads the linked video into the project's media/downloads folder and imports it. */
   const importLink = () =>
     run("Downloading…", async () => {
       const project = useProjectStore.getState().openedProject;
       const url = link.trim();
       if (!project || !url) return;
-      applyOpenedProject(await api.projectMediaFromLink(project.projectHandle, url));
-      setLink("");
-      setLinkOpen(false);
+      setLinkProgress({ fraction: 0, message: "Starting" });
+      try {
+        applyOpenedProject(await api.projectMediaFromLink(project.projectHandle, url));
+        setLink("");
+        setLinkOpen(false);
+      } finally {
+        setLinkProgress(null);
+      }
     });
   const importFiles = () => importFrom(() => api.pickMediaFiles());
   const importFolder = () =>
@@ -192,6 +200,17 @@ const MediaList: React.FC = () => {
               Download
             </Button>
           </form>
+        )}
+        {linkOpen && linkProgress && (
+          <div className="flex items-center gap-2" role="status">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-studio-800">
+              <div className="h-full bg-accent transition-[width]" style={{ width: `${Math.round(linkProgress.fraction * 100)}%` }} />
+            </div>
+            <span className="text-meta text-studio-400 truncate max-w-[50%]">{linkProgress.message}</span>
+            <Button variant="ghost" size="sm" onClick={() => void api.projectMediaLinkStop()}>
+              Stop
+            </Button>
+          </div>
         )}
         {assets.length > 0 && (
           <>

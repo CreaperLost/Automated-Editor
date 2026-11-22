@@ -1768,6 +1768,17 @@ pub fn project_markers_set_impl(
     })
 }
 
+/// What the app has paid for on the opened project (the Export page's Spent section).
+pub fn project_spend_impl(
+    state: &AppState,
+    project_handle: String,
+) -> Result<crate::spend::View, String> {
+    let opened = state.opened_project.lock();
+    let reader = opened.as_ref().ok_or("No opened project")?;
+    require_handle(reader, &project_handle)?;
+    Ok(crate::spend::view(reader.root(), 30))
+}
+
 /// The check before export, of the edit as it is now.
 pub fn project_check_impl(
     state: &AppState,

@@ -2438,6 +2438,28 @@ export interface Marker {
   editedUs?: number | null;
 }
 
+/** One line of the spend report (`spend::Total`). */
+export interface SpendTotal {
+  calls: number;
+  knownUsd: number;
+  /** Calls whose cost the service didn't report. */
+  unknown: number;
+}
+
+/** What the app paid for on a project (`spend::View`). */
+export interface SpendView {
+  report: {
+    total: SpendTotal;
+    byProvider: Record<string, SpendTotal>;
+    byStep: Record<string, SpendTotal>;
+    firstAt?: string | null;
+    lastAt?: string | null;
+  };
+  /** Newest first. */
+  latest: { at: string; step: string; provider: string; costUsd?: number | null; note?: string }[];
+  notCounted: string;
+}
+
 /** Mirrors `check::Severity` in src-tauri/src/check.rs. */
 export type CheckSeverity = "error" | "warning" | "info";
 
