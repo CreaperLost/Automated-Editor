@@ -244,6 +244,9 @@ pub fn static_checks(
         },
     );
     out.push(look_check(html));
+    if let Some(three) = three_check(files) {
+        out.push(three);
+    }
     let fixed = fixed_text(html);
     out.push(if fixed.is_empty() {
         check(
@@ -269,6 +272,79 @@ pub fn static_checks(
         )
     });
     out
+}
+
+/// For a graphic drawn with three.js: its frames must come from HyperFrames' seek time (a
+/// clock of its own renders frozen or different every time), and its type stays flat HTML over
+/// the canvas (type set in the 3D world blurs, clips and breaks). `None` without three.js.
+fn three_check(files: &[(String, String)]) -> Option<Check> {
+    let code: String = files
+        .iter()
+        .filter(|(path, _)| {
+            !path.ends_with(super::three::MODULE) && !path.starts_with(super::three::ADDONS)
+        })
+        .map(|(_, text)| text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let uses = code.contains(super::three::MODULE)
+        || code.contains(super::three::ADDONS)
+        || code.contains("from \"three\"")
+        || code.contains("from 'three'");
+    if !uses {
+        return None;
+    }
+    let clocks: Vec<&str> = [
+        "requestAnimationFrame",
+        "setAnimationLoop",
+        "THREE.Clock",
+        "new Clock(",
+        "performance.now",
+        "Date.now",
+    ]
+    .into_iter()
+    .filter(|clock| code.contains(clock))
+    .collect();
+    let text_3d: Vec<&str> = ["TextGeometry", "FontLoader", "Text3D", "troika"]
+        .into_iter()
+        .filter(|t| code.contains(t))
+        .collect();
+    Some(if !code.contains("hf-seek") || !clocks.is_empty() {
+        let mut why = Vec::new();
+        if !code.contains("hf-seek") {
+            why.push(
+                "draw the scene in a window \"hf-seek\" listener from its detail.time".to_string(),
+            );
+        }
+        if !clocks.is_empty() {
+            why.push(format!(
+                "drop {}: every frame comes from the seek time",
+                clocks.join(", ")
+            ));
+        }
+        check(
+            "three",
+            "3D drawn from the seek",
+            Status::Fail,
+            why.join("; "),
+        )
+    } else if !text_3d.is_empty() {
+        check(
+            "three",
+            "3D drawn from the seek",
+            Status::Warn,
+            format!(
+                "type set in 3D ({}): put words in HTML over the canvas, where they stay sharp and inside the frame",
+                text_3d.join(", ")
+            ),
+        )
+    } else {
+        check(
+            "three",
+            "3D drawn from the seek",
+            Status::Pass,
+            "the scene is drawn from the seek time, type is flat",
+        )
+    })
 }
 
 /// `http://` and `https://` references in the graphic's text files (XML namespaces aside), and
@@ -297,8 +373,11 @@ fn network_refs(files: &[(String, String)]) -> Vec<String> {
                     .take_while(|c| !c.is_whitespace() && !matches!(c, ')' | '<' | '>'))
                     .take(80)
                     .collect();
-                // XML namespaces, and GSAP from a CDN (the render uses the local copy).
-                if reference.contains("www.w3.org/") || super::gsap::is_cdn_link(&reference) {
+                // XML namespaces, and GSAP or three.js from a CDN (the render uses the local copy).
+                if reference.contains("www.w3.org/")
+                    || super::gsap::is_cdn_link(&reference)
+                    || super::three::is_cdn_link(&reference)
+                {
                     continue;
                 }
                 found.push(format!("{path}: {reference}"));
@@ -641,6 +720,13 @@ fn findings(report: &Value, section: &str, severity: &str) -> Vec<String> {
         .into_iter()
         .flatten()
         .filter(|f| f["severity"].as_str() == Some(severity))
+        // The GL driver's own notes on a WebGL canvas (a stall while frames are read back) say
+        // nothing about the graphic.
+        .filter(|f| {
+            !f["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("GL Driver Message"))
+        })
         .map(|f| {
             let mut line = f["message"]
                 .as_str()
@@ -1371,8 +1457,9 @@ fn one_run(
             html = super::as_split_part(&marked, run.size.0, run.size.1);
         }
         std::fs::write(stage.join(super::ENTRY), html).map_err(|e| e.to_string())?;
-        // GSAP, when the composition loads it, beside it (fetched once).
-        super::gsap::stage(&stage, cancel)
+        // GSAP and three.js, when the composition loads them, beside it (fetched once).
+        super::gsap::stage(&stage, cancel)?;
+        super::three::stage(&stage, cancel)
     })();
     if let Err(error) = staged {
         return RunResult {
@@ -1720,6 +1807,37 @@ mod tests {
     }
 
     #[test]
+    fn a_3d_graphic_draws_from_the_seek_with_flat_type() {
+        let status = |code: &str| {
+            three_check(&[("index.html".to_string(), code.to_string())]).map(|c| c.status)
+        };
+        let seeks = r#"<script type="module">import * as THREE from "three";
+window.addEventListener("hf-seek", (e) => draw(e.detail.time));</script>"#;
+        assert_eq!(status(seeks), Some(Status::Pass));
+        // No seek listener, or a clock of its own: the render would freeze or differ each time.
+        assert_eq!(
+            status(r#"<script type="module">import * as THREE from "three";</script>"#),
+            Some(Status::Fail)
+        );
+        assert_eq!(
+            status(&format!(
+                "{seeks}<script>requestAnimationFrame(loop)</script>"
+            )),
+            Some(Status::Fail)
+        );
+        assert_eq!(
+            status(&format!("{seeks}<script>new TextGeometry('Hi')</script>")),
+            Some(Status::Warn)
+        );
+        // A graphic without three.js gets no such check.
+        assert_eq!(status("<script>requestAnimationFrame(loop)</script>"), None);
+        for name in ["scene-title", "device"] {
+            let html = super::super::templates::find(name).unwrap().html();
+            assert_eq!(status(html), Some(Status::Pass), "{name}");
+        }
+    }
+
+    #[test]
     fn the_network_and_missing_colours_fail() {
         let html = r#"<html><body><script src="https://cdn.example.com/gsap.js"></script>
             <svg xmlns="http://www.w3.org/2000/svg"></svg>
@@ -1931,8 +2049,9 @@ mod tests {
             }
             assert!(report.passed, "{} fails the gate", template.name);
             assert!(Path::new(report.sheet.as_deref().unwrap()).is_file());
-            // A picture part with pictures in it: a library illustration and a wide screenshot.
-            if template.name == "picture" {
+            // A picture part, and the device, with pictures in it: a library illustration and
+            // a wide screenshot.
+            if matches!(template.name, "picture" | "device") {
                 let image = crate::image_library::catalog()
                     .images
                     .iter()
@@ -1949,14 +2068,26 @@ mod tests {
                         [255, 255, 255]
                     })
                 });
+                // The device turns into a phone for a tall one.
+                let mut tall = Vec::new();
+                image::DynamicImage::ImageRgb8(image::imageops::rotate90(&shot))
+                    .write_to(
+                        &mut std::io::Cursor::new(&mut tall),
+                        image::ImageFormat::Png,
+                    )
+                    .unwrap();
                 let mut png = Vec::new();
                 image::DynamicImage::ImageRgb8(shot)
                     .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
                     .unwrap();
-                for (name, file, bytes) in [
+                let mut pictures = vec![
                     ("library", image.src(), image.bytes().to_vec()),
                     ("screenshot", "images/own-settings.png".to_string(), png),
-                ] {
+                ];
+                if template.name == "device" {
+                    pictures.push(("tall", "images/own-phone.png".to_string(), tall));
+                }
+                for (name, file, bytes) in pictures {
                     super::super::write_file(&dir, &file, &bytes).unwrap();
                     let mut source = super::super::read_source(&dir).unwrap();
                     source
@@ -1964,12 +2095,13 @@ mod tests {
                         .insert("picture".into(), Value::String(file.clone()));
                     super::super::write_source(&dir, &source).unwrap();
                     let report = run(&dir, &cache, &cancel, &mut quiet).unwrap();
-                    eprintln!("picture with {name}:\n  {}", report.lines().join("\n  "));
+                    let part = template.name;
+                    eprintln!("{part} with {name}:\n  {}", report.lines().join("\n  "));
                     if let Some(keep) = std::env::var_os("GATE_SHEETS") {
-                        let to = Path::new(&keep).join(format!("picture-{name}.png"));
+                        let to = Path::new(&keep).join(format!("{part}-{name}.png"));
                         std::fs::copy(report.sheet.as_deref().unwrap(), to).unwrap();
                     }
-                    assert!(report.passed, "picture with {name} fails the gate");
+                    assert!(report.passed, "{part} with {name} fails the gate");
                 }
             }
             if template.name == "title" {

@@ -155,6 +155,7 @@ fillers/retakes, then graphics and chapters. Reanalyse after edits; stale sugges
   ([contract](#keyboard-telemetry)), `windows.jsonl`
   ([contract](#window-telemetry)). Drives zooms, layout picks, window crop, bubble hide,
   shortcut badges and the click/whoosh lane (`sound_effects.rs`).
+- **Screen tilt** (`render::Tilt`, FX-6): the style's turn and lean put a fitted screen, its shadow, cursor and effects in 3D perspective about its middle (`Scene::tilt_screen`, right after they are pushed). The GPU gets each corner's clip-space `w`; the CPU path maps each pixel back through the inverse homography (`layer_pixels`). The tilt scales down to flat as a zoom reaches 1.5×.
 - **Screen effects** (`effects.rs`, FX-2): a box of a screen recording's own picture (0..1) over
   a stretch of its own clock, so crops, zooms, layouts and cuts never move it. `scene_at` draws
   the ones showing right after the pointer (`Scene::push_screen_effect` maps the box through the

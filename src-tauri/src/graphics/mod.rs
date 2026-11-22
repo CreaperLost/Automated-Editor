@@ -17,6 +17,7 @@ pub mod render;
 pub mod restyle;
 pub mod runtime;
 pub mod templates;
+pub mod three;
 pub mod versions;
 
 use crate::sequence::{Asset, AssetKind, Role, Stream, StreamKind, IMAGE_MAX_US};
@@ -596,8 +597,13 @@ pub fn write_file(dir: &Path, relative: &str, contents: &[u8]) -> Result<(), Str
     let localized = relative
         .to_ascii_lowercase()
         .ends_with(".html")
-        .then(|| std::str::from_utf8(contents).ok().and_then(gsap::localize))
-        .flatten();
+        .then(|| std::str::from_utf8(contents).ok())
+        .flatten()
+        .and_then(|html| {
+            let gsap = gsap::localize(html);
+            let three = three::localize(gsap.as_deref().unwrap_or(html));
+            three.or(gsap)
+        });
     let contents = localized.as_ref().map_or(contents, |html| html.as_bytes());
     write_shared(&target, contents).map_err(|e| format!("{}: {e}", target.display()))?;
     render::sources_changed();
