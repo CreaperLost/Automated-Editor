@@ -7009,6 +7009,12 @@ mod tests {
             listed.starts_with("1 clip:") && listed.contains("\"Whole\""),
             "{listed}"
         );
+        // Lively moments read the speech and change nothing (too few lines here to compare).
+        let lively = call(&ctx, "clips", json!({ "op": "lively" })).unwrap();
+        assert!(
+            lively.starts_with("No line stands out") || lively.contains("moment"),
+            "{lively}"
+        );
         // Exports pick by kind: "clips" is every clip, "shorts" every short (none here).
         assert_eq!(chosen_shorts(&ctx, "clips").unwrap().len(), 1);
         assert_eq!(chosen_shorts(&ctx, "all").unwrap().len(), 1);

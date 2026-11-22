@@ -31,6 +31,7 @@ pub mod ids;
 pub mod image_library;
 pub mod joins;
 pub mod layouts;
+pub mod lively;
 pub mod mcp;
 pub mod media;
 pub mod media_bin;

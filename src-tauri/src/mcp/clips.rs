@@ -207,12 +207,14 @@ pub enum ClipsOp {
     Rename,
     /// Remove `clip`.
     Remove,
+    /// Where the speaker gets loud or reacts (changes nothing): ideas to start from.
+    Lively,
 }
 
 #[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipsArgs {
-    /// list (default), create, find, range, add, arrange, resync, rename or remove.
+    /// list (default), create, find, range, add, arrange, resync, rename, remove or lively.
     #[serde(default)]
     pub op: ClipsOp,
     /// range, add, arrange, resync, rename, remove: the clip's id or title.
@@ -263,6 +265,7 @@ fn clips(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         ClipsOp::List => list_clips(ctx),
         ClipsOp::Create => create_clip(ctx, args),
         ClipsOp::Find => find_clips(ctx, args),
+        ClipsOp::Lively => lively(ctx, args),
         ClipsOp::Add => add_to_clip(ctx, args),
         ClipsOp::Arrange => arrange_clip(ctx, args),
         ClipsOp::Range | ClipsOp::Resync | ClipsOp::Rename | ClipsOp::Remove => {
@@ -341,6 +344,72 @@ fn list_clips(ctx: &Ctx) -> Result<Vec<Output>, String> {
         ))
         .chain(pieces.iter().cloned())
     }));
+    text(lines.join("\n"))
+}
+
+/// The lines where the speaker gets loud for them or reacts, loudest first (CLIP-2).
+fn lively(ctx: &Ctx, args: ClipsArgs) -> Result<Vec<Output>, String> {
+    let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
+    let (root, words, segments) = with_reader(ctx.state, |reader| {
+        let transcript =
+            store::load_transcript(reader.root(), &key)?.ok_or("That sound is not transcribed")?;
+        let document = reader.document();
+        let words = crate::transcript::edit::view(
+            &transcript,
+            &document.transcript_clock(&key)?,
+            document.revision,
+        )
+        .words;
+        let source = document.stream_ref(&key)?;
+        let asset = document.asset(&source.asset).ok_or("Unknown sound")?;
+        let segments =
+            crate::sequence::sources::sound_segments(reader.root(), asset, &source.stream)?;
+        Ok((reader.root().to_path_buf(), words, segments))
+    })?;
+    ctx.progress(0.2, "Measuring the speech");
+    let analyses: Vec<_> = segments
+        .iter()
+        .map(|s| {
+            crate::project::reader::safe_path(&root, &s.relative_path)
+                .and_then(|p| crate::media::polish::analyze_cached(&p))
+                .ok()
+        })
+        .collect();
+    let level = |from: u64, to: u64| {
+        let i = segments
+            .iter()
+            .position(|s| s.start_us <= from && from < s.end_us)?;
+        let analysis = analyses[i].as_ref()?;
+        let block = |us: u64| ((us - segments[i].start_us) / 100_000) as usize;
+        let blocks = analysis
+            .loudness
+            .get(block(from)..=block(to.max(from)).min(analysis.loudness.len().max(1) - 1))?;
+        (!blocks.is_empty()).then(|| blocks.iter().sum::<f64>() / blocks.len() as f64)
+    };
+    let found = crate::lively::moments(&words, level, 12);
+    if found.is_empty() {
+        return text("No line stands out: no louder stretch and no reaction phrase.");
+    }
+    let mut lines = vec![format!(
+        "{} (loudest first; a line {} dB or more over the talk around it, or a reaction):",
+        plural(found.len(), "moment"),
+        crate::lively::LOUD_DB
+    )];
+    for m in found {
+        let why = match (m.over_db.filter(|o| *o >= crate::lively::LOUD_DB), m.phrase) {
+            (Some(db), Some(p)) => format!("+{db:.0} dB, \"{p}\""),
+            (Some(db), None) => format!("+{db:.0} dB"),
+            (None, Some(p)) => format!("\"{p}\""),
+            (None, None) => String::new(),
+        };
+        lines.push(format!(
+            "{} {}..{} ({why}): {}",
+            clock(m.edited_us),
+            m.from_word,
+            m.to_word,
+            m.text
+        ));
+    }
     text(lines.join("\n"))
 }
 
