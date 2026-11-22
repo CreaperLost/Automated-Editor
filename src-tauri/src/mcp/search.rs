@@ -241,9 +241,40 @@ fn media_board(ctx: &Ctx, id: &str, notes_dir: &std::path::Path) -> Result<Vec<O
     } else {
         BOARD_TILES
     };
+    // Footage from elsewhere: one frame per shot, and where shots start (FTG-7).
+    let shots = if asset.kind == crate::sequence::AssetKind::Video {
+        match &source {
+            crate::sequence::sources::StreamSource::Video(file) => {
+                crate::media::shots::detect(file).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    let times: Vec<u64> = if shots.is_empty() {
+        (0..tiles)
+            .map(|i| asset.duration_us * (2 * i + 1) / (2 * tiles))
+            .collect()
+    } else {
+        let starts: Vec<String> = std::iter::once(0)
+            .chain(shots.iter().copied())
+            .map(clock)
+            .collect();
+        lines.push(format!(
+            "{} shots, starting at {}; the board shows one frame of each{}.",
+            starts.len(),
+            starts.join(", "),
+            if starts.len() > tiles as usize {
+                " (the longest)"
+            } else {
+                ""
+            }
+        ));
+        crate::media::shots::board_times(&shots, asset.duration_us, tiles as usize)
+    };
     let mut frames = Vec::new();
-    for i in 0..tiles {
-        let at = asset.duration_us * (2 * i + 1) / (2 * tiles);
+    for at in times {
         let jpeg = crate::commands::thumbs::thumbnail(&root, &asset.id, &source, at, TILE_HEIGHT)?;
         if let Some(jpeg) = jpeg {
             let picture = image::load_from_memory(&jpeg)
