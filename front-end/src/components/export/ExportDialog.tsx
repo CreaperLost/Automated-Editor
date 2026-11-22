@@ -169,20 +169,29 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
 
   useEscapeKey(onClose);
 
+  const chosenSettings = (): ExportSettings => ({
+    videoCodec: "h264",
+    audioCodec: "aac",
+    width: resolution.width,
+    height: resolution.height,
+    fps: preferences.fps,
+    quality: custom ? "high" : (preferences.quality as ExportQuality),
+    bitrateKbps: custom ? Math.round(preferences.mbps * 1000) : null,
+  });
   const start = (queue = false) => {
     if (custom && !mbpsValid) return;
-    onStart(
-      {
-      videoCodec: "h264",
-      audioCodec: "aac",
-      width: resolution.width,
-      height: resolution.height,
-      fps: preferences.fps,
-      quality: custom ? "high" : (preferences.quality as ExportQuality),
-      bitrateKbps: custom ? Math.round(preferences.mbps * 1000) : null,
-      },
-      queue,
-    );
+    onStart(chosenSettings(), queue);
+  };
+  // The whole video at 9:16, queued behind any export running: it shows in the list of exports.
+  const [vertical, setVertical] = useState<{ queued?: boolean; error?: string }>();
+  const startVertical = async () => {
+    if (!projectHandle || (custom && !mbpsValid)) return;
+    try {
+      await api.projectVerticalExport(projectHandle, chosenSettings(), true);
+      setVertical({ queued: true });
+    } catch (err) {
+      setVertical({ error: String(err) });
+    }
   };
   const revision = useProjectStore((s) => s.openedProject?.revision ?? 0);
 
@@ -399,8 +408,21 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
                       {saving === file.kind ? "Saving…" : file.label}
                     </Button>
                   ))}
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    title="The whole video at 9:16: stacked as a short, the screen following the clicks and typing"
+                    disabled={vertical?.queued}
+                    onClick={() => void startVertical()}
+                  >
+                    {vertical?.queued ? "9:16 queued" : "9:16 version"}
+                  </Button>
                 </div>,
-                saved?.error ? (
+                vertical?.error ? (
+                  <span role="alert" className="text-danger-fg">
+                    {vertical.error}
+                  </span>
+                ) : saved?.error ? (
                   <span role="alert" className="text-danger-fg">
                     {saved.error}
                   </span>
