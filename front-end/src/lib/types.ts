@@ -1850,6 +1850,8 @@ export interface OpenedProject {
   noiseMutes?: Record<string, SourceSpan[]>;
   captions?: CaptionSettings;
   chapters?: Chapter[];
+  /** Timeline markers, with where they play now. */
+  markers?: Marker[];
   shorts?: Short[];
   /** Screen effects (blur, hide, spotlight, magnifier, dim or blur behind a graphic). */
   effects?: ScreenEffect[];
@@ -2415,6 +2417,18 @@ export interface Chapter {
   /** The asset whose time `sourceUs` is in; absent: the first recording. */
   media?: string;
   /** Edited-timeline start, or null when that moment was cut. Filled in by the backend. */
+  editedUs?: number | null;
+}
+
+/** A timeline marker to come back to (UI-2), anchored in source time so it follows cuts. */
+export interface Marker {
+  id: string;
+  sourceUs: number;
+  /** An optional note. */
+  note?: string;
+  /** The asset whose time `sourceUs` is in; absent: the first recording. */
+  media?: string;
+  /** Edited-timeline place, or null when that moment was cut. Filled in by the backend. */
   editedUs?: number | null;
 }
 

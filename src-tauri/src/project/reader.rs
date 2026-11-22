@@ -130,6 +130,8 @@ pub struct OpenedProject {
     #[serde(default)]
     pub chapters: Vec<crate::chapters::Chapter>,
     #[serde(default)]
+    pub markers: Vec<crate::chapters::Marker>,
+    #[serde(default)]
     pub shorts: Vec<crate::shorts::Short>,
     /// Screen effects (FX-2).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -608,6 +610,7 @@ impl ProjectReader {
                 noise_mutes: Default::default(),
                 captions: Default::default(),
                 chapters: Vec::new(),
+                markers: Vec::new(),
                 shorts: Vec::new(),
                 effects: Vec::new(),
                 short_view: None,
@@ -1067,6 +1070,16 @@ impl ProjectReader {
         Ok(self.done())
     }
 
+    pub fn set_markers(
+        &mut self,
+        expected_revision: u64,
+        markers: Vec<crate::chapters::Marker>,
+    ) -> Result<OpenedProject, String> {
+        self.history
+            .set_markers(expected_revision, markers, &self.root)?;
+        Ok(self.done())
+    }
+
     pub fn add_take_short(
         &mut self,
         expected_revision: u64,
@@ -1224,6 +1237,7 @@ impl ProjectReader {
         view.zooms = timeline.zooms_with_ranges();
         view.layouts = timeline.layouts_with_ranges();
         view.chapters = Vec::new();
+        view.markers = Vec::new();
         Ok(view)
     }
 
@@ -1299,6 +1313,9 @@ impl ProjectReader {
         let mut chapters = document.chapters.clone();
         crate::chapters::attach_edited(&mut chapters, document);
         self.summary.chapters = chapters;
+        let mut markers = document.markers.clone();
+        crate::chapters::attach_edited_markers(&mut markers, document);
+        self.summary.markers = markers;
         let mut shorts = document.shorts.clone();
         crate::shorts::attach_edited(&mut shorts, document);
         self.summary.shorts = shorts;

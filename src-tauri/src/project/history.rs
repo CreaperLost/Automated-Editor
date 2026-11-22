@@ -168,7 +168,7 @@ pub fn describe(before: &EditDocument, after: &EditDocument) -> String {
             parts.push("Timeline edit".into());
         }
     }
-    let named: [(bool, &str); 14] = [
+    let named: [(bool, &str); 15] = [
         (!placed && before.assets != after.assets, "Media"),
         (before.noise_mutes != after.noise_mutes, "Mouth noises"),
         (
@@ -182,6 +182,7 @@ pub fn describe(before: &EditDocument, after: &EditDocument) -> String {
         (before.audio != after.audio, "Sound"),
         (before.captions != after.captions, "Captions"),
         (before.chapters != after.chapters, "Chapters"),
+        (before.markers != after.markers, "Markers"),
         (before.shorts != after.shorts, "Shorts"),
         (before.style != after.style, "Style"),
         (before.cleanup != after.cleanup, "Cleanup settings"),

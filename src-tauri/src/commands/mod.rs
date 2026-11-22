@@ -1757,6 +1757,17 @@ pub fn project_chapters_set_impl(
     })
 }
 
+pub fn project_markers_set_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    markers: Vec<crate::chapters::Marker>,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        reader.set_markers(expected_revision, markers)
+    })
+}
+
 /// The check before export, of the edit as it is now.
 pub fn project_check_impl(
     state: &AppState,

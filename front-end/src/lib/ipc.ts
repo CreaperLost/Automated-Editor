@@ -68,6 +68,7 @@ import {
   TranscriptCutSuggestion,
   AiProvider,
   Chapter,
+  Marker,
   Short,
   ShortLayout,
   AiSettings,
@@ -867,6 +868,13 @@ export const api = {
       atUs,
       untilUs: untilUs ?? null,
       shortId: editTarget,
+    }),
+  /** Replaces the timeline markers (one undo step). */
+  projectMarkersSet: (projectHandle: string, expectedRevision: number, markers: Marker[]) =>
+    invokeTauri<OpenedProject>("project_markers_set", {
+      projectHandle,
+      expectedRevision,
+      markers: markers.map(({ id, sourceUs, note, media }) => ({ id, sourceUs, note: note ?? "", media })),
     }),
   projectChaptersSet: (projectHandle: string, expectedRevision: number, chapters: Chapter[]) =>
     invokeTauri<OpenedProject>("project_chapters_set", {

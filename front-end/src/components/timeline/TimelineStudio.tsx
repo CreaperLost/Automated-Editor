@@ -23,6 +23,7 @@ import {
   RotateCcw,
   Scissors,
   CopyPlus,
+  Bookmark,
   Trash2,
   Unlink,
   Volume2,
@@ -45,6 +46,7 @@ import { loadFavourites, pressLayoutKey } from "../../stores/layoutsStore";
 import { ClipThumbs, MIN_THUMB_LANE_PX } from "./ClipThumbs";
 import {
   assetById,
+  clipAt,
   clipEnd,
   clipName,
   clipOut,
@@ -71,6 +73,7 @@ import {
 import {
   type Clip,
   type EditedSpan,
+  type Marker,
   type OpenedProject,
   type Role,
   type SeqTrack,
@@ -96,6 +99,9 @@ import { useZoomLane } from "./useZoomLane";
 import { useCaptionLane } from "./useCaptionLane";
 import { useSoundEffectsLane } from "./useSoundEffectsLane";
 import { useLayoutLane } from "./useLayoutLane";
+
+/** A marker this close to the playhead is the one there (removed, or skipped when jumping). */
+const MARKER_NEAR_US = 100_000;
 
 /** The playhead now, read when needed: the timeline itself does not re-render as it moves. */
 const nowUs = () => useProjectStore.getState().currentTimeUs;
@@ -1170,6 +1176,39 @@ export const TimelineStudio: React.FC = () => {
       direction < 0 ? [...edges].reverse().find((e) => e < currentTimeUs) : edges.find((e) => e > currentTimeUs && e <= durationUs);
     if (target !== undefined) seekToUs(target);
   };
+  // ---- Markers (UI-2): moments to come back to, anchored in source time ----------------------
+  const markers = openedProject?.shortView ? [] : (openedProject?.markers ?? []);
+  const placedMarkers = markers
+    .filter((m): m is Marker & { editedUs: number } => typeof m.editedUs === "number")
+    .sort((a, b) => a.editedUs - b.editedUs);
+  /** Drops a marker at the playhead, or removes the one within a tenth of a second of it. */
+  const toggleMarker = () => {
+    if (!openedProject || openedProject.shortView) return;
+    const at = nowUs();
+    const near = placedMarkers.find((m) => Math.abs(m.editedUs - at) <= MARKER_NEAR_US);
+    if (near) {
+      void runEdit((p) => api.projectMarkersSet(p.projectHandle, p.revision, markers.filter((m) => m.id !== near.id)));
+      return;
+    }
+    // Anchored to what plays there: the top picture, else any clip.
+    const tracks = [...sequence.tracks.filter((t) => t.kind === "video")].reverse().concat(sequence.tracks.filter((t) => t.kind === "audio"));
+    const clip = tracks.map((t) => clipAt(t, at)).find((c) => c !== undefined);
+    if (!clip) {
+      setEditError("Move the playhead onto a clip to drop a marker there.");
+      return;
+    }
+    const sourceUs = Math.round(clipSourceAt(clip, at));
+    const id = `mk-${sourceUs}-${Date.now().toString(36)}`;
+    void runEdit((p) => api.projectMarkersSet(p.projectHandle, p.revision, [...markers, { id, sourceUs, media: clip.asset }]));
+  };
+  const jumpToMarker = (direction: -1 | 1) => {
+    const at = nowUs();
+    const target =
+      direction < 0
+        ? [...placedMarkers].reverse().find((m) => m.editedUs < at - MARKER_NEAR_US / 2)
+        : placedMarkers.find((m) => m.editedUs > at + MARKER_NEAR_US / 2);
+    if (target) seekToUs(target.editedUs);
+  };
   const markIn = () => {
     const at = nowUs();
     selectRange(at, range && range.endUs > at ? range.endUs : durationUs);
@@ -1244,6 +1283,9 @@ export const TimelineStudio: React.FC = () => {
     deselectAll: () => setSelectedClipIds([]),
     toggleLink,
     duplicate: duplicateSelection,
+    marker: toggleMarker,
+    previousMarker: () => jumpToMarker(-1),
+    nextMarker: () => jumpToMarker(1),
     markIn,
     markOut,
     undo,
@@ -1260,7 +1302,7 @@ export const TimelineStudio: React.FC = () => {
     goToEnd: () => seekToUs(Number.MAX_SAFE_INTEGER),
   };
   // Actions that act once per press; the rest (stepping, zoom) repeat while the key is held.
-  const ONCE: HotkeyAction[] = ["playPause", "shuttleForward", "pause", "split", "rippleTrimPrevious", "rippleTrimNext", "toggleLink", "duplicate", "deleteSelection", "rippleDelete", "selectAll", "deselectAll"];
+  const ONCE: HotkeyAction[] = ["playPause", "shuttleForward", "pause", "split", "rippleTrimPrevious", "rippleTrimNext", "toggleLink", "duplicate", "marker", "previousMarker", "nextMarker", "deleteSelection", "rippleDelete", "selectAll", "deselectAll"];
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       // A key another part handled (a transcript cut, a tab's arrows), or pressed while a dialog
@@ -1968,6 +2010,12 @@ export const TimelineStudio: React.FC = () => {
           onClick={() => void rippleTrim("next")}
         />
         <IconButton
+          icon={Bookmark}
+          label={`Drop a marker at the playhead, or remove the one there${hint("marker")}`}
+          disabled={!openedProject || editing || durationUs === 0 || Boolean(openedProject?.shortView)}
+          onClick={toggleMarker}
+        />
+        <IconButton
           icon={CopyPlus}
           label={`Duplicate the selected clips right after them${hint("duplicate")}`}
           disabled={!openedProject || editing || selectedClipIds.length === 0}
@@ -2129,6 +2177,21 @@ export const TimelineStudio: React.FC = () => {
                     <div className="h-full border-l border-studio-300/70" />
                     <span className="absolute top-0.5 left-1 max-w-[180px] truncate rounded bg-studio-700 px-1.5 text-meta text-studio-100">{chapter.title}</span>
                   </div>
+                ))}
+                {/* Markers: click one to go there; M at the playhead removes it */}
+                {placedMarkers.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    className="absolute top-0 z-20 -translate-x-1/2 text-accent hover:text-accent-hover"
+                    style={{ left: pct(m.editedUs) }}
+                    title={`${m.note || "Marker"}: click to go there${hint("marker") ? `; at the playhead${hint("marker")} removes it` : ""}`}
+                    aria-label={m.note || "Marker"}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={() => seekToUs(m.editedUs)}
+                  >
+                    <Bookmark size={12} fill="currentColor" />
+                  </button>
                 ))}
                 <AtPlayhead spanUs={spanUs}>
                   {(left) => (

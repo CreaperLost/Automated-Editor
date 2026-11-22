@@ -1877,6 +1877,17 @@ fn project_chapters_set(
 
 #[cfg(feature = "tauri-app")]
 #[tauri::command]
+fn project_markers_set(
+    state: State<'_, AppState>,
+    project_handle: String,
+    expected_revision: u64,
+    markers: Vec<chapters::Marker>,
+) -> Result<project::OpenedProject, String> {
+    commands::project_markers_set_impl(&state, project_handle, expected_revision, markers)
+}
+
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
 fn project_check(
     state: State<'_, AppState>,
     project_handle: String,
@@ -3768,6 +3779,7 @@ pub fn run() {
             ai_set_api_key,
             transcript_ai_suggest,
             project_chapters_set,
+            project_markers_set,
             project_check,
             project_check_frames,
             project_check_fix,
