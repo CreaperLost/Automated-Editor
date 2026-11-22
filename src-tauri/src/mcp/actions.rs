@@ -278,7 +278,7 @@ pub static ACTIONS: [ToolDef; 36] = [
         description: "Exports the video (the canvas size and frame rate unless given; next to the \
             project unless `destination`). Waits until done and reports progress unless `wait: \
             false`, which returns a job id for export_status; `cancel` with that id stops it. \
-            `file` saves another file instead (`graphics`: a folder of see-through MOVs).",
+            `file` saves another file instead.",
         schema: schema::<ExportArgs>,
         // Writes the video file (over `destination` if it exists).
         read_only: false,
@@ -4251,8 +4251,8 @@ pub struct ExportArgs {
     pub cancel: Option<String>,
     /// Save another file instead of the video, of the video or of `short`: subtitles (`srt`,
     /// `vtt`, from the captions as cut, hidden words left out), the transcript (`txt`, `md`
-    /// with the chapters as headings), the sound alone (`wav`) or each graphic with its alpha
-    /// (`graphics`). `settings` don't apply.
+    /// with the chapters as headings), the sound alone (`wav`) or a folder for Premiere, Resolve
+    /// or Final Cut (`editor`). `settings` don't apply.
     #[serde(default)]
     pub file: Option<crate::export::files::FileKind>,
     /// The whole video at 9:16, stacked as a short.
@@ -8522,12 +8522,16 @@ mod tests {
         let wav = std::fs::read(dir.path().join("Lesson.wav")).unwrap();
         assert_eq!(&wav[..4], b"RIFF");
         assert_eq!(wav.len(), 44 + 4 * 48_000 * 4);
-        // Graphics go in a folder of their own; with none it says so and makes nothing.
-        assert_eq!(
-            call(&ctx, "export", json!({ "file": "graphics" })).unwrap_err(),
-            "The edit has no graphics"
-        );
-        assert!(!dir.path().join("Lesson graphics").exists());
+        // Another editor gets a folder: the cut as timeline files (no graphics here).
+        call(&ctx, "export", json!({ "file": "editor" })).unwrap();
+        let folder = dir.path().join("Lesson for editors");
+        let fcpxml = std::fs::read_to_string(folder.join("Lesson.fcpxml")).unwrap();
+        assert!(fcpxml.contains("<asset-clip"), "{fcpxml}");
+        assert!(std::fs::read_to_string(folder.join("Lesson.xml"))
+            .unwrap()
+            .contains("<clipitem"));
+        assert!(folder.join("Read me.txt").is_file());
+        assert!(!folder.join("Graphics").exists());
         assert!(call(&ctx, "export", json!({ "file": "srt", "short": "x" }))
             .unwrap_err()
             .contains("No shorts or clips yet"));

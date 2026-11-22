@@ -21,7 +21,7 @@ Implementation: [Architecture](architecture.md). Work: [Roadmap](ROADMAP.md).
   [remaining FCL/PUB acceptance](verification.md#faceless-and-publish-acceptance) are separate.
   No new full suite, native walkthrough, listening check, paid call or live upload was run.
 - Suggested work order now starts with persistence/export correctness. STY-2 still needs George's portrait references
-  and over-face verdict. The pending upload and voice checks are not completed by unit tests.
+  (over-face is settled: captions may cover the mouth). The pending upload and voice checks are not completed by unit tests.
 
 ## Cloud setup and access
 
@@ -215,7 +215,7 @@ design questions stay beside their evidence in [gap.md](gap.md), not repeated he
    storage.googleapis.com) are allowed.
 6. **Preview delivery:** choose Cloudflare Pages, GitHub Pages, or CI screenshot artifacts
    only (CL-10). Accounts/secrets are needed only for the chosen hosting path.
-7. **Pending creative/setup checks:** supply STY-2 references and the over-face verdict,
+7. **Pending creative/setup checks:** supply STY-2 references (over-face settled 22 Nov: captions may cover the mouth),
    listen to the music/take matching, provide longer real Greek speech, and renew ElevenLabs
    only if its direct route is wanted. FIX-9 real-client transcription consent remains a check;
    the settled policy that online fillers apply directly is not reopened.
