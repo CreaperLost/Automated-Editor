@@ -3,10 +3,10 @@ import { Check, Crosshair, Plus, RefreshCw, RotateCcw, Trash2, X } from "lucide-
 import { useProjectStore } from "../../stores/projectStore";
 import { useDebouncedSave } from "../../hooks/useDebouncedSave";
 import { api } from "../../lib/ipc";
-import { DEFAULT_ZOOM_SETTINGS, type OpenedProject, type ProjectZoom, type ZoomSettings, type ZoomSuggestion } from "../../lib/types";
+import { DEFAULT_ZOOM_SETTINGS, type OpenedProject, type ProjectZoom, type ZoomCurve, type ZoomSettings, type ZoomSuggestion } from "../../lib/types";
 import { InspectorSection, MoreSettings } from "../inspector/InspectorSection";
 import { PresetMarks } from "../presets/PresetMarks";
-import { Notice, Switch } from "../ui";
+import { Notice, Segmented, Switch } from "../ui";
 import { formatTime } from "../../lib/format";
 
 const ORIGIN_LABEL = { click: "Click", dwell: "Hover", cluster: "Clicks", typing: "Typing" } as const;
@@ -245,6 +245,23 @@ export const ZoomPanel: React.FC = () => {
             format={(v) => (v ? `${v} ms` : "cut")}
             onChange={(transitionMs) => setSettings({ transitionMs })}
           />
+          {settings.transitionMs > 0 && <div className="flex items-center justify-between gap-3">
+            <span className="text-label text-studio-200" title="How the zoom moves over its transition">
+              Glide
+            </span>
+            <Segmented<ZoomCurve>
+              label="How zooms glide in and out"
+              size="sm"
+              value={settings.curve ?? "smooth"}
+              onChange={(curve) => setSettings({ curve })}
+              options={[
+                { value: "smooth", label: "Smooth" },
+                { value: "snappy", label: "Snappy" },
+                { value: "gentle", label: "Gentle" },
+                { value: "linear", label: "Even" },
+              ]}
+            />
+          </div>}
           <Slider
             label="Shortest zoom"
             value={settings.minHoldMs}

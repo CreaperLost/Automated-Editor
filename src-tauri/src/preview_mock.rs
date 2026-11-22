@@ -52,6 +52,24 @@ fn preview_mock_writes_the_front_end_answers() {
     )
     .unwrap();
 
+    // Two timeline markers, so the ruler shows them.
+    let marker = |id: &str, at: u64, note: &str| crate::chapters::Marker {
+        id: id.into(),
+        source_us: at,
+        note: note.into(),
+        media: None,
+        edited_us: None,
+    };
+    let opened = crate::commands::project_markers_set_impl(
+        &state,
+        handle.clone(),
+        opened.revision,
+        vec![
+            marker("mk-1", 1_200_000, "Tighten this"),
+            marker("mk-2", 4_400_000, ""),
+        ],
+    )
+    .unwrap();
     put("open_project", json(&opened));
     put(
         "presets",

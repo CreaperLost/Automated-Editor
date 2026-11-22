@@ -322,7 +322,7 @@ impl AudioMixer {
                 clips: Vec::new(),
             });
         }
-        let polish = PolishPlan::build(root, &audio, &lanes, duration);
+        let polish = PolishPlan::build_with(root, &audio, &lanes, duration, &clean_files);
         let mut by_lane = Vec::new();
         let mut stretches = 0;
         for lane in &lanes {

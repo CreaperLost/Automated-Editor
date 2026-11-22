@@ -31,12 +31,14 @@ one's arguments, with `args` it runs it (`more` `tool: clips` `args: {"op": "cre
 
 ## 3. Pick (ask)
 
-Ask how many (default 3, at most 5). Start from **ideas**, not stretches: one premise a viewer
+Ask how many (default 3, at most 5). `clips` `op: lively` lists the lines where the speaker gets
+loud or reacts: good places to look first. Start from **ideas**, not stretches: one premise a viewer
 gets in a sentence (a claim, a how-to, a result), then gather the words that serve it from
 anywhere in the video, in the order that tells it best, hook first. One stretch is fine when
 the idea sits in one place. Each clip:
 - makes sense on its own, with no "as I said", "like before", "this one" pointing elsewhere;
-- opens with a hook in the first sentence: a question, a bold claim, a result, "here's how to";
+- opens with a hook in the first sentence: a question, a bold claim, a result, "here's how to"
+  (`create` with `hook: true` moves its loudest 3 s to the front when it has none);
 - runs 20 to 60 seconds; every piece starts and ends on whole sentences, the last on the payoff;
 - shows something on screen while they talk, when there is a choice;
 - uses each word once, and doesn't repeat the clips already made.

@@ -108,7 +108,8 @@ The passes:
 6. **Zooms** (only with mouse data): `zooms` with `apply: false` (count, average length, how
    far in; add `settings` to try others: nothing is saved). Choices: yes / fewer and longer /
    shorter / skip. "Fewer and longer" raises `minHoldMs` and `mergeGapMs` (default 5000 each),
-   "shorter" lowers them; how far in is `clickScale` (1.6 default). Then `zooms` with the
+   "shorter" lowers them; how far in is `clickScale` (1.6 default); with a `transitionMs`, the
+   glide is `curve` (smooth, snappy, gentle or linear). Then `zooms` with the
    same `settings`. A cut never makes a zoom jump: its glide plays whole on the edited video.
 
 <!-- thorough -->

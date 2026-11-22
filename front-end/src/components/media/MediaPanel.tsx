@@ -5,6 +5,7 @@ import {
   Film,
   FolderInput,
   Image as ImageIcon,
+  Link,
   Music,
   Plus,
   Search,
@@ -79,6 +80,18 @@ const MediaList: React.FC = () => {
       if (paths.length === 0) return;
       applyOpenedProject(await api.projectMediaImport(project.projectHandle, project.revision, paths));
     });
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [link, setLink] = useState("");
+  /** Downloads the linked video into the project's media/downloads folder and imports it. */
+  const importLink = () =>
+    run("Downloading…", async () => {
+      const project = useProjectStore.getState().openedProject;
+      const url = link.trim();
+      if (!project || !url) return;
+      applyOpenedProject(await api.projectMediaFromLink(project.projectHandle, url));
+      setLink("");
+      setLinkOpen(false);
+    });
   const importFiles = () => importFrom(() => api.pickMediaFiles());
   const importFolder = () =>
     importFrom(async () => {
@@ -144,7 +157,42 @@ const MediaList: React.FC = () => {
             disabled={!openedProject || busy !== null}
             onClick={() => void importFolder()}
           />
+          <IconButton
+            icon={Link}
+            variant={linkOpen ? "primary" : "secondary"}
+            label="Download a video from a link (YouTube and most video sites)"
+            disabled={!openedProject || busy !== null}
+            onClick={() => setLinkOpen((open) => !open)}
+          />
         </div>
+        {linkOpen && (
+          <form
+            className="flex items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void importLink();
+            }}
+          >
+            <input
+              type="url"
+              aria-label="Video link"
+              placeholder="https://…"
+              value={link}
+              onChange={(e) => setLink(e.target.value)}
+              className="ui-field flex-1 min-w-0"
+              autoFocus
+            />
+            <Button
+              type="submit"
+              variant="secondary"
+              size="sm"
+              disabled={busy !== null || !link.trim()}
+              title="Saved in the project's media/downloads folder, with the licence the site states"
+            >
+              Download
+            </Button>
+          </form>
+        )}
         {assets.length > 0 && (
           <>
             <div className="relative">

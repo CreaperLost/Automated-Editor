@@ -68,6 +68,7 @@ import {
   TranscriptCutSuggestion,
   AiProvider,
   Chapter,
+  Marker,
   Short,
   ShortLayout,
   AiSettings,
@@ -791,6 +792,9 @@ export const api = {
     }),
   projectMediaImport: (projectHandle: string, expectedRevision: number, paths: string[]) =>
     invokeTauri<OpenedProject>("project_media_import", { projectHandle, expectedRevision, paths }),
+  /** Downloads a video from a link (yt-dlp) into the project and imports it. */
+  projectMediaFromLink: (projectHandle: string, url: string, fromS: number | null = null, toS: number | null = null) =>
+    invokeTauri<OpenedProject>("project_media_from_link", { projectHandle, url, fromS, toS }),
   projectMediaRemove: (projectHandle: string, expectedRevision: number, assetId: string) =>
     invokeTauri<OpenedProject>("project_media_remove", { projectHandle, expectedRevision, assetId }),
   /** The sound effects library, or the sounds matching `query`. */
@@ -864,6 +868,13 @@ export const api = {
       atUs,
       untilUs: untilUs ?? null,
       shortId: editTarget,
+    }),
+  /** Replaces the timeline markers (one undo step). */
+  projectMarkersSet: (projectHandle: string, expectedRevision: number, markers: Marker[]) =>
+    invokeTauri<OpenedProject>("project_markers_set", {
+      projectHandle,
+      expectedRevision,
+      markers: markers.map(({ id, sourceUs, note, media }) => ({ id, sourceUs, note: note ?? "", media })),
     }),
   projectChaptersSet: (projectHandle: string, expectedRevision: number, chapters: Chapter[]) =>
     invokeTauri<OpenedProject>("project_chapters_set", {

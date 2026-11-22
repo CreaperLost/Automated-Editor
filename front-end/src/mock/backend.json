@@ -1682,16 +1682,16 @@
     "config": null,
     "diagnostics": [],
     "guarded": false,
-    "key": "rec-1fe3a1ced134.mic",
+    "key": "rec-eb280aa4c12b.mic",
     "noises": [],
-    "revision": 0
+    "revision": 1
   },
   "open_project": {
     "assets": [
       {
         "durationUs": 6000000,
         "height": 180,
-        "id": "rec-1fe3a1ced134",
+        "id": "rec-eb280aa4c12b",
         "kind": "recording",
         "name": "smoke",
         "path": "/home/george/AeroEdits/smoke.aero",
@@ -1719,6 +1719,7 @@
       "matchTakes": true,
       "mouthClickStrength": 35,
       "mouthClicks": false,
+      "noiseModel": "spectral",
       "noiseReduction": false,
       "noiseReductionDb": 12.0,
       "normalize": true,
@@ -1728,7 +1729,8 @@
         "volumeDb": 0.0,
         "whooshes": false
       },
-      "targetLufs": -14.0
+      "targetLufs": -14.0,
+      "voiceChain": false
     },
     "captions": {
       "enabled": false,
@@ -1809,20 +1811,33 @@
       "sections": [],
       "transitionMs": 350
     },
+    "markers": [
+      {
+        "editedUs": 1200000,
+        "id": "mk-1",
+        "note": "Tighten this",
+        "sourceUs": 1200000
+      },
+      {
+        "editedUs": 4400000,
+        "id": "mk-2",
+        "sourceUs": 4400000
+      }
+    ],
     "name": "Smoke",
     "noiseMutes": {},
     "previewAvailable": false,
-    "projectHandle": "6f9f7a3c-c7d1-4d47-9fa4-1f0c2c7826fe",
+    "projectHandle": "3bdd8f6f-ba00-4fd6-acaa-d36bb4be6ed3",
     "projectPath": "/home/george/AeroEdits/Smoke",
     "redoAvailable": false,
-    "revision": 0,
+    "revision": 1,
     "sequence": {
       "magnetic": true,
       "tracks": [
         {
           "clips": [
             {
-              "asset": "rec-1fe3a1ced134",
+              "asset": "rec-eb280aa4c12b",
               "durationUs": 6000000,
               "id": "c1",
               "inUs": 0,
@@ -1837,7 +1852,7 @@
         {
           "clips": [
             {
-              "asset": "rec-1fe3a1ced134",
+              "asset": "rec-eb280aa4c12b",
               "durationUs": 6000000,
               "id": "c2",
               "inUs": 0,
@@ -1852,7 +1867,8 @@
       ]
     },
     "shorts": [],
-    "undoAvailable": false,
+    "undoAvailable": true,
+    "undoLabel": "Markers",
     "zoomSettings": {
       "clickScale": 1.6,
       "follow": true,
@@ -1870,12 +1886,12 @@
     "diagnostics": [],
     "durationUs": 6000000,
     "error": null,
-    "generation": 1,
+    "generation": 4,
     "positionUs": 0,
     "previewAvailable": false,
-    "projectHandle": "6f9f7a3c-c7d1-4d47-9fa4-1f0c2c7826fe",
+    "projectHandle": "3bdd8f6f-ba00-4fd6-acaa-d36bb4be6ed3",
     "speed": 1.0,
-    "state": "ready"
+    "state": "paused"
   },
   "presets": {
     "changed": 0,
@@ -1889,6 +1905,7 @@
         "matchTakes": true,
         "mouthClickStrength": 35,
         "mouthClicks": false,
+        "noiseModel": "spectral",
         "noiseReduction": false,
         "noiseReductionDb": 12.0,
         "normalize": true,
@@ -1898,7 +1915,8 @@
           "volumeDb": 0.0,
           "whooshes": false
         },
-        "targetLufs": -14.0
+        "targetLufs": -14.0,
+        "voiceChain": false
       },
       "captions": {
         "enabled": false,
@@ -2080,7 +2098,7 @@
       {
         "builtin": true,
         "folder": null,
-        "method": "# Preset: Clips\n\nVertical clips (9:16) cut from the edited video, the app's Clips tab: you read the transcript\nand pick the moments yourself (no AI key needed), the app builds each clip with the look of the\nothers (a split-screen base layout by default) and picks its layout sections (camera only for\nthe opening line and while the speaker talks without the mouse, screen only while the clicking\nis busy, the base otherwise). Run it after the video's own edit, so the clips come from the\ncleaned-up talk. Clips are not shorts: a short is made from a new take the user recorded\n(`preset` `shorts`, the Shorts tab); never touch those here.\n\nStep by step by default; automatic when the user says so (\"auto\", \"no questions\"): then use\nthe defaults below, show the picks in one message and go on. Export still waits for the user's\ngo.\n\n`clips`, `faces`, `captions` and `layouts` are behind `more`: `more` with `tool` alone gives\none's arguments, with `args` it runs it (`more` `tool: clips` `args: {\"op\": \"create\", ...}`).\n\n## 1. Project (automatic)\n\n- `status`. Clips need a transcript: if nothing is transcribed, `transcribe` (online, the\n  language detected; as in the Tutorial preset).\n- `status` says how many clips are already made. If there are some, `clips` (`op: list`, the\n  default) lists them; ask whether to keep them (default) or start over (`clips` `op: remove`\n  with `clip`, one per clip). Shorts made from a take are never removed here.\n- With a camera, `faces` (it waits until the face is found in every camera; clips centre\n  each camera clip on it). Pass on a camera with little or no face found.\n\n## 2. Read (automatic)\n\n`transcript_get` for the speech. It is the edited video's words with their ids and times.\n\n## 3. Pick (ask)\n\nAsk how many (default 3, at most 5). Start from **ideas**, not stretches: one premise a viewer\ngets in a sentence (a claim, a how-to, a result), then gather the words that serve it from\nanywhere in the video, in the order that tells it best, hook first. One stretch is fine when\nthe idea sits in one place. Each clip:\n- makes sense on its own, with no \"as I said\", \"like before\", \"this one\" pointing elsewhere;\n- opens with a hook in the first sentence: a question, a bold claim, a result, \"here's how to\";\n- runs 20 to 60 seconds; every piece starts and ends on whole sentences, the last on the payoff;\n- shows something on screen while they talk, when there is a choice;\n- uses each word once, and doesn't repeat the clips already made.\n\nShow them as a numbered list: the idea, its pieces (time in the video, first words), length,\na catchy title (under 60 characters, it is also the file name) and one line on why it works.\nAsk for an OK or changes (automatic: go).\n\n## 4. Make (automatic)\n\nFor each pick, `clips` with `op: create`, `title`, `idea`, `reason` and `pieces`\n(`[{fromWord, toWord}]` in play order; one stretch can be `fromWord`/`toWord`). A gathered clip\ngets its own timeline, the pieces as the video has them now. It copies the look of the clips\nalready made (else the project's clips preset) and picks its layout sections. Report one line per clip with its sections (`layouts` with `short`: the clip's id).\nTo fix a pick: `op: add` with `clip` and `pieces` plays more after it (its own cuts stay);\n`op: arrange` with `clip` and `order` (piece numbers, as `list` shows them) reorders or drops\npieces;\n`op: resync` with `clip` takes the video's cuts again after the video changed (each piece's; the\nclip's own cuts go);\n`op: range` with `clip`, `fromWord`, `toWord` makes it one stretch again; `op: rename` with `clip` and\n`title`. The other tools take a clip's id as `short`. To change a clip's sections: `layouts` with `short` and `op: add`\n(`sections` [{fromS, toS, layout}], seconds on the clip's own timeline; layouts like \"Camera\nonly\", \"Screen only\", \"Side by side\"), `update`, `remove` or `clear`; `op: base` changes the\nsplit itself (e.g. {\"kind\": \"sideBySide\", \"cameraFirst\": false, \"cameraPct\": 40}). Graphics in a clip's stretch play over its whole frame; a title or\nstep card often reads better in the screen's part (`graphic_set` with `short` and `slot:\nscreen`), or `overScreen` for one meant to sit on the screen picture. Then look at each clip\nonce with `storyboard` and `short` (its id): a tile per scene of its 9:16 frame. Fix a section\nthat shows the wrong part. If the clip shows captions, shape them (`more` `tool: captions` with\n`short`: the clip's id, which lists its lines): `emphasis`, per line the one word that makes a\nviewer keep watching, never a small word, none on a flat line; `split` a line that reads as\ntwo thoughts, `join` a line too short to read alone, `hide` a stray word. These stay the\nclip's own: the video's captions don't change. Then report.\n\n## 5. Export (ask)\n\nAsk \"Export the clips now?\" (all, or which). On the go: `export` with `short: \"clips\"` (every\nclip; never \"all\", which also exports the shorts made from a take) or a clip's id. They are\nwritten next to the project as \"<project> - <title>.mp4\", 1080x1920. Answer with the paths.\n",
+        "method": "# Preset: Clips\n\nVertical clips (9:16) cut from the edited video, the app's Clips tab: you read the transcript\nand pick the moments yourself (no AI key needed), the app builds each clip with the look of the\nothers (a split-screen base layout by default) and picks its layout sections (camera only for\nthe opening line and while the speaker talks without the mouse, screen only while the clicking\nis busy, the base otherwise). Run it after the video's own edit, so the clips come from the\ncleaned-up talk. Clips are not shorts: a short is made from a new take the user recorded\n(`preset` `shorts`, the Shorts tab); never touch those here.\n\nStep by step by default; automatic when the user says so (\"auto\", \"no questions\"): then use\nthe defaults below, show the picks in one message and go on. Export still waits for the user's\ngo.\n\n`clips`, `faces`, `captions` and `layouts` are behind `more`: `more` with `tool` alone gives\none's arguments, with `args` it runs it (`more` `tool: clips` `args: {\"op\": \"create\", ...}`).\n\n## 1. Project (automatic)\n\n- `status`. Clips need a transcript: if nothing is transcribed, `transcribe` (online, the\n  language detected; as in the Tutorial preset).\n- `status` says how many clips are already made. If there are some, `clips` (`op: list`, the\n  default) lists them; ask whether to keep them (default) or start over (`clips` `op: remove`\n  with `clip`, one per clip). Shorts made from a take are never removed here.\n- With a camera, `faces` (it waits until the face is found in every camera; clips centre\n  each camera clip on it). Pass on a camera with little or no face found.\n\n## 2. Read (automatic)\n\n`transcript_get` for the speech. It is the edited video's words with their ids and times.\n\n## 3. Pick (ask)\n\nAsk how many (default 3, at most 5). `clips` `op: lively` lists the lines where the speaker gets\nloud or reacts: good places to look first. Start from **ideas**, not stretches: one premise a viewer\ngets in a sentence (a claim, a how-to, a result), then gather the words that serve it from\nanywhere in the video, in the order that tells it best, hook first. One stretch is fine when\nthe idea sits in one place. Each clip:\n- makes sense on its own, with no \"as I said\", \"like before\", \"this one\" pointing elsewhere;\n- opens with a hook in the first sentence: a question, a bold claim, a result, \"here's how to\"\n  (`create` with `hook: true` moves its loudest 3 s to the front when it has none);\n- runs 20 to 60 seconds; every piece starts and ends on whole sentences, the last on the payoff;\n- shows something on screen while they talk, when there is a choice;\n- uses each word once, and doesn't repeat the clips already made.\n\nShow them as a numbered list: the idea, its pieces (time in the video, first words), length,\na catchy title (under 60 characters, it is also the file name) and one line on why it works.\nAsk for an OK or changes (automatic: go).\n\n## 4. Make (automatic)\n\nFor each pick, `clips` with `op: create`, `title`, `idea`, `reason` and `pieces`\n(`[{fromWord, toWord}]` in play order; one stretch can be `fromWord`/`toWord`). A gathered clip\ngets its own timeline, the pieces as the video has them now. It copies the look of the clips\nalready made (else the project's clips preset) and picks its layout sections. Report one line per clip with its sections (`layouts` with `short`: the clip's id).\nTo fix a pick: `op: add` with `clip` and `pieces` plays more after it (its own cuts stay);\n`op: arrange` with `clip` and `order` (piece numbers, as `list` shows them) reorders or drops\npieces;\n`op: resync` with `clip` takes the video's cuts again after the video changed (each piece's; the\nclip's own cuts go);\n`op: range` with `clip`, `fromWord`, `toWord` makes it one stretch again; `op: rename` with `clip` and\n`title`. The other tools take a clip's id as `short`. To change a clip's sections: `layouts` with `short` and `op: add`\n(`sections` [{fromS, toS, layout}], seconds on the clip's own timeline; layouts like \"Camera\nonly\", \"Screen only\", \"Side by side\"), `update`, `remove` or `clear`; `op: base` changes the\nsplit itself (e.g. {\"kind\": \"sideBySide\", \"cameraFirst\": false, \"cameraPct\": 40}). Graphics in a clip's stretch play over its whole frame; a title or\nstep card often reads better in the screen's part (`graphic_set` with `short` and `slot:\nscreen`), or `overScreen` for one meant to sit on the screen picture. Then look at each clip\nonce with `storyboard` and `short` (its id): a tile per scene of its 9:16 frame. Fix a section\nthat shows the wrong part. If the clip shows captions, shape them (`more` `tool: captions` with\n`short`: the clip's id, which lists its lines): `emphasis`, per line the one word that makes a\nviewer keep watching, never a small word, none on a flat line; `split` a line that reads as\ntwo thoughts, `join` a line too short to read alone, `hide` a stray word. These stay the\nclip's own: the video's captions don't change. Then report.\n\n## 5. Export (ask)\n\nAsk \"Export the clips now?\" (all, or which). On the go: `export` with `short: \"clips\"` (every\nclip; never \"all\", which also exports the shorts made from a take) or a clip's id. They are\nwritten next to the project as \"<project> - <title>.mp4\", 1080x1920. Answer with the paths.\n",
         "name": "Clips",
         "preset": {
           "choices": {
@@ -2109,7 +2127,7 @@
           }
         },
         "rules": "",
-        "summary": "Clips (built in)\nFor: Vertical clips cut from the edited video: the best moments of its transcript in the split-screen look, captions on.\nLook: style Light\nSteps: export quality high, resolution 1080p\nSettings: audio match takes on, normalize on; captions enabled on, max words 3; layout aspect ratio 9:16\nA new short starts with: captions on\nMethod: 63 lines; the user's rules: 0 lines"
+        "summary": "Clips (built in)\nFor: Vertical clips cut from the edited video: the best moments of its transcript in the split-screen look, captions on.\nLook: style Light\nSteps: export quality high, resolution 1080p\nSettings: audio match takes on, normalize on; captions enabled on, max words 3; layout aspect ratio 9:16\nA new short starts with: captions on\nMethod: 65 lines; the user's rules: 0 lines"
       },
       {
         "builtin": true,
@@ -2193,6 +2211,7 @@
         "captionSizePct": 0.0,
         "captionSpot": "seam",
         "captions": true,
+        "followAction": true,
         "followZooms": true,
         "pushIns": false,
         "screenPanX": 0.0,
@@ -2205,6 +2224,7 @@
         "captionSizePct": 0.0,
         "captionSpot": "seam",
         "captions": true,
+        "followAction": true,
         "followZooms": true,
         "pushIns": false,
         "screenPanX": 0.0,
@@ -2244,7 +2264,7 @@
         "endUs": 2350000,
         "startUs": 100000,
         "text": "Today we cut the pauses out.",
-        "trackId": "rec-1fe3a1ced134.mic",
+        "trackId": "rec-eb280aa4c12b.mic",
         "wordIds": [
           "w-0",
           "w-1",
@@ -2266,7 +2286,7 @@
         "endUs": 5300000,
         "startUs": 4100000,
         "text": "Like this.",
-        "trackId": "rec-1fe3a1ced134.mic",
+        "trackId": "rec-eb280aa4c12b.mic",
         "wordIds": [
           "w-6",
           "w-7"
@@ -2277,12 +2297,12 @@
         ]
       }
     ],
-    "trackId": "rec-1fe3a1ced134.mic"
+    "trackId": "rec-eb280aa4c12b.mic"
   },
   "project_check": {
     "durationUs": 6000000,
     "findings": [],
-    "revision": 0
+    "revision": 1
   },
   "project_check_frames": [],
   "project_clip_thumbnails": {
@@ -2924,7 +2944,7 @@
       106,
       107
     ],
-    "trackId": "rec-1fe3a1ced134.mic"
+    "trackId": "rec-eb280aa4c12b.mic"
   },
   "project_zoom_suggestions": {
     "config": {
@@ -2957,8 +2977,8 @@
   },
   "proposals_list": {
     "batches": [],
-    "projectHandle": "6f9f7a3c-c7d1-4d47-9fa4-1f0c2c7826fe",
-    "revision": 0
+    "projectHandle": "3bdd8f6f-ba00-4fd6-acaa-d36bb4be6ed3",
+    "revision": 1
   },
   "publish_package": {
     "package": {
@@ -3178,13 +3198,13 @@
     }
   ],
   "transcript_get": {
-    "createdAt": "2026-11-21T16:18:29.842864146+00:00",
+    "createdAt": "2026-11-22T16:45:35.370076234+00:00",
     "language": "en",
     "model": "parakeet-tdt-0.6b-v3",
     "provider": "parakeet",
-    "revision": 0,
-    "trackId": "rec-1fe3a1ced134.mic",
-    "wordStamp": "b77f8538945d0ea5",
+    "revision": 1,
+    "trackId": "rec-eb280aa4c12b.mic",
+    "wordStamp": "fe1c856b275698bb",
     "words": [
       {
         "editedEndUs": 450000,

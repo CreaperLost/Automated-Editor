@@ -75,6 +75,10 @@ pub(crate) fn scan_track_silence(
         });
     }
     let mut covered = Vec::new();
+    // Speech the model hears is never silence (SND-6).
+    let guarding = config.speech_guard.unwrap_or(false);
+    let mut guard: Option<(u32, crate::dsp::speech::SpeechDetector)> = None;
+    let mut speech: Vec<(u64, u64)> = Vec::new();
 
     for segment in &ctx.segments {
         let path = match safe_path(&ctx.root, &segment.relative_path) {
@@ -143,6 +147,19 @@ pub(crate) fn scan_track_silence(
             }
         };
         let info = reader.info().clone();
+        if guarding
+            && guard
+                .as_ref()
+                .is_none_or(|(rate, _)| *rate != info.sample_rate)
+        {
+            if let Some((_, done)) = guard.take() {
+                speech.extend(done.finish());
+            }
+            guard = Some((
+                info.sample_rate,
+                crate::dsp::speech::SpeechDetector::new(info.sample_rate),
+            ));
+        }
         if let Some(active) = detector.as_mut() {
             if active.sample_rate() != info.sample_rate || active.channels() != info.channels {
                 blocks.extend(active.take_blocks());
@@ -225,6 +242,9 @@ pub(crate) fn scan_track_silence(
                 }
             }
             let samples = &interleaved[..use_frames * ch];
+            if let Some((rate, speech)) = guard.as_mut() {
+                speech.feed(samples, ch, source_us, *rate);
+            }
             if let Some(active) = detector.as_mut() {
                 if let Err(error) = active.feed(samples, source_us) {
                     feed_failed = Some(error);
@@ -254,9 +274,14 @@ pub(crate) fn scan_track_silence(
         blocks.extend(active.take_blocks());
     }
 
+    if let Some((_, done)) = guard.take() {
+        speech.extend(done.finish());
+    }
+    speech.sort_unstable();
     let threshold_db = resolve_threshold(&blocks, config);
+    let runs = crate::dsp::speech::without(silent_runs(&blocks, threshold_db), &speech);
     Ok(SilenceScan {
-        source_ranges: finalize_regions(silent_runs(&blocks, threshold_db), config),
+        source_ranges: finalize_regions(runs, config),
         covered,
         sample_rate,
         channels,
@@ -546,6 +571,96 @@ mod tests {
         longer.segments[0].end_us = 6_000_000;
         let short_file = scan_track_silence(&longer, &config).unwrap();
         assert_eq!(short_file.covered, vec![(0, 5_000_000)]);
+    }
+
+    /// Quiet speech under the level threshold is cut as silence, unless the speech guard
+    /// hears it (SND-6). Synthetic speech from FFmpeg's flite, where that build has it.
+    #[test]
+    fn the_speech_guard_keeps_quiet_speech_and_still_cuts_the_pauses() {
+        let Ok(ffmpeg) = crate::media::ffmpeg::ffmpeg_path() else {
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("audio")).unwrap();
+        let path = dir.path().join("audio/mic.wav");
+        let made = std::process::Command::new(ffmpeg)
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg(
+                "flite=text='This sentence is spoken very quietly, under the threshold.':voice=slt",
+            )
+            .args([
+                "-af",
+                "volume=0.03,adelay=1500,apad=pad_dur=1.5",
+                "-ar",
+                "48000",
+                "-ac",
+                "1",
+            ])
+            .args(["-c:a", "pcm_s16le"])
+            .arg(&path)
+            .output();
+        if !made.is_ok_and(|o| o.status.success()) {
+            return; // No flite in this FFmpeg.
+        }
+        let info = PcmReader::open(&path).unwrap().info().clone();
+        let end_us = info.frame_us(info.frame_count);
+        let ctx = WaveformTrackContext {
+            root: dir.path().to_path_buf(),
+            track_id: "mic".into(),
+            track_type: TrackType::MicAudio,
+            segments: vec![SegmentSummary {
+                track_id: "mic".into(),
+                relative_path: "audio/mic.wav".into(),
+                start_us: 0,
+                end_us,
+                size_bytes: std::fs::metadata(&path).unwrap().len(),
+                media_timescale: 48_000,
+                media_start_value: 0,
+                host_anchor_us: 0,
+                is_keyframe_start: None,
+                available: true,
+            }],
+            retained: vec![RetainedInterval {
+                start_us: 0,
+                end_us,
+                media: None,
+                edited_len_us: None,
+            }],
+            edited_duration_us: end_us,
+            muted: Vec::new(),
+        };
+        let cut = |guard| {
+            let config = SilenceConfig {
+                threshold_db: -38.0,
+                padding_ms: 0,
+                speech_guard: Some(guard),
+                ..SilenceConfig::default()
+            };
+            let ranges = scan_track_silence(&ctx, &config).unwrap().source_ranges;
+            // How much of the speech (1.5 s to the last 1.5 s) is cut.
+            let speech = (1_500_000, end_us - 1_500_000);
+            let inside: u64 = ranges
+                .iter()
+                .map(|&(a, b)| b.min(speech.1).saturating_sub(a.max(speech.0)))
+                .sum();
+            (inside as f64 / (speech.1 - speech.0) as f64, ranges)
+        };
+        let (plain, _) = cut(false);
+        let (guarded, ranges) = cut(true);
+        assert!(
+            plain > 0.5,
+            "the level alone cuts the quiet speech: {plain}"
+        );
+        assert!(guarded < 0.2, "the guard keeps it: {guarded} {ranges:?}");
+        // The pauses before and after are still cut.
+        assert!(
+            ranges.first().is_some_and(|r| r.0 == 0 && r.1 > 1_000_000),
+            "{ranges:?}"
+        );
+        assert!(
+            ranges.last().is_some_and(|r| r.1 >= end_us - 10_000),
+            "{ranges:?}"
+        );
     }
 
     /// A click in a pause splits it; muted, it is silence and the pause is whole again.

@@ -64,6 +64,9 @@ pub struct EditDocument {
     /// Chapter markers, anchored in an asset's time. Exported as MP4 chapters.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chapters: Vec<crate::chapters::Chapter>,
+    /// Timeline markers to come back to (UI-2), anchored in an asset's time; never exported.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<crate::chapters::Marker>,
     /// Vertical clips picked from this video, anchored in an asset's time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shorts: Vec<crate::shorts::Short>,
@@ -152,6 +155,7 @@ impl Default for EditDocument {
             noise_mutes: NoiseMutes::new(),
             captions: CaptionSettings::default(),
             chapters: Vec::new(),
+            markers: Vec::new(),
             shorts: Vec::new(),
             effects: Vec::new(),
             short_layout: None,
@@ -353,6 +357,7 @@ impl EditDocument {
         self.audio.validate()?;
         self.captions.validate()?;
         crate::chapters::validate(&self.chapters)?;
+        crate::chapters::validate_markers(&self.markers)?;
         crate::shorts::validate(&self.shorts)?;
         crate::shorts::validate_edits(self)?;
         if !crate::style::is_builtin(&self.style) {
@@ -757,6 +762,24 @@ impl EditHistory {
         }
         let mut next = self.current.clone();
         next.chapters = chapters;
+        self.commit_next(expected_revision, persist_root, next)
+    }
+
+    /// Replaces the timeline markers.
+    pub fn set_markers(
+        &mut self,
+        expected_revision: u64,
+        markers: Vec<crate::chapters::Marker>,
+        persist_root: &Path,
+    ) -> Result<&EditDocument, String> {
+        self.check(expected_revision)?;
+        crate::chapters::validate_markers(&markers)?;
+        let markers = crate::chapters::normalized_markers(markers);
+        if markers == self.current.markers {
+            return Ok(&self.current);
+        }
+        let mut next = self.current.clone();
+        next.markers = markers;
         self.commit_next(expected_revision, persist_root, next)
     }
 
@@ -1894,6 +1917,7 @@ mod tests {
             path: Vec::new(),
             score: 0.0,
             kept: Vec::new(),
+            curve: Default::default(),
             id: id.into(),
             source_start_us: start,
             source_end_us: start + 2 * S,

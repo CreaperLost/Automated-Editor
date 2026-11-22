@@ -1280,7 +1280,10 @@ pub fn project_audio_update_impl(
     audio.validate()?;
     // Prepare outside the project/command locks, then let the revision check fence the
     // commit. A failed repair never saves an enabled effect that cannot be played.
-    let prepared = if audio.mouth_clicks {
+    let prepared = if audio.mouth_clicks
+        || audio.voice_chain
+        || audio.noise_model == crate::project::audio::NoiseModel::Neural
+    {
         let (root, document) = {
             let opened = state.opened_project.lock();
             let reader = opened.as_ref().ok_or("No opened project")?;
@@ -1751,6 +1754,17 @@ pub fn project_chapters_set_impl(
 ) -> Result<OpenedProject, String> {
     mutate_opened(state, project_handle, |reader| {
         reader.set_chapters(expected_revision, chapters)
+    })
+}
+
+pub fn project_markers_set_impl(
+    state: &AppState,
+    project_handle: String,
+    expected_revision: u64,
+    markers: Vec<crate::chapters::Marker>,
+) -> Result<OpenedProject, String> {
+    mutate_opened(state, project_handle, |reader| {
+        reader.set_markers(expected_revision, markers)
     })
 }
 
@@ -2425,6 +2439,53 @@ pub fn project_media_import_impl(
     paths: Vec<String>,
 ) -> Result<OpenedProject, String> {
     project_media_import_licensed(state, project_handle, expected_revision, paths, |_| None)
+}
+
+/// Downloads the video at `request`'s link into the project's `media/downloads/` (yt-dlp) and
+/// imports it with the licence the site states, one undo step. Answers the project, what was
+/// saved and the new media's id.
+pub fn project_media_from_link_impl(
+    state: &AppState,
+    project_handle: String,
+    request: &crate::web_video::Request,
+    progress: &dyn Fn(f64, &str),
+    stop: &dyn Fn() -> bool,
+) -> Result<(OpenedProject, crate::web_video::Downloaded, Option<String>), String> {
+    let root = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        reader.root().to_path_buf()
+    };
+    // The download runs without holding the project, so playback and edits go on.
+    let got = crate::web_video::download(&root, request, progress, stop)?;
+    progress(0.92, "Importing");
+    let (revision, known) = {
+        let opened = state.opened_project.lock();
+        let reader = opened.as_ref().ok_or("No opened project")?;
+        require_handle(reader, &project_handle)?;
+        let known: std::collections::HashSet<String> = reader
+            .document()
+            .assets
+            .iter()
+            .map(|a| a.id.clone())
+            .collect();
+        (reader.document().revision, known)
+    };
+    let licence = got.licence.clone();
+    let project = project_media_import_licensed(
+        state,
+        project_handle,
+        revision,
+        vec![got.path.display().to_string()],
+        |_| Some(licence.clone()),
+    )?;
+    let id = project
+        .assets
+        .iter()
+        .find(|a| !known.contains(&a.id))
+        .map(|a| a.id.clone());
+    Ok((project, got, id))
 }
 
 /// [`project_media_import_impl`], each file with the licence `licence_of` gives it.

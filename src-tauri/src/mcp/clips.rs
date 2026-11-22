@@ -207,12 +207,14 @@ pub enum ClipsOp {
     Rename,
     /// Remove `clip`.
     Remove,
+    /// Where the speaker gets loud or reacts (changes nothing): ideas to start from.
+    Lively,
 }
 
 #[derive(Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ClipsArgs {
-    /// list (default), create, find, range, add, arrange, resync, rename or remove.
+    /// list (default), create, find, range, add, arrange, resync, rename, remove or lively.
     #[serde(default)]
     pub op: ClipsOp,
     /// range, add, arrange, resync, rename, remove: the clip's id or title.
@@ -240,6 +242,9 @@ pub struct ClipsArgs {
     /// left out is removed.
     #[serde(default)]
     pub order: Vec<usize>,
+    /// create: open on the loudest 3 s of its words (moved to the front).
+    #[serde(default)]
+    pub hook: Option<bool>,
     /// create: pick its layout sections right away. Default true.
     #[serde(default)]
     pub scenes: Option<bool>,
@@ -263,6 +268,7 @@ fn clips(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         ClipsOp::List => list_clips(ctx),
         ClipsOp::Create => create_clip(ctx, args),
         ClipsOp::Find => find_clips(ctx, args),
+        ClipsOp::Lively => lively(ctx, args),
         ClipsOp::Add => add_to_clip(ctx, args),
         ClipsOp::Arrange => arrange_clip(ctx, args),
         ClipsOp::Range | ClipsOp::Resync | ClipsOp::Rename | ClipsOp::Remove => {
@@ -344,6 +350,93 @@ fn list_clips(ctx: &Ctx) -> Result<Vec<Output>, String> {
     text(lines.join("\n"))
 }
 
+/// The kept words of transcript `key` in play order, and the measured loudness of its speech.
+fn speech(
+    ctx: &Ctx,
+    key: &str,
+) -> Result<(Vec<crate::transcript::edit::TranscriptViewWord>, Loudness), String> {
+    let (root, words, segments) = with_reader(ctx.state, |reader| {
+        let transcript =
+            store::load_transcript(reader.root(), key)?.ok_or("That sound is not transcribed")?;
+        let document = reader.document();
+        let words = crate::transcript::edit::view(
+            &transcript,
+            &document.transcript_clock(key)?,
+            document.revision,
+        )
+        .words;
+        let source = document.stream_ref(key)?;
+        let asset = document.asset(&source.asset).ok_or("Unknown sound")?;
+        let segments =
+            crate::sequence::sources::sound_segments(reader.root(), asset, &source.stream)?;
+        Ok((reader.root().to_path_buf(), words, segments))
+    })?;
+    ctx.progress(0.2, "Measuring the speech");
+    let analyses = segments
+        .iter()
+        .map(|s| {
+            crate::project::reader::safe_path(&root, &s.relative_path)
+                .and_then(|p| crate::media::polish::analyze_cached(&p))
+                .ok()
+        })
+        .collect();
+    Ok((words, Loudness { segments, analyses }))
+}
+
+/// A sound's measured loudness, file by file.
+struct Loudness {
+    segments: Vec<crate::project::reader::SegmentSummary>,
+    analyses: Vec<Option<std::sync::Arc<crate::media::polish::SegmentAnalysis>>>,
+}
+
+impl Loudness {
+    /// The mean square over source time `from`..`to`, if measured.
+    fn level(&self, from: u64, to: u64) -> Option<f64> {
+        let segments = &self.segments;
+        let i = segments
+            .iter()
+            .position(|s| s.start_us <= from && from < s.end_us)?;
+        let analysis = self.analyses[i].as_ref()?;
+        let block = |us: u64| ((us - segments[i].start_us) / 100_000) as usize;
+        let blocks = analysis
+            .loudness
+            .get(block(from)..=block(to.max(from)).min(analysis.loudness.len().max(1) - 1))?;
+        (!blocks.is_empty()).then(|| blocks.iter().sum::<f64>() / blocks.len() as f64)
+    }
+}
+
+/// The lines where the speaker gets loud for them or reacts, loudest first (CLIP-2).
+fn lively(ctx: &Ctx, args: ClipsArgs) -> Result<Vec<Output>, String> {
+    let key = pick_sound(ctx, args.stream, Want::Transcribed)?;
+    let (words, loudness) = speech(ctx, &key)?;
+    let level = |from, to| loudness.level(from, to);
+    let found = crate::lively::moments(&words, level, 12);
+    if found.is_empty() {
+        return text("No line stands out: no louder stretch and no reaction phrase.");
+    }
+    let mut lines = vec![format!(
+        "{} (loudest first; a line {} dB or more over the talk around it, or a reaction):",
+        plural(found.len(), "moment"),
+        crate::lively::LOUD_DB
+    )];
+    for m in found {
+        let why = match (m.over_db.filter(|o| *o >= crate::lively::LOUD_DB), m.phrase) {
+            (Some(db), Some(p)) => format!("+{db:.0} dB, \"{p}\""),
+            (Some(db), None) => format!("+{db:.0} dB"),
+            (None, Some(p)) => format!("\"{p}\""),
+            (None, None) => String::new(),
+        };
+        lines.push(format!(
+            "{} {}..{} ({why}): {}",
+            clock(m.edited_us),
+            m.from_word,
+            m.to_word,
+            m.text
+        ));
+    }
+    text(lines.join("\n"))
+}
+
 /// The source span of the words `from`..`to` of transcript `key`.
 fn word_span(
     reader: &crate::project::ProjectReader,
@@ -389,6 +482,63 @@ fn create_clip(ctx: &Ctx, args: ClipsArgs) -> Result<Vec<Output>, String> {
         return Err(format!("Gather at most {MAX_PIECES} pieces"));
     }
     let key = pick_sound(ctx, args.stream.clone(), Want::Transcribed)?;
+    let mut wanted = wanted;
+    let mut hooked = None;
+    if args.hook == Some(true) {
+        let spans = with_reader(ctx.state, |reader| {
+            wanted
+                .iter()
+                .map(|(from, to)| word_span(reader, &key, from, to))
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        let (words, loudness) = speech(ctx, &key)?;
+        // The kept words each piece plays, by piece.
+        let played: Vec<Vec<_>> = spans
+            .iter()
+            .map(|&(a, b)| {
+                words
+                    .iter()
+                    .filter(|w| {
+                        w.edited_start_us.is_some()
+                            && w.word.source_start_us >= a
+                            && w.word.source_end_us <= b
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .collect();
+        let all: Vec<_> = played.iter().flatten().cloned().collect();
+        hooked = crate::lively::hook(&all, |from, to| loudness.level(from, to));
+        if let Some((from, to)) = &hooked {
+            // A moment plays once in a clip: the hook moves to the front, and its piece plays
+            // what comes before and after it.
+            let k = played
+                .iter()
+                .position(|p| p.iter().any(|w| &w.word.id == from))
+                .ok_or("The hook is not in the clip")?;
+            let ids: Vec<&str> = played[k].iter().map(|w| w.word.id.as_str()).collect();
+            let (i, j) = (
+                ids.iter().position(|id| id == from).unwrap_or(0),
+                ids.iter().position(|id| id == to).unwrap_or(ids.len() - 1),
+            );
+            let mut split = vec![(from.clone(), to.clone())];
+            split.extend(wanted[..k].iter().cloned());
+            if i > 0 {
+                split.push((ids[0].to_string(), ids[i - 1].to_string()));
+            }
+            if j + 1 < ids.len() {
+                split.push((ids[j + 1].to_string(), ids[ids.len() - 1].to_string()));
+            }
+            split.extend(wanted[k + 1..].iter().cloned());
+            if split.len() > MAX_PIECES {
+                return Err(format!(
+                    "With its hook that is {} pieces; gather at most {MAX_PIECES}",
+                    split.len()
+                ));
+            }
+            wanted = split;
+        }
+    }
     let (shorts, clip) = with_reader(ctx.state, |reader| {
         let document = reader.document();
         let spans = wanted
@@ -440,6 +590,15 @@ fn create_clip(ctx: &Ctx, args: ClipsArgs) -> Result<Vec<Output>, String> {
             clip.edit.as_ref().map_or(0, |e| e.sequence.duration_us()) as f64 / 1e6
         )
     }];
+    match (&hooked, args.hook) {
+        (Some((from, to)), _) => {
+            lines.push(format!("It opens on its loudest words, {from}..{to}."))
+        }
+        (None, Some(true)) => lines.push(
+            "No hook: it already opens on its loudest words, or the speech is not measured.".into(),
+        ),
+        _ => {}
+    }
     if args.scenes != Some(false) {
         match super::layouts::run_pick(ctx, Some(clip.id.clone()), None, true) {
             // Its first line; the revision comes once, at the end.

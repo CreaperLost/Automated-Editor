@@ -22,6 +22,66 @@ pub struct Chapter {
     pub edited_us: Option<u64>,
 }
 
+pub const MAX_MARKERS: usize = 500;
+
+/// A marker dropped on the timeline (UI-2): a moment to come back to, with an optional note.
+/// Anchored in source time like a chapter, so it follows cuts; never exported.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Marker {
+    pub id: String,
+    pub source_us: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+    /// The asset whose time `source_us` is in; `None` is the first recording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
+    /// Where it plays on the edited timeline; absent when that moment was cut. UI only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edited_us: Option<u64>,
+}
+
+pub fn validate_markers(markers: &[Marker]) -> Result<(), String> {
+    if markers.len() > MAX_MARKERS {
+        return Err(format!("Use at most {MAX_MARKERS} markers"));
+    }
+    let mut ids = std::collections::HashSet::new();
+    for marker in markers {
+        if marker.id.is_empty() || marker.id.len() > 64 || !ids.insert(marker.id.as_str()) {
+            return Err("Marker ids must be unique".into());
+        }
+        let note = marker.note.trim();
+        if note.chars().count() > MAX_TITLE_CHARS || note.chars().any(char::is_control) {
+            return Err(format!(
+                "A marker's note is one line of at most {MAX_TITLE_CHARS} characters"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Trims notes, drops UI-only fields and orders by source time.
+pub fn normalized_markers(mut markers: Vec<Marker>) -> Vec<Marker> {
+    for marker in &mut markers {
+        marker.note = marker.note.trim().to_string();
+        marker.edited_us = None;
+    }
+    markers.sort_by(|a, b| a.source_us.cmp(&b.source_us).then(a.id.cmp(&b.id)));
+    markers
+}
+
+pub fn attach_edited_markers(markers: &mut [Marker], document: &EditDocument) {
+    for marker in markers {
+        marker.edited_us = document
+            .clock_asset(marker.media.as_deref())
+            .and_then(|asset| {
+                document
+                    .asset_clock(asset)
+                    .source_to_edited_us(marker.source_us)
+            });
+    }
+}
+
 pub fn validate(chapters: &[Chapter]) -> Result<(), String> {
     if chapters.len() > MAX_CHAPTERS {
         return Err(format!("Use at most {MAX_CHAPTERS} chapters"));
@@ -185,6 +245,44 @@ mod tests {
             .unwrap()
             .iter()
             .all(|c| c.get("editedUs").is_none()));
+    }
+
+    #[test]
+    fn markers_follow_cuts_and_a_cut_one_has_no_place() {
+        let mut document =
+            EditDocument::from_recording(crate::sequence::tests::recording("rec", 40 * S, &[]))
+                .unwrap();
+        document.sequence = crate::sequence::edit::apply(
+            &document.sequence,
+            &document.assets,
+            &SequenceEdit::DeleteRange {
+                ranges: vec![crate::zoom::EditedRange {
+                    start_us: 10 * S,
+                    end_us: 20 * S,
+                }],
+                ripple: Some(true),
+            },
+        )
+        .unwrap()
+        .0;
+        let marker = |id: &str, at: u64, note: &str| Marker {
+            id: id.into(),
+            source_us: at,
+            note: note.into(),
+            media: None,
+            edited_us: None,
+        };
+        let mut markers = normalized_markers(vec![
+            marker("m2", 25 * S, " fix the zoom "),
+            marker("m1", 15 * S, ""),
+        ]);
+        assert_eq!(markers[0].id, "m1");
+        assert_eq!(markers[1].note, "fix the zoom");
+        attach_edited_markers(&mut markers, &document);
+        assert_eq!(markers[0].edited_us, None);
+        assert_eq!(markers[1].edited_us, Some(15 * S));
+        assert!(validate_markers(&[marker("a", 0, ""), marker("a", 1, "")]).is_err());
+        assert!(validate_markers(&[marker("a", 0, "two\nlines")]).is_err());
     }
 
     #[test]

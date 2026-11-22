@@ -83,6 +83,34 @@ impl Default for ZoomConfig {
     }
 }
 
+/// How a zoom glides in and out (UI-2), as an easing curve over its transition.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum ZoomCurve {
+    /// Starts and ends with no speed (smootherstep).
+    #[default]
+    Smooth,
+    /// Fast off the mark, settling slowly at the end (quartic out).
+    Snappy,
+    /// Softer at both ends than smooth, quicker in the middle (sine in-out).
+    Gentle,
+    /// Even speed all the way.
+    Linear,
+}
+
+impl ZoomCurve {
+    /// How far along the glide is at `t` (0..1) of its time.
+    pub fn ease(self, t: f64) -> f64 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            ZoomCurve::Smooth => t * t * t * (t * (t * 6.0 - 15.0) + 10.0),
+            ZoomCurve::Snappy => 1.0 - (1.0 - t).powi(4),
+            ZoomCurve::Gentle => 0.5 - 0.5 * (std::f64::consts::PI * t).cos(),
+            ZoomCurve::Linear => t,
+        }
+    }
+}
+
 /// The project's auto-zoom settings: one place, so every window and every zoom agrees.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -93,6 +121,8 @@ pub struct ZoomSettings {
     pub hover_scale: f64,
     /// Time to zoom in, and to zoom out; 0 cuts straight in and out.
     pub transition_ms: u32,
+    /// How every zoom glides in and out.
+    pub curve: ZoomCurve,
     /// The shortest zoom.
     pub min_hold_ms: u32,
     /// Activity closer than this is one zoom that follows the mouse.
@@ -112,6 +142,7 @@ impl Default for ZoomSettings {
             hover_scale: 1.4,
             // A cut: no ease in or out.
             transition_ms: 0,
+            curve: ZoomCurve::Smooth,
             min_hold_ms: 5_000,
             merge_gap_ms: 5_000,
             zooms_per_five_minutes: 10,
@@ -285,6 +316,9 @@ pub struct ZoomSuggestion {
     /// Worked out when drawing; never stored.
     #[serde(default, skip)]
     pub kept: Vec<(u64, u64)>,
+    /// How it glides in and out, from the project's zoom settings when drawing; never stored.
+    #[serde(default, skip)]
+    pub curve: ZoomCurve,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -348,6 +382,7 @@ impl ZoomKeyframe {
             path: Vec::new(),
             score: 0.0,
             kept: Vec::new(),
+            curve: Default::default(),
             id: self.id.clone(),
             source_start_us: self.source_start_us,
             source_end_us: self.source_end_us,
@@ -1007,6 +1042,7 @@ pub fn plan_zooms(points: &[InterestPoint], config: &ZoomConfig) -> Vec<ZoomSugg
             media: None,
             score: session.score(),
             kept: Vec::new(),
+            curve: Default::default(),
         };
         // Overlapping the one before, or so close that the view would pop out and straight
         // back in: one zoom carries on, following the mouse.
@@ -1595,6 +1631,7 @@ mod tests {
             path: Vec::new(),
             score: 0.0,
             kept: Vec::new(),
+            curve: Default::default(),
             id: "z-1-n1".into(),
             source_start_us: 1_000_000,
             source_end_us: 3_000_000,
@@ -1678,6 +1715,7 @@ mod tests {
                 path: Vec::new(),
                 score: 0.0,
                 kept: Vec::new(),
+                curve: Default::default(),
                 id: "z-1-n1".into(),
                 source_start_us: 1_000_000,
                 source_end_us: 6_000_000,
@@ -1713,11 +1751,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn each_curve_runs_from_out_to_in_and_snappy_gets_there_first() {
+        for curve in [
+            ZoomCurve::Smooth,
+            ZoomCurve::Snappy,
+            ZoomCurve::Gentle,
+            ZoomCurve::Linear,
+        ] {
+            assert!(curve.ease(0.0).abs() < 1e-12 && (curve.ease(1.0) - 1.0).abs() < 1e-12);
+            let mut last = 0.0;
+            for k in 1..=20 {
+                let v = curve.ease(k as f64 / 20.0);
+                assert!(v >= last, "{curve:?} goes back");
+                last = v;
+            }
+        }
+        // A quarter of the way into the glide in, at the same time.
+        let config = ZoomConfig::default();
+        let at = |curve| {
+            let mut zoom = window("z", 0, 2_000_000, ZoomOrigin::Click);
+            zoom.curve = curve;
+            evaluate_at_source(&[zoom], 100_000, &config).scale
+        };
+        let (smooth, snappy, linear) = (
+            at(ZoomCurve::Smooth),
+            at(ZoomCurve::Snappy),
+            at(ZoomCurve::Linear),
+        );
+        assert!(
+            snappy > linear && linear > smooth,
+            "{smooth} {linear} {snappy}"
+        );
+        // Settings without a curve read as smooth.
+        let settings: ZoomSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.curve, ZoomCurve::Smooth);
+    }
+
     fn window(id: &str, start: u64, end: u64, origin: ZoomOrigin) -> ZoomSuggestion {
         ZoomSuggestion {
             path: Vec::new(),
             score: 0.0,
             kept: Vec::new(),
+            curve: Default::default(),
             id: id.into(),
             source_start_us: start,
             source_end_us: end,

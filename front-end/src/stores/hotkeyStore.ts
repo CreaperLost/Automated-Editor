@@ -16,6 +16,10 @@ export type HotkeyAction =
   | "rippleDelete"
   | "deselect"
   | "toggleLink"
+  | "duplicate"
+  | "marker"
+  | "previousMarker"
+  | "nextMarker"
   | "markIn"
   | "markOut"
   | "selectAll"
@@ -43,6 +47,8 @@ export const HOTKEY_ACTIONS: { action: HotkeyAction; label: string; group: strin
   { action: "stepForwardLong", label: "Forward one second", group: "Playback", defaults: ["Shift+ArrowRight"] },
   { action: "previousEdit", label: "Previous edit point", group: "Playback", defaults: ["ArrowUp"] },
   { action: "nextEdit", label: "Next edit point", group: "Playback", defaults: ["ArrowDown"] },
+  { action: "previousMarker", label: "Previous marker", group: "Playback", defaults: ["BracketLeft"] },
+  { action: "nextMarker", label: "Next marker", group: "Playback", defaults: ["BracketRight"] },
   { action: "goToStart", label: "Go to start", group: "Playback", defaults: ["Home"] },
   { action: "goToEnd", label: "Go to end", group: "Playback", defaults: ["End"] },
   { action: "split", label: "Split at playhead", group: "Editing", defaults: ["KeyS"] },
@@ -51,6 +57,8 @@ export const HOTKEY_ACTIONS: { action: HotkeyAction; label: string; group: strin
   { action: "deleteSelection", label: "Delete selection (closes up when Magnetic)", group: "Editing", defaults: ["Delete", "Backspace"] },
   { action: "rippleDelete", label: "Ripple delete selection", group: "Editing", defaults: ["Shift+Delete", "Shift+Backspace"] },
   { action: "toggleLink", label: "Link / unlink clips", group: "Editing", defaults: ["KeyU"] },
+  { action: "duplicate", label: "Duplicate the selected clips after them", group: "Editing", defaults: ["Mod+Shift+KeyD"] },
+  { action: "marker", label: "Drop a marker at the playhead, or remove the one there", group: "Editing", defaults: ["KeyM"] },
   { action: "undo", label: "Undo", group: "Editing", defaults: ["Mod+KeyZ"] },
   { action: "redo", label: "Redo", group: "Editing", defaults: ["Mod+Shift+KeyZ", "Mod+KeyY"] },
   { action: "markIn", label: "Mark in (range start)", group: "Selection", defaults: ["KeyI"] },

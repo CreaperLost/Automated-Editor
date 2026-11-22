@@ -22,6 +22,8 @@ import {
   Plus,
   RotateCcw,
   Scissors,
+  CopyPlus,
+  Bookmark,
   Trash2,
   Unlink,
   Volume2,
@@ -44,6 +46,7 @@ import { loadFavourites, pressLayoutKey } from "../../stores/layoutsStore";
 import { ClipThumbs, MIN_THUMB_LANE_PX } from "./ClipThumbs";
 import {
   assetById,
+  clipAt,
   clipEnd,
   clipName,
   clipOut,
@@ -70,6 +73,7 @@ import {
 import {
   type Clip,
   type EditedSpan,
+  type Marker,
   type OpenedProject,
   type Role,
   type SeqTrack,
@@ -95,6 +99,9 @@ import { useZoomLane } from "./useZoomLane";
 import { useCaptionLane } from "./useCaptionLane";
 import { useSoundEffectsLane } from "./useSoundEffectsLane";
 import { useLayoutLane } from "./useLayoutLane";
+
+/** A marker this close to the playhead is the one there (removed, or skipped when jumping). */
+const MARKER_NEAR_US = 100_000;
 
 /** The playhead now, read when needed: the timeline itself does not re-render as it moves. */
 const nowUs = () => useProjectStore.getState().currentTimeUs;
@@ -212,7 +219,94 @@ interface ClipActions {
   end: (event: React.PointerEvent<HTMLElement>) => void;
   cancel: () => void;
   suppressClick: React.MutableRefObject<boolean>;
+  /** Sets a sound clip's gain (with the selection when it is selected). */
+  setGain: (clip: Clip, gainDb: number) => void;
 }
+
+/** Where a gain sits on a clip, from the top (+12 dB) to the bottom (-60 dB), in percent. */
+const GAIN_RANGE = { min: -60, max: 12 } as const;
+const gainTop = (db: number) => ((GAIN_RANGE.max - db) / (GAIN_RANGE.max - GAIN_RANGE.min)) * 100;
+
+/**
+ * A sound clip's gain drawn on it, with its fades as ramps: drag the line up or down to set
+ * the gain (double-click puts it back to 0 dB).
+ */
+const GainLine: React.FC<{ clip: Clip; locked: boolean; actions: React.MutableRefObject<ClipActions> }> = ({ clip, locked, actions }) => {
+  const saved = clip.mix?.gainDb ?? 0;
+  const [draft, setDraft] = useState<number | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const db = draft ?? saved;
+  const top = gainTop(db);
+  const fadeIn = ((clip.mix?.fadeInUs ?? 0) / clip.durationUs) * 100;
+  const fadeOut = ((clip.mix?.fadeOutUs ?? 0) / clip.durationUs) * 100;
+  const fromPointer = (event: React.PointerEvent) => {
+    const rect = box.current?.getBoundingClientRect();
+    if (!rect || rect.height === 0) return db;
+    const share = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
+    const value = GAIN_RANGE.max - share * (GAIN_RANGE.max - GAIN_RANGE.min);
+    return Math.round(value * 2) / 2;
+  };
+  const stop = (event: React.SyntheticEvent) => event.stopPropagation();
+  const label = db > 0 ? `+${db} dB` : `${db} dB`;
+  return (
+    <div ref={box} className="absolute inset-0 pointer-events-none" aria-hidden={locked}>
+      <svg className="absolute inset-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden>
+        <polyline
+          points={`0,100 ${fadeIn},${top} ${100 - fadeOut},${top} 100,100`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={1.5}
+          vectorEffect="non-scaling-stroke"
+          className={draft !== null ? "text-white" : "text-audio-fg/80"}
+        />
+      </svg>
+      {!locked && (
+        <div
+          role="slider"
+          aria-label={`${clip.id} gain`}
+          aria-valuemin={GAIN_RANGE.min}
+          aria-valuemax={GAIN_RANGE.max}
+          aria-valuenow={db}
+          aria-valuetext={label}
+          tabIndex={-1}
+          title={`Gain ${label}: drag up or down, double-click for 0 dB`}
+          className="absolute h-2 -translate-y-1/2 cursor-ns-resize pointer-events-auto"
+          style={{ top: `${top}%`, left: `${fadeIn}%`, right: `${fadeOut}%` }}
+          onClick={stop}
+          onDoubleClick={(event) => {
+            event.stopPropagation();
+            if (saved !== 0) actions.current.setGain(clip, 0);
+          }}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            if (event.button !== 0) return;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            setDraft(fromPointer(event));
+          }}
+          onPointerMove={(event) => {
+            if (draft === null) return;
+            event.stopPropagation();
+            setDraft(fromPointer(event));
+          }}
+          onPointerUp={(event) => {
+            if (draft === null) return;
+            event.stopPropagation();
+            const value = fromPointer(event);
+            setDraft(null);
+            actions.current.suppressClick.current = true;
+            if (value !== saved) actions.current.setGain(clip, value);
+          }}
+          onPointerCancel={() => setDraft(null)}
+        />
+      )}
+      {draft !== null && (
+        <span className="absolute right-1 px-1 rounded-sm bg-studio-950/80 text-[10px] leading-4 font-mono text-white" style={{ top: `max(0px, calc(${top}% - 18px))` }}>
+          {label}
+        </span>
+      )}
+    </div>
+  );
+};
 
 /** What a clip shows, worked out once per revision rather than on every render. */
 interface ClipInfo {
@@ -358,6 +452,7 @@ const ClipBlock = React.memo(function ClipBlock({
                 />
               </div>
             )}
+            {showContents && <GainLine clip={clip} locked={locked} actions={actions} />}
             {/* Muted moments: a mark over the waveform where the sound is silenced. */}
             {mutes
               ?.filter((m) => m.endUs > clip.inUs && m.startUs < clipOut(clip))
@@ -1043,6 +1138,11 @@ export const TimelineStudio: React.FC = () => {
     }
     if (zooms.selectedZoomId) zooms.deleteZoom(zooms.selectedZoomId);
   };
+  /** The selected clips again, right after them (sound, look and speed included). */
+  const duplicateSelection = () => {
+    if (selectedClipIds.length === 0) return;
+    void edit({ kind: "duplicate", clipIds: selectedClipIds });
+  };
   /** Keep only the range: everything else goes. */
   const keepOnlyRange = () => {
     if (!range) return;
@@ -1075,6 +1175,39 @@ export const TimelineStudio: React.FC = () => {
     const target =
       direction < 0 ? [...edges].reverse().find((e) => e < currentTimeUs) : edges.find((e) => e > currentTimeUs && e <= durationUs);
     if (target !== undefined) seekToUs(target);
+  };
+  // ---- Markers (UI-2): moments to come back to, anchored in source time ----------------------
+  const markers = openedProject?.shortView ? [] : (openedProject?.markers ?? []);
+  const placedMarkers = markers
+    .filter((m): m is Marker & { editedUs: number } => typeof m.editedUs === "number")
+    .sort((a, b) => a.editedUs - b.editedUs);
+  /** Drops a marker at the playhead, or removes the one within a tenth of a second of it. */
+  const toggleMarker = () => {
+    if (!openedProject || openedProject.shortView) return;
+    const at = nowUs();
+    const near = placedMarkers.find((m) => Math.abs(m.editedUs - at) <= MARKER_NEAR_US);
+    if (near) {
+      void runEdit((p) => api.projectMarkersSet(p.projectHandle, p.revision, markers.filter((m) => m.id !== near.id)));
+      return;
+    }
+    // Anchored to what plays there: the top picture, else any clip.
+    const tracks = [...sequence.tracks.filter((t) => t.kind === "video")].reverse().concat(sequence.tracks.filter((t) => t.kind === "audio"));
+    const clip = tracks.map((t) => clipAt(t, at)).find((c) => c !== undefined);
+    if (!clip) {
+      setEditError("Move the playhead onto a clip to drop a marker there.");
+      return;
+    }
+    const sourceUs = Math.round(clipSourceAt(clip, at));
+    const id = `mk-${sourceUs}-${Date.now().toString(36)}`;
+    void runEdit((p) => api.projectMarkersSet(p.projectHandle, p.revision, [...markers, { id, sourceUs, media: clip.asset }]));
+  };
+  const jumpToMarker = (direction: -1 | 1) => {
+    const at = nowUs();
+    const target =
+      direction < 0
+        ? [...placedMarkers].reverse().find((m) => m.editedUs < at - MARKER_NEAR_US / 2)
+        : placedMarkers.find((m) => m.editedUs > at + MARKER_NEAR_US / 2);
+    if (target) seekToUs(target.editedUs);
   };
   const markIn = () => {
     const at = nowUs();
@@ -1149,6 +1282,10 @@ export const TimelineStudio: React.FC = () => {
     },
     deselectAll: () => setSelectedClipIds([]),
     toggleLink,
+    duplicate: duplicateSelection,
+    marker: toggleMarker,
+    previousMarker: () => jumpToMarker(-1),
+    nextMarker: () => jumpToMarker(1),
     markIn,
     markOut,
     undo,
@@ -1165,7 +1302,7 @@ export const TimelineStudio: React.FC = () => {
     goToEnd: () => seekToUs(Number.MAX_SAFE_INTEGER),
   };
   // Actions that act once per press; the rest (stepping, zoom) repeat while the key is held.
-  const ONCE: HotkeyAction[] = ["playPause", "shuttleForward", "pause", "split", "rippleTrimPrevious", "rippleTrimNext", "toggleLink", "deleteSelection", "rippleDelete", "selectAll", "deselectAll"];
+  const ONCE: HotkeyAction[] = ["playPause", "shuttleForward", "pause", "split", "rippleTrimPrevious", "rippleTrimNext", "toggleLink", "duplicate", "marker", "previousMarker", "nextMarker", "deleteSelection", "rippleDelete", "selectAll", "deselectAll"];
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       // A key another part handled (a transcript cut, a tab's arrows), or pressed while a dialog
@@ -1715,6 +1852,10 @@ export const TimelineStudio: React.FC = () => {
       setDrag(null);
     },
     suppressClick,
+    setGain: (clip, gainDb) => {
+      const ids = selectedClipIds.includes(clip.id) ? selectedClipIds : [clip.id];
+      void edit({ kind: "setSound", clipIds: ids, gainDb });
+    },
   };
   // The same thumbnail settings keep their object, so clips stay memoized.
   const thumbHeightPx = lanes.height("lane:video") - 10;
@@ -1867,6 +2008,18 @@ export const TimelineStudio: React.FC = () => {
           label={`Ripple delete from the playhead to the next edit${hint("rippleTrimNext")}`}
           disabled={!openedProject || editing || durationUs === 0}
           onClick={() => void rippleTrim("next")}
+        />
+        <IconButton
+          icon={Bookmark}
+          label={`Drop a marker at the playhead, or remove the one there${hint("marker")}`}
+          disabled={!openedProject || editing || durationUs === 0 || Boolean(openedProject?.shortView)}
+          onClick={toggleMarker}
+        />
+        <IconButton
+          icon={CopyPlus}
+          label={`Duplicate the selected clips right after them${hint("duplicate")}`}
+          disabled={!openedProject || editing || selectedClipIds.length === 0}
+          onClick={duplicateSelection}
         />
         <Button
           variant="ghost"
@@ -2024,6 +2177,21 @@ export const TimelineStudio: React.FC = () => {
                     <div className="h-full border-l border-studio-300/70" />
                     <span className="absolute top-0.5 left-1 max-w-[180px] truncate rounded bg-studio-700 px-1.5 text-meta text-studio-100">{chapter.title}</span>
                   </div>
+                ))}
+                {/* Markers: click one to go there; M at the playhead removes it */}
+                {placedMarkers.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    className="absolute top-0 z-20 -translate-x-1/2 text-accent hover:text-accent-hover"
+                    style={{ left: pct(m.editedUs) }}
+                    title={`${m.note || "Marker"}: click to go there${hint("marker") ? `; at the playhead${hint("marker")} removes it` : ""}`}
+                    aria-label={m.note || "Marker"}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={() => seekToUs(m.editedUs)}
+                  >
+                    <Bookmark size={12} fill="currentColor" />
+                  </button>
                 ))}
                 <AtPlayhead spanUs={spanUs}>
                   {(left) => (

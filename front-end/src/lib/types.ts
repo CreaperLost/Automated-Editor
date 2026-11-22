@@ -72,6 +72,9 @@ export interface ProjectZoom {
   fixed?: boolean;
 }
 
+/** How a zoom glides in and out (`zoom::ZoomCurve`). */
+export type ZoomCurve = "smooth" | "snappy" | "gentle" | "linear";
+
 /** The project's auto-zoom settings (src-tauri/src/zoom/mod.rs `ZoomSettings`). */
 export interface ZoomSettings {
   /** How far a zoom on clicks goes in. */
@@ -79,6 +82,8 @@ export interface ZoomSettings {
   /** How far a zoom where the mouse rests goes in; 1 is off. */
   hoverScale: number;
   transitionMs: number;
+  /** How every zoom glides in and out. */
+  curve?: ZoomCurve;
   /** The shortest zoom. */
   minHoldMs: number;
   /** Activity closer than this is one zoom that follows the mouse. */
@@ -95,6 +100,7 @@ export const DEFAULT_ZOOM_SETTINGS: ZoomSettings = {
   clickScale: 1.6,
   hoverScale: 1.4,
   transitionMs: 0,
+  curve: "smooth",
   minHoldMs: 5000,
   mergeGapMs: 5000,
   zoomsPerFiveMinutes: 10,
@@ -401,6 +407,10 @@ export interface AudioSettings {
   noiseReduction: boolean;
   /** How far background noise is lowered, 3 to 30 dB. */
   noiseReductionDb: number;
+  /** spectral: a steady noise profile; neural: RNNoise, also noise that changes. */
+  noiseModel?: "spectral" | "neural";
+  /** High-pass, compressor and de-esser on speech. */
+  voiceChain?: boolean;
   duckSystemAudio: boolean;
   /** How far system audio is lowered under speech, 3 to 30 dB. */
   duckDb: number;
@@ -1383,6 +1393,7 @@ export type SequenceEdit =
   | { kind: "moveClips"; clipIds: string[]; deltaUs: number; trackId?: string | null; anchorId?: string | null }
   | { kind: "trimClip"; clipId: string; edge: "start" | "end"; toUs: number; ripple?: boolean | null }
   | { kind: "split"; atUs: number; clipIds: string[] }
+  | { kind: "duplicate"; clipIds: string[] }
   | { kind: "delete"; clipIds: string[]; ripple?: boolean | null }
   | { kind: "deleteRange"; ranges: EditedSpan[]; ripple?: boolean | null }
   | { kind: "rippleTrim"; atUs: number; side: TrimSide }
@@ -1845,6 +1856,8 @@ export interface OpenedProject {
   noiseMutes?: Record<string, SourceSpan[]>;
   captions?: CaptionSettings;
   chapters?: Chapter[];
+  /** Timeline markers, with where they play now. */
+  markers?: Marker[];
   shorts?: Short[];
   /** Screen effects (blur, hide, spotlight, magnifier, dim or blur behind a graphic). */
   effects?: ScreenEffect[];
@@ -2410,6 +2423,18 @@ export interface Chapter {
   /** The asset whose time `sourceUs` is in; absent: the first recording. */
   media?: string;
   /** Edited-timeline start, or null when that moment was cut. Filled in by the backend. */
+  editedUs?: number | null;
+}
+
+/** A timeline marker to come back to (UI-2), anchored in source time so it follows cuts. */
+export interface Marker {
+  id: string;
+  sourceUs: number;
+  /** An optional note. */
+  note?: string;
+  /** The asset whose time `sourceUs` is in; absent: the first recording. */
+  media?: string;
+  /** Edited-timeline place, or null when that moment was cut. Filled in by the backend. */
   editedUs?: number | null;
 }
 

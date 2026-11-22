@@ -1527,8 +1527,9 @@ mod tests {
         // moved to 51,500. Later that day (SND-2, FTG-3, LOOP-1): `library` sound `op: cues`,
         // `source_search` `media` boards with `media_import` `notes`, and `proposals_list`
         // `corrections`, each paid for with trims elsewhere until the last, 51,610; the budget
-        // moved to 52,000.
+        // moved to 52,000. 22 Nov (FTG-8, SND-6): `media_import` `url` with `fromS`/`toS`
+        // and the silence pass's `speechGuard`, 52,046; the budget moved to 52,100.
         let size = serde_json::to_string(&list).unwrap().len();
-        assert!(size < 52_000, "the tool list grew to {size} characters");
+        assert!(size < 52_100, "the tool list grew to {size} characters");
     }
 }
