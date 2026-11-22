@@ -795,6 +795,8 @@ export const api = {
   /** Downloads a video from a link (yt-dlp) into the project and imports it. */
   projectMediaFromLink: (projectHandle: string, url: string, fromS: number | null = null, toS: number | null = null) =>
     invokeTauri<OpenedProject>("project_media_from_link", { projectHandle, url, fromS, toS }),
+  /** Stops the link download that is running; progress comes as "media-link-progress" events. */
+  projectMediaLinkStop: () => invokeTauri<void>("project_media_link_stop"),
   projectMediaRemove: (projectHandle: string, expectedRevision: number, assetId: string) =>
     invokeTauri<OpenedProject>("project_media_remove", { projectHandle, expectedRevision, assetId }),
   /** The sound effects library, or the sounds matching `query`. */

@@ -954,6 +954,9 @@ async fn project_media_from_link(
     from_s: Option<f64>,
     to_s: Option<f64>,
 ) -> Result<project::OpenedProject, String> {
+    use std::sync::atomic::Ordering;
+    use tauri::Emitter;
+    LINK_STOP.store(false, Ordering::SeqCst);
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let request = web_video::Request { url, from_s, to_s };
@@ -961,13 +964,29 @@ async fn project_media_from_link(
             &state,
             project_handle,
             &request,
-            &|_, _| {},
-            &|| false,
+            &|fraction, message| {
+                let _ = app.emit(
+                    "media-link-progress",
+                    serde_json::json!({ "fraction": fraction, "message": message }),
+                );
+            },
+            &|| LINK_STOP.load(Ordering::SeqCst),
         )
         .map(|(project, _, _)| project)
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+/// Set to stop the link download that is running.
+#[cfg(feature = "tauri-app")]
+static LINK_STOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Stops the link download that is running; nothing is imported.
+#[cfg(feature = "tauri-app")]
+#[tauri::command]
+fn project_media_link_stop() {
+    LINK_STOP.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 #[cfg(feature = "tauri-app")]
@@ -3683,6 +3702,7 @@ pub fn run() {
             project_sequence_edit,
             project_media_import,
             project_media_from_link,
+            project_media_link_stop,
             project_media_roles,
             project_media_licence,
             image_library_list,
