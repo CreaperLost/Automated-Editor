@@ -37,7 +37,8 @@ gets in a sentence (a claim, a how-to, a result), then gather the words that ser
 anywhere in the video, in the order that tells it best, hook first. One stretch is fine when
 the idea sits in one place. Each clip:
 - makes sense on its own, with no "as I said", "like before", "this one" pointing elsewhere;
-- opens with a hook in the first sentence: a question, a bold claim, a result, "here's how to";
+- opens with a hook in the first sentence: a question, a bold claim, a result, "here's how to"
+  (`create` with `hook: true` moves its loudest 3 s to the front when it has none);
 - runs 20 to 60 seconds; every piece starts and ends on whole sentences, the last on the payoff;
 - shows something on screen while they talk, when there is a choice;
 - uses each word once, and doesn't repeat the clips already made.

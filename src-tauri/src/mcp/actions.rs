@@ -7015,6 +7015,19 @@ mod tests {
             lively.starts_with("No line stands out") || lively.contains("moment"),
             "{lively}"
         );
+        // A hook opens the clip on its loudest words, gathered in front of the whole stretch.
+        let hooked = call(
+            &ctx,
+            "clips",
+            json!({ "op": "create", "title": "Hooked", "fromWord": "w-0", "toWord": "w-6", "hook": true, "scenes": false }),
+        )
+        .unwrap();
+        assert!(
+            hooked.contains(" pieces, ") && hooked.contains("opens on its loudest")
+                || hooked.contains("No hook"),
+            "{hooked}"
+        );
+        call(&ctx, "clips", json!({ "op": "remove", "clip": "Hooked" })).unwrap();
         // Exports pick by kind: "clips" is every clip, "shorts" every short (none here).
         assert_eq!(chosen_shorts(&ctx, "clips").unwrap().len(), 1);
         assert_eq!(chosen_shorts(&ctx, "all").unwrap().len(), 1);

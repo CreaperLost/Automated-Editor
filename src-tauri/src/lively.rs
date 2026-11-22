@@ -170,6 +170,48 @@ pub fn moments(
     out
 }
 
+/// A hook opens on this much of the loudest speech.
+pub const HOOK_US: u64 = 3_000_000;
+
+/// The loudest stretch of about [`HOOK_US`] in `words` (the clip's kept words, in play order)
+/// that sits inside one line, as its first and last word ids; `None` when nothing was
+/// measured or the loudest stretch is already where the clip starts.
+pub fn hook(
+    words: &[TranscriptViewWord],
+    level: impl Fn(u64, u64) -> Option<f64>,
+) -> Option<(String, String)> {
+    let mut best: Option<(f64, usize, usize)> = None;
+    let mut first_word = None;
+    for line in lines(words) {
+        first_word.get_or_insert(line.words[0]);
+        for (a, &start) in line.words.iter().enumerate() {
+            let from = words[start].word.source_start_us;
+            let (mut energy, mut time, mut end) = (0.0, 0.0, None);
+            for &i in &line.words[a..] {
+                let w = &words[i].word;
+                if w.source_end_us.saturating_sub(from) > HOOK_US && end.is_some() {
+                    break;
+                }
+                let len = w.source_end_us.saturating_sub(w.source_start_us) as f64;
+                if let Some(ms) = level(w.source_start_us, w.source_end_us) {
+                    energy += ms * len;
+                    time += len;
+                }
+                end = Some(i);
+            }
+            let (Some(end), true) = (end, time > 0.0) else {
+                continue;
+            };
+            let mean = energy / time;
+            if best.is_none_or(|(b, _, _)| mean > b) {
+                best = Some((mean, start, end));
+            }
+        }
+    }
+    let (_, start, end) = best?;
+    (Some(start) != first_word).then(|| (words[start].word.id.clone(), words[end].word.id.clone()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,5 +267,33 @@ mod tests {
             (found[1].from_word.as_str(), found[1].to_word.as_str()),
             ("w-28", "w-31")
         );
+    }
+
+    #[test]
+    fn the_hook_is_the_loudest_three_seconds_and_none_when_it_already_opens_there() {
+        // One word every 0.4 s for 20 s, as lines of four.
+        let words: Vec<_> = (0..50)
+            .map(|i| {
+                let t = if i % 4 == 3 { "end." } else { "word" };
+                word(i, t, i as f64 * 0.4)
+            })
+            .collect();
+        let loud_from = |start_us: u64| {
+            move |from: u64, _| {
+                Some(if from >= start_us && from < start_us + 1_600_000 {
+                    10.0
+                } else {
+                    1.0
+                })
+            }
+        };
+        // Words 24..27 (9.6 s to 11.2 s) are loud.
+        assert_eq!(
+            hook(&words, loud_from(9_600_000)),
+            Some(("w-24".into(), "w-27".into()))
+        );
+        // Loudest at the start: no hook.
+        assert_eq!(hook(&words, loud_from(0)), None);
+        assert_eq!(hook(&words, |_, _| None), None);
     }
 }
