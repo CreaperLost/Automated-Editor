@@ -1583,6 +1583,7 @@ impl SceneEvaluator {
             .filter(|zoom| self.document.clock_asset(zoom.media.as_deref()) == Some(asset))
             .map(|zoom| {
                 let mut suggestion = zoom.as_suggestion();
+                suggestion.curve = settings.curve;
                 suggestion.kept = crate::zoom::kept_stretches(
                     &clock,
                     suggestion.source_start_us,

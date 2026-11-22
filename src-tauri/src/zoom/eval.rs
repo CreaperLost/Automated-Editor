@@ -131,10 +131,14 @@ fn sample_suggestion(suggestion: &ZoomSuggestion, source_us: u64) -> (f64, f64, 
     let hold_start = transition;
     let hold_end = total.saturating_sub(transition).max(hold_start);
     let amount = if elapsed < hold_start {
-        ease_zoom(elapsed as f64 / transition.max(1) as f64)
+        suggestion
+            .curve
+            .ease(elapsed as f64 / transition.max(1) as f64)
     } else if elapsed >= hold_end {
         let span = total.saturating_sub(hold_end).max(1);
-        1.0 - ease_zoom(elapsed.saturating_sub(hold_end) as f64 / span as f64)
+        1.0 - suggestion
+            .curve
+            .ease(elapsed.saturating_sub(hold_end) as f64 / span as f64)
     } else {
         1.0
     };
@@ -168,10 +172,4 @@ fn kept_between(suggestion: &ZoomSuggestion, from: u64, to: u64) -> u64 {
         .iter()
         .map(|&(a, b)| b.min(to).saturating_sub(a.max(from)))
         .sum()
-}
-
-/// Quintic smootherstep: starts and ends with no speed and no jolt in acceleration.
-pub fn ease_zoom(t: f64) -> f64 {
-    let t = t.clamp(0.0, 1.0);
-    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
 }

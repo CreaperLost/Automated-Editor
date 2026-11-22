@@ -72,6 +72,9 @@ export interface ProjectZoom {
   fixed?: boolean;
 }
 
+/** How a zoom glides in and out (`zoom::ZoomCurve`). */
+export type ZoomCurve = "smooth" | "snappy" | "gentle" | "linear";
+
 /** The project's auto-zoom settings (src-tauri/src/zoom/mod.rs `ZoomSettings`). */
 export interface ZoomSettings {
   /** How far a zoom on clicks goes in. */
@@ -79,6 +82,8 @@ export interface ZoomSettings {
   /** How far a zoom where the mouse rests goes in; 1 is off. */
   hoverScale: number;
   transitionMs: number;
+  /** How every zoom glides in and out. */
+  curve?: ZoomCurve;
   /** The shortest zoom. */
   minHoldMs: number;
   /** Activity closer than this is one zoom that follows the mouse. */
@@ -95,6 +100,7 @@ export const DEFAULT_ZOOM_SETTINGS: ZoomSettings = {
   clickScale: 1.6,
   hoverScale: 1.4,
   transitionMs: 0,
+  curve: "smooth",
   minHoldMs: 5000,
   mergeGapMs: 5000,
   zoomsPerFiveMinutes: 10,
