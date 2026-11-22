@@ -54,6 +54,7 @@ pub enum Kind {
     NoSound,
     Fragment,
     ClippedWord,
+    SaidTwice,
     ZoomTooShort,
     CaptionsCoverWebcam,
     CaptionsWithoutTranscript,
@@ -482,16 +483,22 @@ fn cuts(out: &mut Builder, document: &EditDocument, speech: &[(Transcript, Timel
     };
     let pieces = pieces(&mapper);
     // The words of that sound, when it is transcribed.
-    let words: Option<Vec<(u64, u64)>> = speech
+    let texts: Option<Vec<(u64, u64, &str)>> = speech
         .iter()
         .find(|(t, _)| key.as_deref() == Some(t.track_id.as_str()))
         .map(|(t, _)| {
             t.words
                 .iter()
                 .filter(|w| w.kind == WordKind::Word)
-                .map(|w| (w.source_start_us, w.source_end_us))
+                .map(|w| (w.source_start_us, w.source_end_us, w.text.as_str()))
                 .collect()
         });
+    if let Some(texts) = &texts {
+        said_twice(out, &pieces, texts);
+    }
+    let words: Option<Vec<(u64, u64)>> = texts
+        .as_ref()
+        .map(|t| t.iter().map(|&(a, b, _)| (a, b)).collect());
     for piece in pieces.iter().filter(|p| p.cut_before && p.cut_after) {
         let length = piece.edited_end - piece.edited_start;
         let blip = match &words {
@@ -525,6 +532,58 @@ fn cuts(out: &mut Builder, document: &EditDocument, speech: &[(Transcript, Timel
                 },
             );
         }
+    }
+}
+
+/// The most words a join is checked for saying again.
+const SAID_TWICE_MAX_WORDS: usize = 3;
+
+/// A word as compared across a cut: lower case, letters, digits and apostrophes only.
+fn comparable(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric() || *c == '\'' || *c == '’')
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Cuts with the same words on both sides ("every single ‖ single pastry"): the join plays
+/// them twice, usually the leftover of a restart that was trimmed as a pause.
+fn said_twice(out: &mut Builder, pieces: &[Piece], words: &[(u64, u64, &str)]) {
+    let kept = |p: &Piece| -> Vec<String> {
+        words
+            .iter()
+            .filter(|&&(a, b, _)| (p.source_start..p.source_end).contains(&(a + (b - a) / 2)))
+            .map(|&(_, _, t)| comparable(t))
+            .filter(|t| !t.is_empty())
+            .collect()
+    };
+    for pair in pieces.windows(2) {
+        let (prev, next) = (&pair[0], &pair[1]);
+        if !prev.cut_after {
+            continue;
+        }
+        let (before, after) = (kept(prev), kept(next));
+        let longest = (1..=SAID_TWICE_MAX_WORDS.min(before.len()).min(after.len()))
+            .rev()
+            .find(|&n| before[before.len() - n..] == after[..n]);
+        let Some(n) = longest else {
+            continue;
+        };
+        let phrase = after[..n].join(" ");
+        out.push(
+            Kind::SaidTwice,
+            Severity::Warning,
+            format!("\"{phrase}\" said twice at a cut"),
+            format!(
+                "The cut at {} has \"{phrase}\" on both sides, so it plays twice. Cut one of \
+                 them, or restore the cut if it was said twice on purpose.",
+                clock(next.edited_start)
+            ),
+        )
+        .at(
+            prev.edited_end.saturating_sub(500_000),
+            next.edited_start + 500_000,
+        );
     }
 }
 
@@ -1550,6 +1609,71 @@ mod tests {
             .collect();
         assert_eq!(clipped.len(), 1, "{:?}", report.findings);
         assert!(clipped[0].title.contains("long"));
+    }
+
+    #[test]
+    fn a_cut_with_the_same_words_on_both_sides_is_flagged() {
+        let dir = tempfile::tempdir().unwrap();
+        // "every single, single pastry"; the pause between the two "single"s is cut.
+        save_words(
+            dir.path(),
+            &[
+                ("every", 1000, 1300),
+                ("single,", 1300, 1700),
+                ("Single", 3000, 3400),
+                ("pastry", 3400, 3900),
+                ("then", 6000, 6300),
+                ("more", 7000, 7300),
+            ],
+        );
+        let mut doc = document(10);
+        doc.audio.normalize = true;
+        cut(&mut doc, &[(6400 * MS, 6900 * MS)]);
+        cut(&mut doc, &[(1800 * MS, 2900 * MS)]);
+        let report = run(dir.path(), &doc, &[]);
+        let twice: Vec<&Finding> = report
+            .findings
+            .iter()
+            .filter(|f| f.kind == Kind::SaidTwice)
+            .collect();
+        assert_eq!(twice.len(), 1, "{:?}", report.findings);
+        assert!(twice[0].title.contains("\"single\""), "{}", twice[0].title);
+        assert_eq!(twice[0].start_us, Some(1300 * MS));
+    }
+
+    #[test]
+    fn the_longest_phrase_said_twice_is_named() {
+        let words = [
+            (0, 100, "you"),
+            (100, 200, "can"),
+            (300, 400, "You"),
+            (400, 500, "can"),
+            (500, 600, "see"),
+        ];
+        let pieces = [
+            Piece {
+                edited_start: 0,
+                edited_end: 250,
+                source_start: 0,
+                source_end: 250,
+                cut_before: false,
+                cut_after: true,
+            },
+            Piece {
+                edited_start: 250,
+                edited_end: 550,
+                source_start: 280,
+                source_end: 580,
+                cut_before: true,
+                cut_after: false,
+            },
+        ];
+        let mut out = Builder {
+            findings: Vec::new(),
+        };
+        said_twice(&mut out, &pieces, &words);
+        assert_eq!(out.findings.len(), 1);
+        assert!(out.findings[0].title.contains("\"you can\""));
     }
 
     #[test]
