@@ -4304,10 +4304,11 @@ fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
         ctx.host.export_started(&started, false);
         let status = wait_for_export(ctx, &started.job_id, "Exporting the 9:16 version")?;
         return text(format!(
-            "Exported the 9:16 version, {}x{}, to {}.",
+            "Exported the 9:16 version, {}x{}, to {}.{}",
             status.width,
             status.height,
-            status.output_path.unwrap_or_default()
+            status.output_path.clone().unwrap_or_default(),
+            file_check(&status)
         ));
     }
     let stale = chapters_stale(ctx)
@@ -4328,12 +4329,13 @@ fn export(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
     let begun = std::time::Instant::now();
     let status = wait_for_export(ctx, &started.job_id, "Exporting")?;
     text(format!(
-        "Exported {}x{} {} to {} in {:.0} s.{stale}",
+        "Exported {}x{} {} to {} in {:.0} s.{}{stale}",
         status.width,
         status.height,
         status.video_codec,
-        status.output_path.unwrap_or_default(),
-        begun.elapsed().as_secs_f64()
+        status.output_path.clone().unwrap_or_default(),
+        begun.elapsed().as_secs_f64(),
+        file_check(&status)
     ))
 }
 
@@ -4488,13 +4490,27 @@ fn export_shorts(
         let doing = format!("Exporting short {} of {} ({title})", i + 1, chosen.len());
         let status = wait_for_export(ctx, &started.job_id, &doing)?;
         lines.push(format!(
-            "\"{title}\": {}x{} to {}",
+            "\"{title}\": {}x{} to {}.{}",
             status.width,
             status.height,
-            status.output_path.unwrap_or_default()
+            status.output_path.clone().unwrap_or_default(),
+            file_check(&status)
         ));
     }
     text(lines.join("\n"))
+}
+
+/// What the check of the finished file found, to end an export's reply.
+fn file_check(status: &crate::export::ExportStatus) -> String {
+    if status.findings.is_empty() {
+        return " The file check found nothing wrong.".into();
+    }
+    let mut out = String::from(" The file check found:");
+    for line in crate::export::output_check::lines(&status.findings) {
+        out.push_str("\n- ");
+        out.push_str(&line);
+    }
+    out
 }
 
 fn export_failure(status: &crate::export::ExportStatus) -> String {
@@ -4550,15 +4566,22 @@ fn export_status(ctx: &Ctx, args: Value) -> Result<Vec<Output>, String> {
                 status.job_id,
                 status.stage_fraction.unwrap_or(0.0) * 100.0
             ),
+            (Some(stage), done) if done > 0 && done == status.progress_denominator => {
+                format!(
+                    "Export {} running: {stage}, after its frames.",
+                    status.job_id
+                )
+            }
             _ => format!(
                 "Export {} running: {}/{} frames.",
                 status.job_id, status.progress_numerator, status.progress_denominator
             ),
         },
         Completed => format!(
-            "Export {} done: {}.",
+            "Export {} done: {}.{}",
             status.job_id,
-            status.output_path.clone().unwrap_or_default()
+            status.output_path.clone().unwrap_or_default(),
+            file_check(&status)
         ),
         Failed | Cancelled => export_failure(&status),
     })
@@ -8556,6 +8579,8 @@ mod tests {
             exported.starts_with("Exported 640x360 h264 to"),
             "{exported}"
         );
+        // The finished file is checked by itself, and says what it found.
+        assert!(exported.contains("The file check found"), "{exported}");
         assert!(out.metadata().unwrap().len() > 0);
         assert!(call(&ctx, "export_status", json!({}))
             .unwrap()

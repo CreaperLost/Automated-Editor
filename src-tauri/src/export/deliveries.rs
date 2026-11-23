@@ -61,6 +61,9 @@ pub struct Delivery {
     /// What it was made from ([`fingerprint`]): the same edit makes the same output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    /// What the check of the finished file found.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub findings: Vec<super::output_check::Found>,
 }
 
 /// What an export of `document` would show, play and say, whatever its revision number: the
@@ -175,6 +178,7 @@ impl ExportOwner {
             failure: None,
             finished_at: None,
             fingerprint: Some(fingerprint(&captured.document, &captured.inputs, words)),
+            findings: Vec::new(),
         };
         let job = Job {
             delivery,
@@ -266,6 +270,7 @@ impl ExportOwner {
             failure: status.failure.as_ref().map(|f| f.message().to_string()),
             finished_at: None,
             fingerprint: None,
+            findings: Vec::new(),
         };
         self.shared.lock().jobs.push(Job {
             delivery,
@@ -320,6 +325,7 @@ fn delivery_now(job: &Job) -> Delivery {
     };
     delivery.output_path = status.output_path.clone();
     delivery.failure = status.failure.as_ref().map(|f| f.message().to_string());
+    delivery.findings = status.findings.clone();
     delivery
 }
 
@@ -515,6 +521,7 @@ mod tests {
             failure: None,
             finished_at: None,
             fingerprint: None,
+            findings: Vec::new(),
         }
     }
 

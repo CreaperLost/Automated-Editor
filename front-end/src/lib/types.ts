@@ -1144,6 +1144,14 @@ export interface PresetsView {
   folder: string;
 }
 
+/** Something the check of a finished export's file found. */
+export interface OutputFinding {
+  title: string;
+  detail: string;
+  /** Where it starts in the file; none when it is about the whole file. */
+  atUs?: number;
+}
+
 /** One export in the project's list (DLV-2): waiting, running or done. */
 export interface DeliveryView {
   jobId: string;
@@ -1160,6 +1168,8 @@ export interface DeliveryView {
   outputPath?: string;
   failure?: string;
   finishedAt?: string;
+  /** What the check of the finished file found (src-tauri export/output_check.rs). */
+  findings?: OutputFinding[];
   /** Made from an earlier revision than the edit's now. */
   older: boolean;
   /** Its file is gone. */

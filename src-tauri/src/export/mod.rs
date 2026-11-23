@@ -4,6 +4,7 @@ pub mod deliveries;
 pub mod files;
 pub mod graphics_out;
 pub mod handoff;
+pub mod output_check;
 pub use deliveries::ExportOwner;
 mod native;
 
@@ -138,6 +139,9 @@ pub struct ExportStatus {
     /// Its log, as it happens: the export page streams it.
     #[serde(default)]
     pub log: Vec<ExportLogLine>,
+    /// What the check of the finished file found (`output_check`).
+    #[serde(default)]
+    pub findings: Vec<output_check::Found>,
 }
 
 /// One line of an export's log.
@@ -187,6 +191,7 @@ impl ExportStatus {
             stage: None,
             stage_fraction: None,
             log: Vec::new(),
+            findings: Vec::new(),
         }
     }
 
@@ -2531,6 +2536,7 @@ fn status_from(
         stage: None,
         stage_fraction: None,
         log: Vec::new(),
+        findings: Vec::new(),
     }
 }
 
@@ -2680,9 +2686,31 @@ pub fn run_job(
         },
         gate,
     );
+    // The finished file checked by itself, before it counts as done.
+    let findings = match &result {
+        Ok(path) => {
+            status.lock().stage = Some("Checking the file".into());
+            match output_check::check(path, &captured.document, &cancel) {
+                Ok(found) => {
+                    let mut slot = status.lock();
+                    for line in output_check::lines(&found) {
+                        slot.log(started, ExportLogLevel::Warn, line);
+                    }
+                    found
+                }
+                Err(e) => {
+                    let text = format!("The file was not checked: {e}");
+                    status.lock().log(started, ExportLogLevel::Warn, text);
+                    Vec::new()
+                }
+            }
+        }
+        Err(_) => Vec::new(),
+    };
     let mut slot = status.lock();
     slot.stage = None;
     slot.stage_fraction = None;
+    slot.findings = findings;
     match result {
         Ok(path) => {
             slot.state = ExportState::Completed;

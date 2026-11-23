@@ -3313,6 +3313,7 @@ pub fn export_file_impl(
             failure: None,
             finished_at: Some(chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()),
             fingerprint,
+            findings: Vec::new(),
         },
     );
     Ok(path)
@@ -3424,6 +3425,7 @@ pub fn export_editor_impl(
             failure: None,
             finished_at: Some(chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()),
             fingerprint: Some(fingerprint),
+            findings: Vec::new(),
         },
     );
     Ok(folder)

@@ -1,5 +1,5 @@
 import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, Clock, FolderOpen, Loader2, RotateCw, Trash2, Upload, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, FolderOpen, Loader2, RotateCw, Trash2, Upload, XCircle } from "lucide-react";
 import { api } from "../../lib/ipc";
 import { FILE_MANAGER } from "../../lib/projectActions";
 import type { DeliveryView } from "../../lib/types";
@@ -114,6 +114,18 @@ export const DeliveryList: React.FC<{ projectHandle: string; revision: number; r
                 <div className={`truncate text-meta ${row.older && row.state === "completed" ? "text-zoom-fg" : "text-studio-500"}`} title={note}>
                   {note}
                 </div>
+                {row.state === "completed" && (row.findings?.length ?? 0) > 0 && (
+                  <ul className="mt-1 space-y-0.5" aria-label="What the file check found">
+                    {row.findings!.map((f, i) => (
+                      <li key={i} className="flex gap-1 text-meta text-zoom-fg" title={f.detail}>
+                        <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                        <span className="min-w-0">
+                          <span className="font-medium">{f.title}</span> <span className="text-studio-400">{f.detail}</span>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
               {(waiting || running) && (
                 <IconButton
