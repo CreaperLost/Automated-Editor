@@ -44,7 +44,7 @@ const OTHER_FILES: { kind: ExportFileKind; label: string; hint: string }[] = [
   { kind: "md", label: "Transcript", hint: "The words as Markdown, chapters as headings" },
   { kind: "txt", label: "Text", hint: "The words as plain text" },
   { kind: "wav", label: "Audio", hint: "The sound alone, as a WAV file" },
-  { kind: "graphics", label: "Graphics", hint: "Each graphic on its own with see-through parts (MOV), for another editor" },
+  { kind: "editor", label: "For editors", hint: "The cut as timeline files for Premiere, Resolve or Final Cut, with each graphic as a see-through MOV" },
 ];
 const MIN_MBPS = 1;
 const MAX_MBPS = 200;
@@ -218,7 +218,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     };
   }, []);
 
-  // Subtitles, transcript, sound and graphics go beside the video, named like it.
+  // Subtitles, transcript, sound and the editors' folder go beside the video, named like it.
   const projectHandle = useProjectStore((s) => s.openedProject?.projectHandle);
   const [saving, setSaving] = useState<ExportFileKind>();
   const [saved, setSaved] = useState<{ path?: string; error?: string }>();
@@ -228,7 +228,7 @@ export const ExportDialog: React.FC<ExportDialogProps> = ({
     setSaved(undefined);
     try {
       const stem = destination?.replace(/\.[^./\\]*$/, "");
-      const beside = stem ? (kind === "graphics" ? `${stem} graphics` : `${stem}.${kind}`) : null;
+      const beside = stem ? (kind === "editor" ? `${stem} for editors` : `${stem}.${kind}`) : null;
       setSaved({ path: await api.exportFile(projectHandle, kind, null, beside) });
     } catch (err) {
       setSaved({ error: String(err) });
