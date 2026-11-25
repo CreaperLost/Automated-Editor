@@ -24,9 +24,9 @@ pub enum FileKind {
     Md,
     /// The sound alone, 48 kHz stereo 16-bit.
     Wav,
-    /// Each graphic on its own, see-through (ProRes 4444 with alpha), into a folder: named in
-    /// timeline order with where each starts, for another editor.
-    Graphics,
+    /// The cut as timeline files, graphics as see-through MOVs.
+    #[serde(alias = "graphics")]
+    Editor,
 }
 
 impl FileKind {
@@ -37,7 +37,7 @@ impl FileKind {
             Self::Txt => "txt",
             Self::Md => "md",
             Self::Wav => "wav",
-            Self::Graphics => "graphics",
+            Self::Editor => "editor",
         }
     }
 

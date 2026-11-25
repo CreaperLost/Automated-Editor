@@ -1,8 +1,8 @@
-//! Each graphic of an edit on its own, see-through, for another editor (DLV-3, first part):
-//! the export's own final render of every graphic clip on a shown track, in the slot it plays
-//! in, written as a QuickTime ProRes 4444 file with its alpha, which Premiere, Resolve and
-//! Final Cut all read. Named in timeline order with where each starts, so it can be lined up
-//! by hand; the edit itself is not handed over yet.
+//! Each graphic of an edit on its own, see-through, for another editor (DLV-3): the export's
+//! own final render of every graphic clip on a shown track, in the slot it plays in, written
+//! as a QuickTime ProRes 4444 file with its alpha, which Premiere, Resolve and Final Cut all
+//! read. Named in timeline order with where each starts; the timeline files of
+//! [`super::handoff`] place them.
 use crate::project::revision::EditDocument;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -10,6 +10,8 @@ use std::sync::atomic::AtomicBool;
 /// One graphic written.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Written {
+    /// The graphic clip it was made for.
+    pub clip: String,
     pub path: PathBuf,
     pub start_us: u64,
     pub duration_us: u64,
@@ -23,7 +25,7 @@ fn at(us: u64) -> String {
 }
 
 /// A name a file system takes: no separators or reserved marks, not empty.
-fn file_safe(name: &str) -> String {
+pub(super) fn file_safe(name: &str) -> String {
     let clean: String = name
         .chars()
         .filter(|c| {
@@ -52,8 +54,8 @@ fn graphic_clips(document: &EditDocument) -> Vec<&crate::sequence::Clip> {
 }
 
 /// Writes every graphic of `document` (on a `canvas` export at `fps`) into `folder`, made if
-/// missing, rendering those not rendered yet. `progress` gets the share done and what is
-/// happening.
+/// missing, rendering those not rendered yet. An edit with none writes nothing. `progress`
+/// gets the share done and what is happening.
 pub fn write(
     root: &Path,
     document: &EditDocument,
@@ -66,7 +68,8 @@ pub fn write(
     use crate::graphics::render::{ensure, Quality, Spec};
     let clips = graphic_clips(document);
     if clips.is_empty() {
-        return Err("The edit has no graphics".into());
+        progress(1.0, "Done");
+        return Ok(Vec::new());
     }
     let ffmpeg = crate::media::ffmpeg::ffmpeg_path()?;
     let full_camera = crate::graphics::full_camera_ranges(document);
@@ -152,6 +155,7 @@ pub fn write(
             ));
         }
         written.push(Written {
+            clip: clip.id.clone(),
             path,
             start_us: clip.start_us,
             duration_us: clip.duration_us,
@@ -294,7 +298,7 @@ mod tests {
         };
         assert!(alpha(20, 20) < 10, "corner");
         assert!(alpha(200, 200) > 245, "square");
-        // Nothing to write is said plainly.
+        // An edit with no graphics writes none.
         let empty = write(
             &root,
             &EditDocument::default(),
@@ -304,6 +308,6 @@ mod tests {
             &AtomicBool::new(false),
             &mut |_, _| {},
         );
-        assert_eq!(empty.unwrap_err(), "The edit has no graphics");
+        assert_eq!(empty.unwrap(), Vec::new());
     }
 }

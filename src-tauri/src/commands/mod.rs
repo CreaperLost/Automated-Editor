@@ -3182,8 +3182,8 @@ pub fn export_file_impl(
     on_progress: &mut dyn FnMut(f64),
 ) -> Result<PathBuf, String> {
     use crate::export::files;
-    if kind == files::FileKind::Graphics {
-        return export_graphics_impl(state, project_handle, short_id, destination, on_progress);
+    if kind == files::FileKind::Editor {
+        return export_editor_impl(state, project_handle, short_id, destination, on_progress);
     }
     let (root, stem, assets, contents, sound, label, revision, fingerprint) = {
         let _guard = state.command_lock.lock();
@@ -3240,7 +3240,7 @@ pub fn export_file_impl(
             files::FileKind::Srt | files::FileKind::Vtt => "Subtitles",
             files::FileKind::Txt | files::FileKind::Md => "Transcript",
             files::FileKind::Wav => "Sound",
-            files::FileKind::Graphics => unreachable!("written by export_graphics_impl"),
+            files::FileKind::Editor => unreachable!("written by export_editor_impl"),
         };
         let label = match short {
             Some(short) => format!("{}: {what}", short.title),
@@ -3318,10 +3318,11 @@ pub fn export_file_impl(
     Ok(path)
 }
 
-/// Writes each graphic of the video (or `short_id`'s short) on its own, see-through, into a
-/// folder beside the project (`<name> graphics`) or `destination`, at the export settings'
-/// size and frame rate; answers with the folder.
-pub fn export_graphics_impl(
+/// Writes the video (or `short_id`'s short) for another editor into a folder beside the
+/// project (`<name> for editors`) or `destination`: the cut as timeline files and each graphic
+/// on its own, see-through, at the export settings' size and frame rate; answers with the
+/// folder.
+pub fn export_editor_impl(
     state: &AppState,
     project_handle: String,
     short_id: Option<String>,
@@ -3373,7 +3374,7 @@ pub fn export_graphics_impl(
                 .with_extension("")
                 .to_string_lossy()
                 .into_owned()
-                + " graphics"
+                + " for editors"
         }
     };
     let folder = crate::export::resolve_destination(&root, &stem, 0, Some(&requested), &assets)
@@ -3383,10 +3384,16 @@ pub fn export_graphics_impl(
         &document,
         canvas,
         settings.fps,
-        &folder,
+        &folder.join("Graphics"),
         &std::sync::atomic::AtomicBool::new(false),
-        &mut |done, _| on_progress(done),
+        &mut |done, _| on_progress(done * 0.9),
     )?;
+    std::fs::create_dir_all(&folder)
+        .map_err(|e| format!("Could not make {}: {e}", folder.display()))?;
+    let handoff =
+        crate::export::handoff::build(&root, &document, &stem, canvas, settings.fps, &written)?;
+    crate::export::handoff::write(&handoff, &folder)?;
+    on_progress(1.0);
     let output = folder.to_string_lossy().into_owned();
     for earlier in crate::export::deliveries::records(&root) {
         if earlier.request.file.is_some() && earlier.output_path.as_deref() == Some(&output) {
@@ -3398,14 +3405,14 @@ pub fn export_graphics_impl(
         crate::export::deliveries::Delivery {
             job_id: uuid::Uuid::new_v4().to_string(),
             label: format!(
-                "{} graphic{} (MOV with alpha)",
+                "Timeline for other editors, {} graphic{}",
                 written.len(),
                 if written.len() == 1 { "" } else { "s" }
             ),
             request: crate::export::deliveries::Request {
                 short_id,
                 settings: Default::default(),
-                file: Some(crate::export::files::FileKind::Graphics),
+                file: Some(crate::export::files::FileKind::Editor),
                 vertical: false,
             },
             state: crate::export::ExportState::Completed,
