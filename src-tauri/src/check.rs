@@ -32,6 +32,10 @@ pub const YOUTUBE_LUFS: f32 = -14.0;
 const QUIET_TARGET_MARGIN: f32 = 2.0;
 /// Room left between raised captions and the webcam bubble, as a share of the canvas height.
 const CAPTION_CLEARANCE_PCT: f32 = 1.5;
+/// A caption on screen for less than this, or showing words faster than
+/// [`CAPTION_MAX_WORDS_PER_S`], is gone before it can be read.
+const CAPTION_MIN_US: u64 = 300_000;
+const CAPTION_MAX_WORDS_PER_S: f64 = 6.0;
 /// Findings of one kind listed at most; the rest are summed up in the last one.
 const MAX_PER_KIND: usize = 40;
 
@@ -56,6 +60,7 @@ pub enum Kind {
     ClippedWord,
     ZoomTooShort,
     CaptionsCoverWebcam,
+    CaptionsTooFast,
     CaptionsWithoutTranscript,
     ChapterCut,
     ChapterTooShort,
@@ -211,6 +216,7 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
     clipped_words(&mut out, &speech);
     zooms(&mut out, document);
     captions(&mut out, root, document);
+    caption_speed(&mut out, root, document);
     chapters(&mut out, document);
     if has_sound {
         loudness(&mut out, document);
@@ -711,6 +717,46 @@ fn captions(out: &mut Builder, root: &Path, document: &EditDocument) {
             Fix::CaptionOffset { offset_pct },
         );
     }
+}
+
+/// Captions shown too briefly to read: one finding for all of them, at the first.
+fn caption_speed(out: &mut Builder, root: &Path, document: &EditDocument) {
+    let settings = &document.captions;
+    if !settings.enabled {
+        return;
+    }
+    let Some(cues) = crate::export::caption_track_cues(document, settings, |key| {
+        store::load_transcript(root, key).ok().flatten()
+    }) else {
+        return;
+    };
+    let fast: Vec<_> = cues
+        .iter()
+        .map(|(_, cue)| cue)
+        .filter(|cue| {
+            let shown = cue.end_us.saturating_sub(cue.start_us);
+            shown < CAPTION_MIN_US
+                || cue.words.len() as f64 / (shown.max(1) as f64 / 1e6) > CAPTION_MAX_WORDS_PER_S
+        })
+        .collect();
+    let Some(first) = fast.first() else {
+        return;
+    };
+    out.push(
+        Kind::CaptionsTooFast,
+        Severity::Info,
+        "Some captions go by too fast to read".into(),
+        format!(
+            "{} of {} captions are on screen under {} s or show more than {} words a second, \
+             the first at {}. Fewer words per caption gives each one longer.",
+            fast.len(),
+            cues.len(),
+            CAPTION_MIN_US as f64 / 1e6,
+            CAPTION_MAX_WORDS_PER_S,
+            clock(first.start_us)
+        ),
+    )
+    .at(first.start_us, first.end_us);
 }
 
 fn chapters(out: &mut Builder, document: &EditDocument) {
@@ -1655,6 +1701,39 @@ mod tests {
             "{:?}",
             report.findings
         );
+    }
+
+    #[test]
+    fn captions_gone_before_they_can_be_read_get_a_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        save_words(
+            dir.path(),
+            &[
+                ("one", 1000, 1040),
+                ("two", 1040, 1080),
+                ("three", 1080, 1120),
+                ("four", 1120, 1160),
+                ("five.", 1160, 1200),
+                ("Then", 4000, 4400),
+                ("slowly", 4400, 5000),
+            ],
+        );
+        let mut doc = document(10);
+        doc.captions.enabled = true;
+        let report = run(dir.path(), &doc, &[]);
+        let hint = report
+            .findings
+            .iter()
+            .find(|f| f.kind == Kind::CaptionsTooFast)
+            .expect("five words in 200 ms, held 400 ms more");
+        assert!(
+            hint.detail.starts_with("1 of 2 captions"),
+            "{}",
+            hint.detail
+        );
+        assert_eq!(hint.start_us, Some(1_000_000));
+        doc.captions.enabled = false;
+        assert!(!kinds(&run(dir.path(), &doc, &[])).contains(&Kind::CaptionsTooFast));
     }
 
     #[test]

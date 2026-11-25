@@ -19,6 +19,26 @@ const SAME_AS: Record<string, string> = {
 /** Commands that answer nothing (or nothing the UI reads). */
 const QUIET = new Set(["set_window_title"]);
 
+/** A finished export whose file check found two things, so the list shows them. */
+const CHECKED_EXPORT = {
+  jobId: "preview-done",
+  label: "Video",
+  request: { settings: {} },
+  state: "completed",
+  revision: 1,
+  width: 1920,
+  height: 1080,
+  progress: 1,
+  outputPath: `${PROJECT_PATH}/Smoke.mp4`,
+  finishedAt: "2026-11-23 18:10",
+  findings: [
+    { title: "The sound peaks too high", detail: "Its true peak is -0.4 dBTP, over -1: it can distort when a player or site re-encodes it. Lower the loudest part or the target." },
+    { title: "No sound", detail: "From 0:03.5 to 0:07.2 (4 s).", atUs: 3500000 },
+  ],
+  older: false,
+  missing: false,
+};
+
 let frame: Promise<ArrayBuffer> | undefined;
 
 /** The preview's one picture, behind the 16-byte header (sequence 1, generation 0). */
@@ -54,6 +74,7 @@ export function answer(cmd: string, args: Record<string, unknown>): unknown {
   if (cmd === "pick_project_folder") return PROJECT_PATH;
   // The engine marks the preview available once it has drawn a frame; here one is always ready.
   if (cmd === "playback_status") return { ...(answers.playback_status as object), previewAvailable: true };
+  if (cmd === "export_deliveries") return [CHECKED_EXPORT];
   const name = SAME_AS[cmd] ?? cmd;
   if (name in answers) return structuredClone(answers[name]);
   if (QUIET.has(cmd)) return null;
