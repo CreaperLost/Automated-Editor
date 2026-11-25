@@ -1,3 +1,4 @@
+pub mod beats;
 pub mod denoise;
 pub mod fft;
 pub mod loudness;

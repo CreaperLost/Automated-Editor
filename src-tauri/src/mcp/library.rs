@@ -1143,6 +1143,11 @@ fn music(ctx: &Ctx, args: LibraryArgs) -> Result<Vec<Output>, String> {
                 plural(bed.clip_ids.len(), "clip"),
                 placed.asset_id
             );
+            if let Some(bpm) = bed.bpm {
+                line.push_str(&format!(
+                    " At {bpm} BPM it starts, repeats and ends on a bar."
+                ));
+            }
             if let Some(db) = bed.under_speech_db {
                 line.push_str(&format!(" Music now sits {db} dB under the speech."));
             }

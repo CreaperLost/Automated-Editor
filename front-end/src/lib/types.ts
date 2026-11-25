@@ -812,6 +812,8 @@ export interface MusicPlaced {
   endUs: number;
   /** Set when placing switched the music under speech on, at this level. */
   underSpeechDb?: number;
+  /** The song's tempo when its bars were found: it starts, repeats and ends on a bar. */
+  bpm?: number;
 }
 
 export interface Stream {
