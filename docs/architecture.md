@@ -430,7 +430,7 @@ the first free video track above the bottom one (or `OnNewTrack`), in the same b
   compares document content rather than revision alone. External transcript/graphic inputs are
   not fully captured: GAP-009/018; repeated hashing/history persistence have GAP-007/012.
 - **`check`** (`check.rs`) reads the selected video or short edit only (no decode, no model, ~3 ms): missing media, black
-  frames, no sound, blips between cuts, words cut partway, flashing zooms, captions over the
+  frames, no sound, blips between cuts, words cut partway, the same words on both sides of a cut, flashing zooms, captions over the
   bubble, chapter rules, loudness not normalised, pending proposals. Safe
   fixes, each its own undo step.
 - **`storyboard`** (`mcp/storyboard.rs`, agents only since 22 Oct 2026): a tile per scene (split

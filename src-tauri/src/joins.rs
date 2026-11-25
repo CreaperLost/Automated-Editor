@@ -293,7 +293,7 @@ pub fn risky(root: &Path, document: &EditDocument, max: usize) -> Vec<(u64, Stri
     let findings: Vec<(u64, u64, String)> = check::run(root, document, &[])
         .findings
         .into_iter()
-        .filter(|f| matches!(f.kind, Kind::ClippedWord | Kind::Fragment))
+        .filter(|f| matches!(f.kind, Kind::ClippedWord | Kind::Fragment | Kind::SaidTwice))
         .filter_map(|f| Some((f.start_us?, f.end_us?, f.title)))
         .collect();
 
