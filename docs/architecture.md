@@ -396,9 +396,12 @@ Spend (`spend.rs`): each paid call the app makes for an open project is appended
 project's `spend.json` as it happens, outside the undo history: narration (OpenRouter), Treg
 web, YouTube and page-read costs (summed per call through `WithTreg`), release checks, drawn
 pictures, generated thumbnails and online transcription (cost unknown, so kept as unknown).
-`status` adds the total; `status` `spend: true` lists it by provider and step. Calls made with
-no project (story discovery), the AI review passes and the agent's own tokens are not counted,
-and the report says so.
+The app's AI passes (filler and retake review, chapters, clips) add one entry per pass: the
+chat client asks OpenRouter for `usage.cost` and sums each answered request; OpenAI reports
+no cost, so its requests go in as one unknown entry. A pass that fails or is cancelled after
+an answer is still recorded. `status` adds the total; `status` `spend: true` lists it by
+provider and step. Calls made with no project (story discovery) and the agent's own tokens
+are not counted, and the report says so.
 
 ## Corrections
 

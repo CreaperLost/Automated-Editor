@@ -703,7 +703,7 @@ pub fn transcript_ai_suggest_impl(
         }
     };
     let _run = RunGuard::start(transcripts, format!("AI review of {track_id}"))?;
-    let (dependency, words, language, plan) = {
+    let (root, dependency, words, language, plan) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         super::require_handle(reader, &project_handle)?;
@@ -720,6 +720,7 @@ pub fn transcript_ai_suggest_impl(
             crate::ai::candidates::plan(&kept, &settled)
         });
         (
+            reader.root().to_path_buf(),
             transcript.dependency(),
             kept.into_iter().cloned().collect::<Vec<_>>(),
             crate::transcript::Language::of(&transcript),
@@ -741,10 +742,14 @@ pub fn transcript_ai_suggest_impl(
     };
     let keep_going = || !transcripts.cancel.load(Ordering::SeqCst);
     let (spans, model) = match (client, plan) {
-        (Some(mut client), _) => (
-            crate::ai::fillers::detect(&mut client, language, &refs, &mut report, &keep_going)?,
-            client.describe(),
-        ),
+        (Some(mut client), _) => {
+            let found =
+                crate::ai::fillers::detect(&mut client, language, &refs, &mut report, &keep_going);
+            // Paid for even when the pass then fails or is cancelled.
+            let provider = client.provider_label();
+            crate::spend::record_pass(&root, "AI review", provider, client.spent(), &track_id);
+            (found?, client.describe())
+        }
         (None, Some(plan)) => {
             report(0.0);
             let mut model = local::LocalModel::load(&local::default_dir())?
@@ -1056,21 +1061,25 @@ pub fn project_chapters_generate_impl(
     let mut client =
         crate::ai::client_from_settings(&config_dir())?.with_cancel(transcripts.cancel.clone());
     let _run = RunGuard::start(transcripts, "Finding chapters".into())?;
-    let words = {
+    let (root, words) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         super::require_handle(reader, &project_handle)?;
         let transcript = store::load_transcript(reader.root(), &track_id)?
             .ok_or("Transcribe this track first")?;
         let document = &reader.history().current;
-        edit::view(
+        let words = edit::view(
             &transcript,
             &document.transcript_clock(&track_id)?,
             document.revision,
         )
-        .words
+        .words;
+        (reader.root().to_path_buf(), words)
     };
-    let mut chapters = crate::ai::chapters::suggest(&mut client, &words)?;
+    let found = crate::ai::chapters::suggest(&mut client, &words);
+    let provider = client.provider_label();
+    crate::spend::record_pass(&root, "Chapters", provider, client.spent(), &track_id);
+    let mut chapters = found?;
     // The words' times are their recording's or file's own.
     let asset = crate::sequence::StreamRef::parse(&track_id).map(|r| r.asset);
     for chapter in &mut chapters {
@@ -1099,21 +1108,25 @@ pub fn project_shorts_generate_impl(
     let mut client =
         crate::ai::client_from_settings(&config_dir())?.with_cancel(transcripts.cancel.clone());
     let _run = RunGuard::start(transcripts, "Finding shorts".into())?;
-    let words = {
+    let (root, words) = {
         let opened = state.opened_project.lock();
         let reader = opened.as_ref().ok_or("No opened project")?;
         super::require_handle(reader, &project_handle)?;
         let transcript = store::load_transcript(reader.root(), &track_id)?
             .ok_or("Transcribe this track first")?;
         let document = &reader.history().current;
-        edit::view(
+        let words = edit::view(
             &transcript,
             &document.transcript_clock(&track_id)?,
             document.revision,
         )
-        .words
+        .words;
+        (reader.root().to_path_buf(), words)
     };
-    let found = crate::ai::shorts::suggest(&mut client, &words)?;
+    let found = crate::ai::shorts::suggest(&mut client, &words);
+    let provider = client.provider_label();
+    crate::spend::record_pass(&root, "Clips", provider, client.spent(), &track_id);
+    let found = found?;
     if transcripts.cancel.load(Ordering::SeqCst) {
         return Err("Cancelled".into());
     }

@@ -26,6 +26,18 @@ pub struct ChatClient {
     api_key: String,
     model: String,
     cancel: Arc<AtomicBool>,
+    spent: Spent,
+}
+
+/// What a client's answered requests cost so far, for the project's spend record.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Spent {
+    /// Requests the provider answered (each one billed).
+    pub calls: usize,
+    /// What the answers that reported a cost add up to, in dollars.
+    pub known_usd: f64,
+    /// Answers that reported no cost (OpenAI never does).
+    pub unknown: usize,
 }
 
 impl ChatClient {
@@ -55,7 +67,18 @@ impl ChatClient {
             api_key: api_key.trim().to_string(),
             model,
             cancel: Arc::new(AtomicBool::new(false)),
+            spent: Spent::default(),
         })
+    }
+
+    /// What the requests answered so far cost.
+    pub fn spent(&self) -> Spent {
+        self.spent
+    }
+
+    /// The provider who is paid, as the spend record names it.
+    pub fn provider_label(&self) -> &'static str {
+        self.provider.label()
     }
 
     /// Stops waiting on a request as soon as `cancel` is set, instead of after the timeout.
@@ -138,7 +161,7 @@ pub fn parse_reply(content: &str) -> Result<Value, String> {
 
 impl JsonModel for ChatClient {
     fn complete_json(&mut self, system: &str, user: &str) -> Result<Value, String> {
-        let body = json!({
+        let mut body = json!({
             "model": self.model,
             "messages": [
                 { "role": "system", "content": system },
@@ -146,6 +169,10 @@ impl JsonModel for ChatClient {
             ],
             "response_format": { "type": "json_object" },
         });
+        if self.provider == AiProvider::OpenRouter {
+            // OpenRouter then says what the request cost, in `usage.cost`.
+            body["usage"] = json!({ "include": true });
+        }
         let mut last_error = String::new();
         for attempt in 0..MAX_ATTEMPTS {
             if attempt > 0 {
@@ -170,6 +197,12 @@ impl JsonModel for ChatClient {
             if status.is_success() {
                 let value: Value = serde_json::from_str(&text)
                     .map_err(|_| format!("{} sent an unreadable reply", self.provider.label()))?;
+                // An answered request is billed, whatever its content turns out to be.
+                self.spent.calls += 1;
+                match value.pointer("/usage/cost").and_then(Value::as_f64) {
+                    Some(cost) if cost >= 0.0 => self.spent.known_usd += cost,
+                    _ => self.spent.unknown += 1,
+                }
                 let content = value
                     .pointer("/choices/0/message/content")
                     .and_then(Value::as_str)
@@ -279,7 +312,8 @@ mod tests {
     #[test]
     fn sends_an_openai_style_request_and_reads_the_json_reply() {
         let reply = serde_json::json!({
-            "choices": [{ "message": { "content": "{\"cuts\":[]}" } }]
+            "choices": [{ "message": { "content": "{\"cuts\":[]}" } }],
+            "usage": { "prompt_tokens": 900, "completion_tokens": 20, "cost": 0.00042 }
         })
         .to_string();
         let (url, server) = fake_server(vec![(200, reply)]);
@@ -302,7 +336,11 @@ mod tests {
         assert!(request.contains("\"response_format\":{\"type\":\"json_object\"}"));
         assert!(request.contains("\"model\":\"openai/gpt-4.1-mini\""));
         assert!(request.contains("user text"));
+        assert!(request.contains("\"usage\":{\"include\":true}"));
         assert_eq!(client.describe(), "OpenRouter/openai/gpt-4.1-mini");
+        assert_eq!(client.spent().calls, 1);
+        assert_eq!(client.spent().unknown, 0);
+        assert!((client.spent().known_usd - 0.00042).abs() < 1e-12);
     }
 
     #[test]
@@ -316,6 +354,26 @@ mod tests {
         assert!(error.contains("OpenAI rejected the API key"), "{error}");
         assert!(error.contains("Incorrect API key provided"));
         assert_eq!(server.join().unwrap().len(), 1);
+        // A refused request is not billed.
+        assert_eq!(client.spent(), Spent::default());
+    }
+
+    #[test]
+    fn an_answer_without_a_cost_counts_as_unknown() {
+        let reply = serde_json::json!({
+            "choices": [{ "message": { "content": "not json" } }]
+        })
+        .to_string();
+        let (url, server) = fake_server(vec![(200, reply)]);
+        let mut client =
+            ChatClient::with_base_url(AiProvider::OpenAi, url, "sk-test".into(), "m".into())
+                .unwrap();
+        assert!(client.complete_json("s", "u").is_err());
+        let request = &server.join().unwrap()[0];
+        // OpenAI is not asked for OpenRouter's usage field.
+        assert!(!request.contains("\"usage\""));
+        let spent = client.spent();
+        assert_eq!((spent.calls, spent.unknown, spent.known_usd), (1, 1, 0.0));
     }
 
     #[test]
