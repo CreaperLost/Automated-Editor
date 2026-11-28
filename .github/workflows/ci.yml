@@ -104,13 +104,15 @@ jobs:
       # apt cache (its BLAS library is wired up by an install-time script).
       # Downloaded directly: setup-ffmpeg@v3 failed intermittently with
       # "Failed to read version from readme". If the download fails, Ubuntu's
-      # own package (installed normally, not from the cache) is used instead.
+      # own package (installed normally, not from the cache) is used instead,
+      # also when the site answers with something that is not the archive.
       - name: Install FFmpeg
         run: |
           url=https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
-          if curl -fsSL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/ffmpeg.tar.xz" "$url"; then
-            mkdir -p "$RUNNER_TEMP/ffmpeg"
-            tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP/ffmpeg" --strip-components=1
+          mkdir -p "$RUNNER_TEMP/ffmpeg"
+          if curl -fsSL --retry 3 --retry-all-errors -o "$RUNNER_TEMP/ffmpeg.tar.xz" "$url" &&
+            tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP/ffmpeg" --strip-components=1 &&
+            "$RUNNER_TEMP/ffmpeg/ffmpeg" -hide_banner -version >/dev/null; then
             echo "$RUNNER_TEMP/ffmpeg" >> "$GITHUB_PATH"
             "$RUNNER_TEMP/ffmpeg/ffmpeg" -hide_banner -version | head -n 1
           else

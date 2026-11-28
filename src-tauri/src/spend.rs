@@ -1,5 +1,6 @@
 //! What a video cost: each paid call the app makes for a project (narration, Treg searches and
-//! page reads, drawn pictures, generated thumbnails, online transcription) written to the
+//! page reads, drawn pictures, generated thumbnails, online transcription, the AI review,
+//! chapter and clip passes) written to the
 //! project's `spend.json` as it happens, outside the undo history (money spent stays spent).
 //! A cost the service didn't report is kept as unknown, never as nothing. The agent's own
 //! tokens and calls made before the project existed (discovering stories) are not here.
@@ -10,8 +11,8 @@ use std::path::{Path, PathBuf};
 const FILE: &str = "spend.json";
 
 /// What the report never covers, said with every total.
-pub const NOT_COUNTED: &str = "Not counted: your agent's own tokens, story discovery before \
-    the video was made, and the AI review passes (fillers, chapters, clips).";
+pub const NOT_COUNTED: &str = "Not counted: your agent's own tokens and story discovery before \
+    the video was made.";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +51,29 @@ pub fn record(root: &Path, step: &str, provider: &str, cost_usd: Option<f64>, no
     });
     if let Err(e) = crate::files::save_json(&path(root), &all) {
         eprintln!("spend: {e}");
+    }
+}
+
+/// Adds one AI pass (fillers, chapters, clips), however many requests it took. The requests
+/// whose cost the provider reported go in as one known amount and the rest as one unknown
+/// entry, so a pass that reported nothing is never counted as free. Nothing when no request
+/// was answered (a refused key, a cancel before the first answer).
+pub fn record_pass(
+    root: &Path,
+    step: &str,
+    provider: &str,
+    spent: crate::ai::client::Spent,
+    note: &str,
+) {
+    let requests = |n: usize| format!("{n} request{}", if n == 1 { "" } else { "s" });
+    let known = spent.calls - spent.unknown;
+    if known > 0 {
+        let what = format!("{}, {note}", requests(known));
+        record(root, step, provider, Some(spent.known_usd), &what);
+    }
+    if spent.unknown > 0 {
+        let what = format!("{} of unknown cost, {note}", requests(spent.unknown));
+        record(root, step, provider, None, &what);
     }
 }
 
@@ -236,5 +260,35 @@ mod tests {
         );
         assert!(text.contains("Not counted"));
         assert_eq!(r.short(), "$0.049 spent, 1 call of unknown cost");
+    }
+
+    #[test]
+    fn an_ai_pass_is_one_entry_and_unreported_requests_stay_unknown() {
+        use crate::ai::client::Spent;
+        let dir = tempfile::tempdir().unwrap();
+        record_pass(dir.path(), "AI review", "OpenAI", Spent::default(), "x");
+        assert!(load(dir.path()).is_empty());
+        let reported = Spent {
+            calls: 3,
+            known_usd: 0.003,
+            unknown: 0,
+        };
+        record_pass(dir.path(), "AI review", "OpenRouter", reported, "mic");
+        let mixed = Spent {
+            calls: 2,
+            known_usd: 0.001,
+            unknown: 1,
+        };
+        record_pass(dir.path(), "Chapters", "OpenRouter", mixed, "mic");
+        let entries = load(dir.path());
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].note, "3 requests, mic");
+        assert_eq!(entries[0].cost_usd, Some(0.003));
+        assert_eq!(entries[1].cost_usd, Some(0.001));
+        assert_eq!(entries[2].cost_usd, None);
+        assert_eq!(entries[2].note, "1 request of unknown cost, mic");
+        let r = report(&entries);
+        assert_eq!(r.by_step["Chapters"].unknown, 1);
+        assert!((r.total.known_usd - 0.004).abs() < 1e-12);
     }
 }
