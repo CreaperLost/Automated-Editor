@@ -435,7 +435,9 @@ the first free video track above the bottom one (or `OnNewTrack`), in the same b
   not fully captured: GAP-009/018; repeated hashing/history persistence have GAP-007/012.
 - **`check`** (`check.rs`) reads the selected video or short edit only (no decode, no model, ~3 ms): missing media, black
   frames, no sound, blips between cuts, words cut partway, flashing zooms, captions over the
-  bubble, chapter rules, loudness not normalised, pending proposals, the same footage twice. Safe
+  bubble, captions too fast or with text that its box or outline does not set apart from a dark
+  or light picture (under WCAG's 3:1 for large text; the emphasis word is not checked), chapter
+  rules, loudness not normalised, pending proposals, the same footage twice. Safe
   fixes, each its own undo step.
 - **`storyboard`** (`mcp/storyboard.rs`, agents only since 22 Oct 2026): a tile per scene (split
   where camera, zoom, graphic, chapter or a long silence starts; ≤ 48 tiles, ≤ 2048 px) plus a
