@@ -36,6 +36,11 @@ const CAPTION_CLEARANCE_PCT: f32 = 1.5;
 /// [`CAPTION_MAX_WORDS_PER_S`], is gone before it can be read.
 const CAPTION_MIN_US: u64 = 300_000;
 const CAPTION_MAX_WORDS_PER_S: f64 = 6.0;
+/// Caption letters against what is right behind them, at least WCAG's ratio for large text
+/// (1.4.3: 3:1). Captions are large text at any size the app draws them.
+const CAPTION_MIN_CONTRAST: f64 = 3.0;
+/// The outline's colour and strength as captions draw it (`captions::colorize`).
+const CAPTION_OUTLINE_ALPHA: f64 = 0.9;
 /// Findings of one kind listed at most; the rest are summed up in the last one.
 const MAX_PER_KIND: usize = 40;
 
@@ -61,6 +66,7 @@ pub enum Kind {
     ZoomTooShort,
     CaptionsCoverWebcam,
     CaptionsTooFast,
+    CaptionsLowContrast,
     CaptionsWithoutTranscript,
     ChapterCut,
     ChapterTooShort,
@@ -218,6 +224,7 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
     zooms(&mut out, document);
     captions(&mut out, root, document);
     caption_speed(&mut out, root, document);
+    caption_contrast(&mut out, document);
     chapters(&mut out, document);
     if has_sound {
         loudness(&mut out, document);
@@ -759,6 +766,99 @@ fn caption_speed(out: &mut Builder, root: &Path, document: &EditDocument) {
         ),
     )
     .at(first.start_us, first.end_us);
+}
+
+/// A `#RRGGBB` colour as 0 to 1 per channel, as the frame holds it (sRGB, not linear).
+fn srgb(hex: &str) -> [f64; 3] {
+    crate::project::layout::parse_hex_rgb(hex)
+        .unwrap_or([255, 255, 255])
+        .map(|c| c as f64 / 255.0)
+}
+
+/// WCAG's relative luminance of an sRGB colour, 0 to 1.
+fn luminance(rgb: [f64; 3]) -> f64 {
+    let [r, g, b] = rgb.map(|c| {
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+/// `top` at `alpha` over `under`, mixed as captions are drawn onto the frame (in sRGB).
+fn over(top: [f64; 3], alpha: f64, under: [f64; 3]) -> [f64; 3] {
+    [0, 1, 2].map(|i| top[i] * alpha + under[i] * (1.0 - alpha))
+}
+
+fn contrast(a: [f64; 3], b: [f64; 3]) -> f64 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// The weakest contrast caption text has with what is right behind its letters, over a black
+/// and a white picture: the box (mixed over the picture) or the picture, and the outline round
+/// the letters when there is one, whichever stands out more.
+fn caption_text_contrast(captions: &crate::captions::CaptionSettings) -> (f64, &'static str) {
+    let text = srgb(&captions.text_color);
+    let box_color = srgb(&captions.background_color);
+    let opacity = captions.background_opacity.clamp(0.0, 1.0) as f64;
+    [([0.0; 3], "dark"), ([1.0; 3], "light")]
+        .into_iter()
+        .map(|(picture, name)| {
+            let behind = if captions.background {
+                over(box_color, opacity, picture)
+            } else {
+                picture
+            };
+            let mut best = contrast(text, behind);
+            if captions.outline {
+                let ring = over([0.0; 3], CAPTION_OUTLINE_ALPHA, behind);
+                best = best.max(contrast(text, ring));
+            }
+            (best, name)
+        })
+        .fold((f64::INFINITY, "dark"), |worst, this| {
+            if this.0 < worst.0 {
+                this
+            } else {
+                worst
+            }
+        })
+}
+
+/// Caption text that its box or outline does not set apart from a dark or a light picture.
+/// The style's look decides it, so one finding for the video; the emphasis word is left alone
+/// (an accent, one word in a caption).
+fn caption_contrast(out: &mut Builder, document: &EditDocument) {
+    if !document.captions.enabled {
+        return;
+    }
+    let mut captions = document.captions.clone();
+    let style = crate::style::of(document);
+    crate::style::dress_captions(&mut captions, &style, crate::style::is_portrait(document));
+    let (ratio, picture) = caption_text_contrast(&captions);
+    if ratio >= CAPTION_MIN_CONTRAST {
+        return;
+    }
+    let backing = match (captions.background, captions.outline) {
+        (true, true) => "its box and outline",
+        (true, false) => "its box",
+        (false, true) => "its outline",
+        (false, false) => "nothing (no box or outline)",
+    };
+    out.push(
+        Kind::CaptionsLowContrast,
+        Severity::Warning,
+        "Captions are hard to read on some pictures".into(),
+        format!(
+            "Caption text {} has {backing} behind it, so over a {picture} picture it stands \
+             out only {ratio:.1}:1 (at least {CAPTION_MIN_CONTRAST}:1 reads). Change the \
+             style's caption text colour, or turn on its outline or a stronger box.",
+            captions.text_color
+        ),
+    );
 }
 
 fn chapters(out: &mut Builder, document: &EditDocument) {
@@ -1812,6 +1912,51 @@ mod tests {
             "{:?}",
             report.findings
         );
+    }
+
+    #[test]
+    fn caption_text_that_does_not_stand_out_is_flagged() {
+        let plain = crate::captions::CaptionSettings::default();
+        // White with the dark outline: fine on any picture.
+        assert!(caption_text_contrast(&plain).0 > 6.0);
+        // White with nothing behind it disappears on a light picture.
+        let bare = crate::captions::CaptionSettings {
+            outline: false,
+            ..plain.clone()
+        };
+        let (ratio, picture) = caption_text_contrast(&bare);
+        assert!((ratio - 1.0).abs() < 1e-9 && picture == "light");
+        // A strong dark box carries it again; a faint one does not.
+        let boxed = |opacity| crate::captions::CaptionSettings {
+            background: true,
+            background_opacity: opacity,
+            ..bare.clone()
+        };
+        assert!(caption_text_contrast(&boxed(0.55)).0 >= CAPTION_MIN_CONTRAST);
+        assert!(caption_text_contrast(&boxed(0.1)).0 < CAPTION_MIN_CONTRAST);
+        // Dark text with the dark outline vanishes on a dark picture.
+        let dark = crate::captions::CaptionSettings {
+            text_color: "#1D1D1F".into(),
+            ..plain.clone()
+        };
+        let (ratio, picture) = caption_text_contrast(&dark);
+        assert!(ratio < CAPTION_MIN_CONTRAST && picture == "dark", "{ratio}");
+    }
+
+    #[test]
+    fn every_built_in_style_has_readable_captions() {
+        for style in crate::style::builtin() {
+            let id = &style.name;
+            for portrait in [false, true] {
+                let mut captions = crate::captions::CaptionSettings::default();
+                crate::style::dress_captions(&mut captions, &style, portrait);
+                let (ratio, picture) = caption_text_contrast(&captions);
+                assert!(
+                    ratio >= CAPTION_MIN_CONTRAST,
+                    "{id} (portrait {portrait}): {ratio:.2} on {picture}"
+                );
+            }
+        }
     }
 
     #[test]
