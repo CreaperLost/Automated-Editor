@@ -11,6 +11,7 @@
 //! Placing a track fills a stretch of the timeline on a music track (repeating it when the
 //! stretch is longer), with fades, and sets the music under speech when the project has no
 //! level for it, so a bed never drowns the voice. One undo step; nothing else moves.
+use crate::dsp::beats::{self, Beats};
 use crate::own_library;
 use crate::project::revision::EditDocument;
 use crate::sequence::{Asset, Licence, LicenceKind, Role};
@@ -35,6 +36,13 @@ pub const DEFAULT_UNDER_SPEECH_DB: f32 = 18.0;
 const FADE_IN_US: u64 = 1_000_000;
 const FADE_OUT_US: u64 = 2_500_000;
 const REPEAT_FADE_US: u64 = 400_000;
+/// Where a repeat joins on a bar (SND-8) the beat carries on: a fade only long enough to keep
+/// the join from clicking.
+const BAR_JOIN_FADE_US: u64 = 60_000;
+/// A bed ends up to this much early so that it ends on a bar.
+const MAX_EARLY_END_US: u64 = 4_000_000;
+/// The start moves forward to the first bar when it is at most this far.
+const MAX_START_SHIFT_US: u64 = 4_000_000;
 
 struct Builtin {
     id: &'static str,
@@ -812,6 +820,19 @@ pub fn asset_for(
     )
 }
 
+/// How much of a song is looked at for its bars (a bed repeats a whole song, and longer
+/// songs are seldom repeated).
+const BEATS_MAX_SECONDS: u32 = 600;
+
+/// The beats and bars of `track` (on disk already); none when it has no steady beat or can't
+/// be read.
+pub fn beats_of(track: &Track) -> Option<Beats> {
+    let samples =
+        crate::media::ffmpeg::decode_mono(Path::new(&track.path), beats::RATE, BEATS_MAX_SECONDS)
+            .ok()?;
+    beats::find(&samples)
+}
+
 /// What a placed bed covers and how it was made.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -822,17 +843,22 @@ pub struct Bed {
     /// The music under speech was switched on with this level.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub under_speech_db: Option<f32>,
+    /// The song's tempo when its bars were found: the bed starts, repeats and ends on a bar.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bpm: Option<f64>,
 }
 
 /// `document` with `track`'s `asset` (added when new) filling `[at_us, until_us)` (to the end
 /// of the video when not given) on a music track free there, or a new one named
 /// [`TRACK_NAME`]: repeated when the stretch is longer, faded in, out and at each repeat,
 /// brought to a common level, and the music under speech switched on when the project has no
-/// level for it. A new track takes an id not in `taken`.
+/// level for it. With the song's `beats` (SND-8) it starts on a bar, repeats from bar to bar and
+/// ends on a bar, up to [`MAX_EARLY_END_US`] early. A new track takes an id not in `taken`.
 pub fn place(
     document: &EditDocument,
     track: &Track,
     asset: Asset,
+    beats: Option<&Beats>,
     at_us: u64,
     until_us: Option<u64>,
     taken: &[String],
@@ -851,8 +877,29 @@ pub fn place(
     if end <= start + 1_000_000 {
         return Err("Music needs at least a second of the video to play under".into());
     }
-    let from = track.start_us.min(length.saturating_sub(MIN_TRACK_US / 2));
-    let piece = length - from;
+    let mut from = track.start_us.min(length.saturating_sub(MIN_TRACK_US / 2));
+    let grid = beats.filter(|b| b.bars_us.len() >= 2);
+    let mut loop_end = length;
+    let mut joins_on_bar = false;
+    if let Some(grid) = grid {
+        if let Some(bar) = grid
+            .bar_at_or_after(from.saturating_sub(30_000))
+            .filter(|&b| b < from + MAX_START_SHIFT_US)
+        {
+            from = bar;
+        }
+        // The last bar of a song looked at whole: the repeat starts again on the beat.
+        if grid.until_us + 1_000_000 >= length {
+            if let Some(bar) = grid
+                .bar_at_or_before(length)
+                .filter(|&b| b > from + MIN_TRACK_US / 2)
+            {
+                loop_end = bar;
+                joins_on_bar = true;
+            }
+        }
+    }
+    let piece = loop_end.saturating_sub(from);
     if piece == 0 {
         return Err("The track holds no sound".into());
     }
@@ -867,7 +914,19 @@ pub fn place(
     let mut clip_ids = Vec::new();
     let mut at = start;
     while at < end {
-        let len = piece.min(end - at);
+        let mut len = piece.min(end - at);
+        // The last piece: cut back to a bar so the song ends on one.
+        if let Some(bar) = grid
+            .filter(|_| len < piece)
+            .and_then(|g| g.bar_at_or_before(from + len))
+            .filter(|&bar| from + len - bar <= MAX_EARLY_END_US)
+        {
+            if bar > from + 500_000 {
+                len = bar - from;
+            } else if !clip_ids.is_empty() {
+                break;
+            }
+        }
         if len < 500_000 && !clip_ids.is_empty() {
             break;
         }
@@ -902,6 +961,11 @@ pub fn place(
     }
     let gain_db = track.lufs.map(|l| (REFERENCE_LUFS - l).clamp(-12.0, 12.0));
     let last = clip_ids.len() - 1;
+    let join_fade = if joins_on_bar {
+        BAR_JOIN_FADE_US
+    } else {
+        REPEAT_FADE_US
+    };
     for (i, id) in clip_ids.iter().enumerate() {
         let (sound, _) = apply_reserving(
             &sequence,
@@ -909,12 +973,8 @@ pub fn place(
             &SequenceEdit::SetSound {
                 clip_ids: vec![id.clone()],
                 gain_db,
-                fade_in_us: Some(if i == 0 { FADE_IN_US } else { REPEAT_FADE_US }),
-                fade_out_us: Some(if i == last {
-                    FADE_OUT_US
-                } else {
-                    REPEAT_FADE_US
-                }),
+                fade_in_us: Some(if i == 0 { FADE_IN_US } else { join_fade }),
+                fade_out_us: Some(if i == last { FADE_OUT_US } else { join_fade }),
             },
             taken.iter().map(String::as_str),
         )?;
@@ -935,6 +995,7 @@ pub fn place(
             start_us: start,
             end_us: real_end,
             under_speech_db,
+            bpm: grid.map(|g| (g.bpm * 10.0).round() / 10.0),
         },
     ))
 }
@@ -989,6 +1050,83 @@ mod tests {
             assert!(error.contains("no credit"), "{error}");
         }
         assert!(own_library::load(dir.path()).is_empty());
+    }
+
+    /// A 20 s song at 120 BPM (a bar every 2 s, the first at 0.5 s, the last at 18.5 s) under
+    /// a 45 s video: it starts on a bar, repeats from bar to bar with short join fades, and
+    /// ends on a bar.
+    #[test]
+    fn with_its_bars_a_bed_starts_repeats_and_ends_on_a_bar() {
+        use crate::sequence::tests::{recording, stream};
+        use crate::sequence::{AssetKind, StreamKind};
+        const S: u64 = 1_000_000;
+        let document = EditDocument::from_recording(recording("rec", 45 * S, &[])).unwrap();
+        let song = Asset {
+            id: "song".into(),
+            name: "Song".into(),
+            kind: AssetKind::Audio,
+            path: if cfg!(windows) {
+                "C:\\song.mp3"
+            } else {
+                "/song.mp3"
+            }
+            .into(),
+            streams: vec![stream("sound0", StreamKind::Sound, Role::Music)],
+            duration_us: 20 * S,
+            ..recording("x", 1, &[])
+        };
+        let track = Track {
+            id: "song".into(),
+            name: "Song".into(),
+            tags: vec![],
+            duration_us: 20 * S,
+            start_us: 0,
+            path: song.path.clone(),
+            built_in: false,
+            downloaded: true,
+            licence: Licence {
+                kind: LicenceKind::Cc0,
+                source: None,
+            },
+            lufs: None,
+        };
+        let bars: Vec<u64> = (0..10).map(|i| S / 2 + 2 * S * i).collect();
+        let beats = Beats {
+            bpm: 120.0,
+            beats_us: (0..40).map(|i| S / 2 + S / 2 * i).collect(),
+            bars_us: bars.clone(),
+            until_us: 20 * S,
+        };
+        let (placed, bed) =
+            place(&document, &track, song.clone(), Some(&beats), 0, None, &[]).unwrap();
+        assert_eq!(bed.bpm, Some(120.0));
+        let clips: Vec<_> = bed
+            .clip_ids
+            .iter()
+            .map(|id| placed.sequence.clip(id).unwrap().1.clone())
+            .collect();
+        // 0.5 s to 18.5 s (18 s) twice, then a last piece cut back to a bar: 45 - 36 = 9 s
+        // wanted, 8 s kept (0.5 s to 8.5 s).
+        let pieces: Vec<(u64, u64, u64)> = clips
+            .iter()
+            .map(|c| (c.start_us, c.in_us, c.duration_us))
+            .collect();
+        assert_eq!(
+            pieces,
+            vec![
+                (0, S / 2, 18 * S),
+                (18 * S, S / 2, 18 * S),
+                (36 * S, S / 2, 8 * S)
+            ]
+        );
+        assert_eq!(bed.end_us, 44 * S);
+        assert_eq!(clips[0].mix.fade_out_us, BAR_JOIN_FADE_US);
+        assert_eq!(clips[1].mix.fade_in_us, BAR_JOIN_FADE_US);
+        assert_eq!(clips[2].mix.fade_out_us, FADE_OUT_US);
+        // With no beat it fills to the end and repeats the whole song.
+        let (_, plain) = place(&document, &track, song, None, 0, None, &[]).unwrap();
+        assert_eq!(plain.end_us, 45 * S);
+        assert_eq!(plain.bpm, None);
     }
 
     #[test]

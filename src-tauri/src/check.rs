@@ -74,6 +74,7 @@ pub enum Kind {
     ImageDisclosure,
     OutOfSync,
     PastMediaEnd,
+    RepeatedFootage,
     GraphicFont,
     GraphicReadingTime,
     GraphicTextSmall,
@@ -227,6 +228,7 @@ pub fn run(root: &Path, document: &EditDocument, missing: &[&str]) -> CheckRepor
     brought_pictures(&mut out, root, document);
     linked_sync(&mut out, document);
     past_media_end(&mut out, document);
+    repeated_footage(&mut out, document);
     graphic_fonts(&mut out, root, document);
     graphic_reading_time(&mut out, root, document);
     graphic_text_size(&mut out, root, document);
@@ -1402,6 +1404,66 @@ fn past_media_end(out: &mut Builder, document: &EditDocument) {
     }
 }
 
+/// Footage that plays this long twice is a repeat a viewer notices.
+const REPEAT_MIN_US: u64 = 1_000_000;
+
+/// The same part of one recording or video shown twice, at different moments: a viewer sees the
+/// scene again. Stills and graphics repeat freely; two copies on screen at once (a background
+/// copy under the picture) are a look, not a repeat.
+fn repeated_footage(out: &mut Builder, document: &EditDocument) {
+    let mut shown: std::collections::BTreeMap<(&str, &str), Vec<&crate::sequence::Clip>> =
+        Default::default();
+    for track in document.sequence.video_tracks().filter(|t| !t.hidden) {
+        for clip in &track.clips {
+            if document.asset(&clip.asset).is_some_and(|a| !a.is_still()) {
+                shown
+                    .entry((clip.asset.as_str(), clip.stream.as_str()))
+                    .or_default()
+                    .push(clip);
+            }
+        }
+    }
+    for clips in shown.values_mut().filter(|c| c.len() > 1) {
+        clips.sort_by_key(|c| c.start_us);
+        for (i, later) in clips.iter().enumerate().skip(1) {
+            let Some((earlier, from, to)) = clips[..i]
+                .iter()
+                .filter(|e| e.end_us() <= later.start_us)
+                .map(|e| (e, e.in_us.max(later.in_us), e.out_us().min(later.out_us())))
+                .filter(|(_, from, to)| to.saturating_sub(*from) >= REPEAT_MIN_US)
+                .max_by_key(|(_, from, to)| to - from)
+            else {
+                continue;
+            };
+            let name = document
+                .asset(&later.asset)
+                .map(|a| a.name.clone())
+                .unwrap_or_default();
+            // Where the repeated part plays the second time.
+            let start =
+                later.start_us + crate::sequence::timeline_len(from - later.in_us, later.speed);
+            let end =
+                (start + crate::sequence::timeline_len(to - from, later.speed)).min(later.end_us());
+            out.push(
+                Kind::RepeatedFootage,
+                Severity::Warning,
+                "The same footage plays twice".into(),
+                format!(
+                    "{} of \"{name}\" at {} already played at {}. Cut one, or use other \
+                     footage there.",
+                    seconds(to - from),
+                    clock(start),
+                    clock(
+                        earlier.start_us
+                            + crate::sequence::timeline_len(from - earlier.in_us, earlier.speed)
+                    )
+                ),
+            )
+            .at(start, end);
+        }
+    }
+}
+
 /// The report as text, for agents and the CLI: one line per finding with its id.
 pub fn report_text(report: &CheckReport) -> String {
     if report.findings.is_empty() {
@@ -1549,6 +1611,55 @@ mod tests {
         // Made a second longer than the recording has.
         doc.sequence.tracks[audio].clips[0].duration_us += S;
         assert!(kinds(&run(dir.path(), &doc, &[])).contains(&Kind::PastMediaEnd));
+    }
+
+    #[test]
+    fn footage_shown_twice_is_found_and_split_or_stacked_footage_is_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut doc = document(30);
+        // A split plays each part once: no repeat.
+        let split = SequenceEdit::Split {
+            at_us: 10 * S,
+            clip_ids: Vec::new(),
+        };
+        doc.sequence = crate::sequence::edit::apply(&doc.sequence, &doc.assets, &split)
+            .unwrap()
+            .0;
+        assert!(!kinds(&run(dir.path(), &doc, &[])).contains(&Kind::RepeatedFootage));
+        // The screen's 2-6 s shown again after the end of the video.
+        let video = doc
+            .sequence
+            .tracks
+            .iter()
+            .position(|t| t.kind == crate::sequence::TrackKind::Video)
+            .unwrap();
+        let mut again = doc.sequence.tracks[video].clips[0].clone();
+        again.id = "again".into();
+        again.link = None;
+        again.start_us = 30 * S;
+        again.in_us = 2 * S;
+        again.duration_us = 4 * S;
+        doc.sequence.tracks[video].clips.push(again.clone());
+        let report = run(dir.path(), &doc, &[]);
+        let repeats: Vec<&Finding> = report
+            .findings
+            .iter()
+            .filter(|f| f.kind == Kind::RepeatedFootage)
+            .collect();
+        assert_eq!(repeats.len(), 1, "{:?}", report.findings);
+        assert_eq!(repeats[0].start_us, Some(30 * S));
+        assert_eq!(repeats[0].end_us, Some(34 * S));
+        assert!(
+            repeats[0].detail.contains("0:02.0"),
+            "{}",
+            repeats[0].detail
+        );
+        // Under a second of overlap is fine.
+        let clips = &mut doc.sequence.tracks[video].clips;
+        let last = clips.len() - 1;
+        clips[last].in_us = 29_500 * MS;
+        clips[last].duration_us = 500 * MS;
+        assert!(!kinds(&run(dir.path(), &doc, &[])).contains(&Kind::RepeatedFootage));
     }
 
     #[test]

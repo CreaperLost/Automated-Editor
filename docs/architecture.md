@@ -42,7 +42,8 @@ mounted at `recordings/<asset id>/`.
   written once to the app folder; built-in music is too big for that, so each track is pinned
   by size and SHA-256 and downloaded from the Free Music Archive on first use. Placing either
   imports it into the project with its licence; music that needs credit is refused for the
-  library and flagged by `check`.
+  library and flagged by `check`. A music bed starts, repeats and ends on the song's bars when
+  `dsp/beats.rs` finds a steady beat (SND-8).
 - **Magnetic** ripples every unlocked track; off, cuts leave gaps and moves overwrite. Empty time
   is black.
 - **Edits** are a typed `SequenceEdit` enum (including: add/move/remove track, place asset, move,
@@ -431,7 +432,7 @@ the first free video track above the bottom one (or `OnNewTrack`), in the same b
   not fully captured: GAP-009/018; repeated hashing/history persistence have GAP-007/012.
 - **`check`** (`check.rs`) reads the selected video or short edit only (no decode, no model, ~3 ms): missing media, black
   frames, no sound, blips between cuts, words cut partway, flashing zooms, captions over the
-  bubble, chapter rules, loudness not normalised, pending proposals. Safe
+  bubble, chapter rules, loudness not normalised, pending proposals, the same footage twice. Safe
   fixes, each its own undo step.
 - **`storyboard`** (`mcp/storyboard.rs`, agents only since 22 Oct 2026): a tile per scene (split
   where camera, zoom, graphic, chapter or a long silence starts; ≤ 48 tiles, ≤ 2048 px) plus a

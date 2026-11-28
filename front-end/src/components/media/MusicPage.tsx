@@ -76,6 +76,7 @@ export const MusicPage: React.FC = () => {
         const repeats = placed.clipIds.length > 1 ? `, played ${placed.clipIds.length} times` : "";
         setNote(
           `${track.name} plays from ${length(placed.startUs)} to ${length(placed.endUs)}${repeats}.` +
+            (placed.bpm ? ` It starts, repeats and ends on a bar (${placed.bpm} BPM).` : "") +
             (placed.underSpeechDb ? ` Music now sits ${placed.underSpeechDb} dB under the speech (Audio panel).` : ""),
         );
         if (!track.downloaded) void load();

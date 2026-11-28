@@ -387,6 +387,20 @@ pub fn extract_audio_wav(source: &Path, stream: usize, target: &Path) -> Result<
     run(cmd, log, "Extracting the audio failed").map(|_| ())
 }
 
+/// `source`'s sound as mono floats at `rate`, at most `max_seconds` of it.
+pub fn decode_mono(source: &Path, rate: u32, max_seconds: u32) -> Result<Vec<f32>, String> {
+    let (mut cmd, log) = command(ffmpeg_path()?)?;
+    cmd.args(["-nostdin", "-i"])
+        .arg(file_arg(source))
+        .args(["-vn", "-sn", "-t", &max_seconds.to_string(), "-ac", "1"])
+        .args(["-ar", &rate.to_string(), "-f", "f32le", "-"]);
+    let bytes = run(cmd, log, "Reading the sound failed")?;
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect())
+}
+
 /// Decodes `source`'s sound to 48 kHz stereo 16-bit WAV at `target`, played `speed` times as
 /// fast without changing its pitch (FFmpeg's atempo): generated narration at the channel's pace.
 pub fn retime_audio_wav(source: &Path, speed: f64, target: &Path) -> Result<(), String> {

@@ -78,13 +78,16 @@ pub fn project_music_place_impl(
 ) -> Result<MusicPlaced, String> {
     // Downloaded before taking the project's locks: it can take a few seconds.
     let track = music_library_fetch_impl(track_id)?;
+    let beats = library::beats_of(&track);
     let (project, asset_id, bed) = super::sounds::place_on_shown(
         state,
         &project_handle,
         expected_revision,
         short_id.as_deref(),
         |document, root| library::asset_for(document, root, &track),
-        |shown, asset, taken| library::place(shown, &track, asset, at_us, until_us, taken),
+        |shown, asset, taken| {
+            library::place(shown, &track, asset, beats.as_ref(), at_us, until_us, taken)
+        },
     )?;
     Ok(MusicPlaced {
         project,
